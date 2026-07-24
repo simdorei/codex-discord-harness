@@ -29,8 +29,16 @@ from codex_app_server_transport_goal import (
     ThreadGoalLookup as ThreadGoalLookup,
     parse_thread_goal_status,
 )
+from codex_app_server_transport_lifecycle import (
+    AppServerGenerationExpiredError as AppServerGenerationExpiredError,
+    AppServerGenerationMismatch as AppServerGenerationMismatch,
+    AppServerLifecycleSnapshot as AppServerLifecycleSnapshot,
+    ChildCleanupRecycleOutcome as ChildCleanupRecycleOutcome,
+    ChildCleanupRecycleStatus as ChildCleanupRecycleStatus,
+)
 from codex_app_server_transport_threads import (
     get_in_progress_turn_id as get_in_progress_turn_id,
+    get_thread_status_type as get_thread_status_type,
 )
 from codex_app_server_transport_turn_outcomes import (
     InterruptOrigin as InterruptOrigin,
@@ -43,10 +51,16 @@ from codex_app_server_transport_turn_outcomes import (
     parse_thread_turn_completions,
     parse_thread_turn_states,
 )
+from codex_app_server_transport_subscriptions import ThreadReleaseOutcome
 
 
 __all__ = [
     "AppServerDeliveryResult",
+    "AppServerGenerationMismatch",
+    "AppServerGenerationExpiredError",
+    "AppServerLifecycleSnapshot",
+    "ChildCleanupRecycleOutcome",
+    "ChildCleanupRecycleStatus",
     "CodexAppServerTransportError",
     "PersistentCodexAppServer",
     "ThreadGoalStatus",
@@ -115,11 +129,16 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         *,
         include_turns: bool = False,
         timeout_sec: float = 8.0,
+        expected_generation: int | None = None,
     ) -> JsonObject:
+        params = {"threadId": thread_id, "includeTurns": include_turns}
+        if expected_generation is None:
+            return self.request("thread/read", params, timeout_sec=timeout_sec)
         return self.request(
             "thread/read",
-            {"threadId": thread_id, "includeTurns": include_turns},
+            params,
             timeout_sec=timeout_sec,
+            expected_generation=expected_generation,
         )
 
     def get_thread_goal_status(
@@ -127,12 +146,18 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         thread_id: str,
         *,
         timeout_sec: float = 8.0,
+        expected_generation: int | None = None,
     ) -> ThreadGoalStatus | None:
-        result = self.request(
-            "thread/goal/get",
-            {"threadId": thread_id},
-            timeout_sec=timeout_sec,
-        )
+        params = {"threadId": thread_id}
+        if expected_generation is None:
+            result = self.request("thread/goal/get", params, timeout_sec=timeout_sec)
+        else:
+            result = self.request(
+                "thread/goal/get",
+                params,
+                timeout_sec=timeout_sec,
+                expected_generation=expected_generation,
+            )
         return parse_thread_goal_status(result, expected_thread_id=thread_id)
 
     def get_thread_goal_lookup(
@@ -140,9 +165,17 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         thread_id: str,
         *,
         timeout_sec: float = 3.0,
+        expected_generation: int | None = None,
     ) -> ThreadGoalLookup:
         try:
-            status = self.get_thread_goal_status(thread_id, timeout_sec=timeout_sec)
+            if expected_generation is None:
+                status = self.get_thread_goal_status(thread_id, timeout_sec=timeout_sec)
+            else:
+                status = self.get_thread_goal_status(
+                    thread_id,
+                    timeout_sec=timeout_sec,
+                    expected_generation=expected_generation,
+                )
         except (CodexAppServerTransportError, OSError, TimeoutError) as exc:
             return GoalTransportError(f"{type(exc).__name__}: {str(exc)[:300]}")
         return GoalAbsent() if status is None else GoalPresent(status)
@@ -166,8 +199,17 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         thread_id: str,
         *,
         timeout_sec: float = 3.0,
+        expected_generation: int | None = None,
     ) -> dict[str, TurnCompletion]:
-        result = self.read_thread(thread_id, include_turns=True, timeout_sec=timeout_sec)
+        if expected_generation is None:
+            result = self.read_thread(thread_id, include_turns=True, timeout_sec=timeout_sec)
+        else:
+            result = self.read_thread(
+                thread_id,
+                include_turns=True,
+                timeout_sec=timeout_sec,
+                expected_generation=expected_generation,
+            )
         states = parse_thread_turn_states(result, expected_thread_id=thread_id)
         for turn_id in list(states):
             cached = self.get_cached_turn_completion(thread_id, turn_id)
@@ -175,11 +217,25 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
                 states[turn_id] = cached
         return states
 
-    def resume_thread(self, thread_id: str, *, timeout_sec: float = INITIAL_RESUME_TIMEOUT_SEC) -> JsonObject:
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        timeout_sec: float = INITIAL_RESUME_TIMEOUT_SEC,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         deadline = self.monotonic_func() + max(timeout_sec, 0.0)
         first_timeout = min(INITIAL_RESUME_TIMEOUT_SEC, max(timeout_sec, 0.0))
         try:
-            return self.request("thread/resume", {"threadId": thread_id}, timeout_sec=first_timeout)
+            if expected_generation is None:
+                result = self.request("thread/resume", {"threadId": thread_id}, timeout_sec=first_timeout)
+            else:
+                result = self.request(
+                    "thread/resume",
+                    {"threadId": thread_id},
+                    timeout_sec=first_timeout,
+                    expected_generation=expected_generation,
+                )
         except TimeoutError:
             remaining = max(0.0, deadline - self.monotonic_func())
             if remaining <= 0:
@@ -188,9 +244,41 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
                 f"app_server_thread_resume_retry thread={thread_id} "
                 + f"first_timeout_sec={first_timeout:.1f} remaining_sec={remaining:.1f}"
             )
-            return self.request("thread/resume", {"threadId": thread_id}, timeout_sec=remaining)
+            if expected_generation is None:
+                result = self.request("thread/resume", {"threadId": thread_id}, timeout_sec=remaining)
+            else:
+                result = self.request(
+                    "thread/resume",
+                    {"threadId": thread_id},
+                    timeout_sec=remaining,
+                    expected_generation=expected_generation,
+                )
+        self.mark_thread_subscribed(thread_id)
+        return result
 
-    def start_turn(self, thread_id: str, prompt: str) -> JsonObject:
+    def release_thread_subscription_if_terminal(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> ThreadReleaseOutcome:
+        outcome = self._subscriptions.release_if_terminal(
+            self,
+            thread_id,
+            expected_generation=expected_generation,
+            log=self._log,
+        )
+        if outcome.released:
+            _ = self.try_recycle_child_cleanup(expected_generation=expected_generation)
+        return outcome
+
+    def start_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         return self.request(
             "turn/start",
             {
@@ -198,9 +286,17 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
                 "input": [{"type": "text", "text": prompt, "text_elements": []}],
             },
             timeout_sec=12.0,
+            expected_generation=expected_generation,
         )
 
-    def steer_turn(self, thread_id: str, prompt: str, *, expected_turn_id: str) -> JsonObject:
+    def steer_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_turn_id: str,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         return self.request(
             "turn/steer",
             {
@@ -209,6 +305,7 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
                 "input": [{"type": "text", "text": prompt, "text_elements": []}],
             },
             timeout_sec=10.0,
+            expected_generation=expected_generation,
         )
 
     def interrupt_turn(self, thread_id: str, turn_id: str) -> JsonObject:
@@ -227,9 +324,14 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
                 self.cancel_remote_interrupt_intent(thread_id, turn_id)
             raise
 
-    def get_active_turn_id(self, thread_id: str) -> str | None:
+    def get_active_turn_id(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> str | None:
         try:
-            return self.get_active_turn_id_or_raise(thread_id)
+            return self.get_active_turn_id_or_raise(thread_id, expected_generation=expected_generation)
         except (CodexAppServerTransportError, OSError, TimeoutError) as exc:
             self._log(
                 f"app_server_active_turn_read_failed thread={thread_id} "
@@ -237,12 +339,46 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
             )
             return None
 
-    def get_active_turn_id_or_raise(self, thread_id: str) -> str | None:
+    def has_active_turn_or_raise(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
+        with self._lock:
+            if self._pending.active_turn_id(thread_id):
+                return True
+        if expected_generation is None:
+            result = self.read_thread(thread_id, include_turns=False)
+        else:
+            result = self.read_thread(
+                thread_id,
+                include_turns=False,
+                expected_generation=expected_generation,
+            )
+        payload = result.get("thread")
+        if not isinstance(payload, dict):
+            return False
+        return get_thread_status_type(payload) == "active"
+
+    def get_active_turn_id_or_raise(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> str | None:
         with self._lock:
             turn_id = self._pending.active_turn_id(thread_id)
             if turn_id:
                 return turn_id
-        payload = self.read_thread(thread_id, include_turns=True).get("thread")
+        if expected_generation is None:
+            payload = self.read_thread(thread_id, include_turns=True).get("thread")
+        else:
+            payload = self.read_thread(
+                thread_id,
+                include_turns=True,
+                expected_generation=expected_generation,
+            ).get("thread")
         if not isinstance(payload, dict):
             return None
         return get_in_progress_turn_id(payload)

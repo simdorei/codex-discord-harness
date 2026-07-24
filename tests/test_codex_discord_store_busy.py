@@ -90,6 +90,7 @@ class StoreBusyChoiceTests(unittest.TestCase):
             if record is None:
                 self.fail("busy choice record was not persisted")
             expires_at = record["expires_at"]
+            created_at = record["created_at"]
             self.assertEqual(
                 record,
                 {
@@ -99,10 +100,12 @@ class StoreBusyChoiceTests(unittest.TestCase):
                     "target_thread_id": "thread-1",
                     "prompt": "choose",
                     "allow_steer": True,
+                    "created_at": created_at,
                     "expires_at": expires_at,
                 },
             )
             self.assertIsInstance(expires_at, float)
+            self.assertIsInstance(created_at, float)
             self.assertTrue(store.claim_busy_choice_record(db_path, choice_id))
             self.assertFalse(store.claim_busy_choice_record(db_path, choice_id))
             self.assertIsNone(store.get_busy_choice_record(db_path, choice_id))

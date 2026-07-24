@@ -11,6 +11,13 @@ from tests.test_codex_discord_bot import EnvPatch, FakeMessage
 
 
 class DiscordAskDeliveryPendingIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_ask_stream_delivery_pending_does_not_send_failure(self) -> None:
         original_resolve_target_ref = bot.resolve_target_ref
         original_run_ask_stream = bot.run_ask_stream

@@ -110,7 +110,9 @@ class MappedPromptDeliveryFactoryTests(unittest.IsolatedAsyncioTestCase):
         send_chunks = fixture.send_chunks
         is_delivery_confirmation_timeout = fixture.is_delivery_confirmation_timeout
         format_pending_ask_delivery_output = fixture.format_pending_ask_delivery_output
-        deactivate_session_mirror_output_target = fixture.deactivated.append
+        async def release_session_mirror_output_target(thread_id: str | None) -> bool:
+            fixture.deactivated.append(thread_id)
+            return True
         is_selected_thread_busy_error = fixture.is_selected_thread_busy_error
         send_codex_app_menu_if_available = fixture.send_codex_app_menu_if_available
         send_resume_failure = fixture.send_resume_failure
@@ -126,7 +128,7 @@ class MappedPromptDeliveryFactoryTests(unittest.IsolatedAsyncioTestCase):
             send_chunks=send_chunks,
             is_delivery_confirmation_timeout=is_delivery_confirmation_timeout,
             format_pending_ask_delivery_output=format_pending_ask_delivery_output,
-            deactivate_session_mirror_output_target=deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=release_session_mirror_output_target,
             is_selected_thread_busy_error=is_selected_thread_busy_error,
             send_codex_app_menu_if_available=send_codex_app_menu_if_available,
             send_resume_failure=send_resume_failure,
@@ -143,7 +145,7 @@ class MappedPromptDeliveryFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(deps.mark_recent_discord_origin_prompt, mark_recent_discord_origin_prompt)
         self.assertIs(deps.is_delivery_confirmation_timeout, is_delivery_confirmation_timeout)
         self.assertIs(deps.format_pending_ask_delivery_output, format_pending_ask_delivery_output)
-        self.assertIs(deps.deactivate_session_mirror_output_target, deactivate_session_mirror_output_target)
+        self.assertIs(deps.release_session_mirror_output_target, release_session_mirror_output_target)
         self.assertIs(deps.is_selected_thread_busy_error, is_selected_thread_busy_error)
         self.assertIs(deps.send_codex_app_menu_if_available, send_codex_app_menu_if_available)
         self.assertIs(deps.send_resume_failure, send_resume_failure)
@@ -157,7 +159,7 @@ class MappedPromptDeliveryFactoryTests(unittest.IsolatedAsyncioTestCase):
         await deps.send_chunks(channel, "chunk-body", context="chunk-context")
         self.assertTrue(deps.is_delivery_confirmation_timeout("pending-output"))
         self.assertEqual(deps.format_pending_ask_delivery_output("output"), "pending:output")
-        deps.deactivate_session_mirror_output_target("thread-1")
+        self.assertTrue(await deps.release_session_mirror_output_target("thread-1"))
         self.assertTrue(deps.is_selected_thread_busy_error(77, "busy-output"))
         self.assertTrue(
             await deps.send_codex_app_menu_if_available(

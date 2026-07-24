@@ -24,7 +24,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         sends: list[SendCall] = []
         claims: list[tuple[str, str]] = []
         updates: list[tuple[str, str, int]] = []
-        deactivated: list[str] = []
+        released: list[str] = []
         logs: list[str] = []
 
         async def resolve_channel(discord_thread_id: int) -> FakeChannel | None:
@@ -54,6 +54,10 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         async def update_cursor(codex_thread_id: str, rollout_path: str, cursor: int) -> None:
             updates.append((codex_thread_id, rollout_path, cursor))
 
+        async def release_target(codex_thread_id: str) -> bool:
+            released.append(codex_thread_id)
+            return True
+
         delivered = await delivery_flow.deliver_and_commit_session_mirror_items(
             "thread-1",
             "session.jsonl",
@@ -68,7 +72,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
                 send_session_mirror_item=send_item,
                 claim_session_mirror_event=claim_event,
                 update_session_mirror_cursor=update_cursor,
-                deactivate_session_mirror_output_target=deactivated.append,
+                release_session_mirror_output_target=release_target,
                 log=logs.append,
             ),
         )
@@ -78,7 +82,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sends, [(channel, items[0], "thread-1", "project:1")])
         self.assertEqual(claims, [("digest-1", "thread-1")])
         self.assertEqual(updates, [("thread-1", "session.jsonl", 42)])
-        self.assertEqual(deactivated, ["thread-1"])
+        self.assertEqual(released, ["thread-1"])
         self.assertEqual(
             logs,
             ["session_mirror_sent target=thread-1 channel=333 events=2 items=1 cursor=42"],
@@ -115,8 +119,8 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         async def update_cursor(codex_thread_id: str, rollout_path: str, cursor: int) -> None:
             raise AssertionError(f"cursor should not update: {codex_thread_id} {rollout_path} {cursor}")
 
-        def deactivate(codex_thread_id: str) -> None:
-            raise AssertionError(f"target should not deactivate: {codex_thread_id}")
+        async def release_target(codex_thread_id: str) -> bool:
+            raise AssertionError(f"target should not release: {codex_thread_id}")
 
         def log(message: str) -> None:
             raise AssertionError(f"log should not be written: {message}")
@@ -135,7 +139,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
                 send_session_mirror_item=send_item,
                 claim_session_mirror_event=claim_event,
                 update_session_mirror_cursor=update_cursor,
-                deactivate_session_mirror_output_target=deactivate,
+                release_session_mirror_output_target=release_target,
                 log=log,
             ),
         )
@@ -151,7 +155,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         claim_checks: list[tuple[str, str]] = []
         claims: list[tuple[str, str]] = []
         updates: list[tuple[str, str, int]] = []
-        deactivated: list[str] = []
+        released: list[str] = []
         logs: list[str] = []
 
         async def resolve_channel(discord_thread_id: int) -> FakeChannel | None:
@@ -182,6 +186,10 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         async def update_cursor(codex_thread_id: str, rollout_path: str, cursor: int) -> None:
             updates.append((codex_thread_id, rollout_path, cursor))
 
+        async def release_target(codex_thread_id: str) -> bool:
+            released.append(codex_thread_id)
+            return True
+
         with self.assertRaisesRegex(RuntimeError, "send failed"):
             _ = await delivery_flow.deliver_and_commit_session_mirror_items(
                 "thread-1",
@@ -197,7 +205,7 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
                     send_session_mirror_item=send_item,
                     claim_session_mirror_event=claim_event,
                     update_session_mirror_cursor=update_cursor,
-                    deactivate_session_mirror_output_target=deactivated.append,
+                    release_session_mirror_output_target=release_target,
                     log=logs.append,
                 ),
             )
@@ -205,5 +213,5 @@ class SessionMirrorDeliveryFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(claim_checks, [("digest-1", "thread-1")])
         self.assertEqual(claims, [])
         self.assertEqual(updates, [])
-        self.assertEqual(deactivated, [])
+        self.assertEqual(released, [])
         self.assertEqual(logs, [])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypedDict, cast
 
@@ -15,7 +15,7 @@ class ArchiveMirrorCleanupOwner(Protocol):
 
 
 class SessionMirrorStateLike(Protocol):
-    active_output_targets: set[str]
+    active_output_targets: dict[str, float]
     pending_cursor_targets: set[str]
 
 
@@ -34,7 +34,7 @@ class ArchiveMirrorCleanupDeps:
     delete_archived_mirror_state: Callable[[str], Mapping[str, int]]
     get_session_mirror_state: Callable[[], SessionMirrorStateLike]
     normalize_runner_key: Callable[[str | None], str]
-    deactivate_session_mirror_output_target: Callable[[str | None], None]
+    release_session_mirror_output_target: Callable[[str | None], Awaitable[bool]]
     parse_bridge_output_value: Callable[[str, str], str]
     format_log_argv: Callable[[list[str]], str]
     exception_types: ExceptionTypes
@@ -61,18 +61,27 @@ def resolve_session_mirror_archive_policy(
     return False
 
 
-def cleanup_archived_session_mirror_state(
+async def cleanup_archived_session_mirror_state(
     owner: ArchiveMirrorCleanupOwner | None,
     codex_thread_id: str,
     *,
     deps: ArchiveMirrorCleanupDeps,
 ) -> ArchivedSessionMirrorCleanupCounts:
-    counts = deps.delete_archived_mirror_state(codex_thread_id)
     state = deps.get_session_mirror_state()
     key = deps.normalize_runner_key(codex_thread_id)
     active_output_targets = int(key in state.active_output_targets)
     pending_cursor_targets = int(key in state.pending_cursor_targets)
-    deps.deactivate_session_mirror_output_target(codex_thread_id)
+    if not await deps.release_session_mirror_output_target(codex_thread_id):
+        raise RuntimeError(
+            "app-server thread subscription could not be released; "
+            + "mirror state was preserved"
+        )
+    if key in state.active_output_targets:
+        raise RuntimeError(
+            "mirror output target was reactivated during app-server release; "
+            + "mirror state was preserved"
+        )
+    counts = deps.delete_archived_mirror_state(codex_thread_id)
 
     archive_skip_logged = 0
     seen_agent_messages = 0
@@ -109,7 +118,7 @@ def cleanup_archived_session_mirror_state(
     }
 
 
-def cleanup_archive_mirror_after_bridge_command(
+async def cleanup_archive_mirror_after_bridge_command(
     owner: ArchiveMirrorCleanupOwner | None,
     argv: list[str],
     exit_code: int,
@@ -127,7 +136,11 @@ def cleanup_archive_mirror_after_bridge_command(
         )
         return None
     try:
-        counts = cleanup_archived_session_mirror_state(owner, archived_thread_id, deps=deps)
+        counts = await cleanup_archived_session_mirror_state(
+            owner,
+            archived_thread_id,
+            deps=deps,
+        )
     except deps.exception_types as exc:
         deps.log(
             f"archive_mirror_cleanup_failed target={archived_thread_id} "

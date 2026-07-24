@@ -77,6 +77,13 @@ def make_thread(temp_dir: str, session_path: Path) -> ThreadInfo:
 
 
 class DiscordAskBusyFailureIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_ask_target_busy_failure_reports_unaccepted_without_queue_choice(self) -> None:
         original_resolve_target_ref = bot.resolve_target_ref
         original_run_ask_stream = bot.run_ask_stream

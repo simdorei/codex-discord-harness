@@ -4,7 +4,6 @@ import asyncio  # noqa: ANYIO_OK
 import importlib
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from types import ModuleType
 from typing import final, cast, TypeAlias
 
@@ -61,7 +60,6 @@ class BotClientAdapterRuntime(BotClientAdapterBase):
                 self.enable_prefix_commands = enable_prefix_commands
                 self.plain_ask_mention_user_ids = set(plain_ask_mention_user_ids or set())
                 self.history_poll_seconds = discord_runtime_config.get_history_poll_seconds(default=cast(float, getattr(runtime.module, "HISTORY_POLL_DEFAULT_SECONDS")))
-                self.history_poll_bootstrap_lookback_seconds = discord_runtime_config.get_history_poll_bootstrap_lookback_seconds(default=cast(float, getattr(runtime.module, "HISTORY_POLL_BOOTSTRAP_LOOKBACK_DEFAULT_SECONDS")))
                 self.session_mirror_poll_seconds = parse_bounded_float_env(
                     "DISCORD_SESSION_MIRROR_POLL_SECONDS",
                     default=cast(float, getattr(runtime.module, "SESSION_MIRROR_POLL_DEFAULT_SECONDS")),
@@ -77,9 +75,6 @@ class BotClientAdapterRuntime(BotClientAdapterBase):
                 self._session_mirror_seen_agent_messages: dict[str, dict[str, float]] = {}
                 self._session_mirror_seen_user_messages: dict[str, dict[str, float]] = {}
                 self._session_mirror_archive_skip_logged: set[str] = set()
-                self._history_poll_bootstrap_after = datetime.now(timezone.utc) - timedelta(
-                    seconds=self.history_poll_bootstrap_lookback_seconds
-                )
                 self._processed_message_ids: dict[str, float] = {}
                 self._logged_socket_event_ids: dict[str, float] = {}
                 self._slash_sync_last_at = "-"

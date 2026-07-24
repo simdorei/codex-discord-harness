@@ -188,7 +188,10 @@ async def handle_persistent_busy_choice_interaction(
             ),
         )
 
-    _ = await interaction.response.defer(thinking=True, ephemeral=action in {"steer", "stop"})
+    _ = await interaction.response.defer(
+        thinking=action != "queue",
+        ephemeral=action in {"steer", "stop"},
+    )
     await deps.clear_interaction_message_components(interaction, context=f"busy_choice_{action}")
     channel = await deps.resolve_interaction_channel(
         interaction,

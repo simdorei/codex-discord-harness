@@ -2,37 +2,50 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import cast, final
 from unittest import mock
 
 import codex_discord_bot_session_mirror_runtime as bot_session_mirror_runtime
 import codex_discord_session_mirror as session_mirror
+import codex_discord_session_mirror_item_sender as item_sender
 import codex_discord_session_mirror_target as session_mirror_target
+from codex_session_events import JsonEvent
 
 
+@final
 class FakeThread:
     def __init__(self, rollout_path: str) -> None:
-        self.rollout_path = rollout_path
+        self.rollout_path: str = rollout_path
 
 
+@final
 class FakeChannel:
-    id = 222
+    id: int = 222
+
+
+async def release_output_target(_thread_id: str) -> bool:
+    return True
 
 
 class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_forwards_target_id_to_typing_pulse(self) -> None:
         typing_pulses: list[tuple[int, str, str]] = []
-        runtime_deps = mock.Mock()
-        runtime_deps.get_archive_skip_logged.return_value = set()
+        runtime_deps_mock = mock.Mock()
 
         async def send_typing_pulse(channel: FakeChannel, target_thread_id: str, context: str) -> None:
             typing_pulses.append((channel.id, target_thread_id, context))
 
-        runtime_deps.send_typing_pulse = send_typing_pulse
-        runtime = bot_session_mirror_runtime.SessionMirrorRuntime(
-            cast(bot_session_mirror_runtime.SessionMirrorRuntimeDeps[FakeChannel], runtime_deps)
+        runtime_deps_mock.configure_mock(
+            get_archive_skip_logged=mock.Mock(return_value=set()),
+            send_typing_pulse=send_typing_pulse,
         )
+        runtime_deps = cast(
+            bot_session_mirror_runtime.SessionMirrorRuntimeDeps[FakeChannel],
+            runtime_deps_mock,
+        )
+        runtime = bot_session_mirror_runtime.SessionMirrorRuntime(runtime_deps)
         owner = mock.Mock()
 
         async def exercise_runtime_callback(target: object, *, deps: object) -> None:
@@ -44,7 +57,7 @@ class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
             await callback(FakeChannel(), "thread-1", "session_mirror_busy")
 
         with mock.patch.object(
-            bot_session_mirror_runtime.discord_session_mirror_target,
+            session_mirror_target,
             "mirror_session_target",
             exercise_runtime_callback,
         ):
@@ -62,7 +75,7 @@ class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             session_path = Path(temp_dir) / "session.jsonl"
-            session_path.write_text("", encoding="utf-8")
+            _ = session_path.write_text("", encoding="utf-8")
 
             async def resolve_channel(discord_thread_id: int) -> FakeChannel | None:
                 channels.append(discord_thread_id)
@@ -70,6 +83,25 @@ class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
 
             async def send_typing_pulse(channel: FakeChannel, target_thread_id: str, context: str) -> None:
                 typing_pulses.append((channel.id, target_thread_id, context))
+
+            def collect_items(
+                codex_thread_id: str,
+                events: list[JsonEvent],
+                *,
+                seen_agent_messages: dict[str, float],
+                seen_user_messages: dict[str, float],
+            ) -> list[item_sender.SessionMirrorItem]:
+                _ = codex_thread_id, events, seen_agent_messages, seen_user_messages
+                return []
+
+            async def send_item(
+                channel: FakeChannel,
+                item: Mapping[str, str],
+                *,
+                target_thread_id: str,
+                target_ref: str,
+            ) -> None:
+                _ = channel, item, target_thread_id, target_ref
 
             await session_mirror_target.mirror_session_target(
                 {"codex_thread_id": "thread-1", "discord_thread_id": 222},
@@ -87,15 +119,15 @@ class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
                     get_or_init_session_mirror_cursor=lambda thread_id, rollout_path, initial_cursor: 0,
                     read_new_session_events=lambda session_path, cursor, max_events=None: ([], 0),
                     get_archive_backlog_max_events=lambda: 10,
-                    collect_session_mirror_items=lambda thread_id, events, **kwargs: [],
+                    collect_session_mirror_items=collect_items,
                     get_seen_agent_messages=lambda thread_id: {},
                     get_seen_user_messages=lambda thread_id: {},
                     resolve_session_mirror_channel=resolve_channel,
                     resolve_target_ref=lambda thread_id: (thread_id, thread_id),
                     has_session_mirror_event=lambda digest, thread_id: False,
-                    send_session_mirror_item=lambda channel, item, **kwargs: None,
+                    send_session_mirror_item=send_item,
                     claim_session_mirror_event=lambda digest, thread_id: True,
-                    deactivate_session_mirror_output_target=lambda thread_id: None,
+                    release_session_mirror_output_target=release_output_target,
                     send_typing_pulse=send_typing_pulse,
                     log=logs.append,
                 ),

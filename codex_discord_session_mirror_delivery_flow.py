@@ -19,7 +19,7 @@ class SessionMirrorDeliveryFlowDeps(Generic[ChannelT]):
     send_session_mirror_item: session_mirror_item_sender.SessionMirrorItemSender[ChannelT]
     claim_session_mirror_event: session_mirror_item_sender.SessionMirrorEventClaimer
     update_session_mirror_cursor: session_mirror_commit.CursorUpdater
-    deactivate_session_mirror_output_target: session_mirror_commit.OutputTargetDeactivator
+    release_session_mirror_output_target: session_mirror_commit.OutputTargetReleaser
     log: session_mirror_commit.LogFunc
 
 
@@ -59,7 +59,7 @@ async def deliver_and_commit_session_mirror_items(
         terminal_sent=send_result.terminal_sent,
         deps=session_mirror_commit.SessionMirrorCommitDeps(
             update_session_mirror_cursor=deps.update_session_mirror_cursor,
-            deactivate_session_mirror_output_target=deps.deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=deps.release_session_mirror_output_target,
             log=deps.log,
         ),
     )

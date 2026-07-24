@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import cast
 
+import codex_discord_app_server_admission_factory as discord_app_server_admission_factory
 import codex_discord_bot_prompt_delivery_runtime as discord_bot_prompt_delivery_runtime
 import codex_discord_bot_prompt_delivery_types as discord_bot_prompt_delivery_types
 import codex_discord_bot_shapes as discord_bot_shapes
@@ -108,6 +109,10 @@ class BotPromptDeliveryAdapterRuntime:
                 state_none=cast(str, getattr(self.module, "INTERACTIVE_STATE_NONE")),
                 state_input=cast(str, getattr(self.module, "INTERACTIVE_STATE_INPUT")),
                 state_approval=cast(str, getattr(self.module, "INTERACTIVE_STATE_APPROVAL")),
+                prompt_admission=discord_app_server_admission_factory.make_prompt_admission(
+                    self.module,
+                    self.send_chunks,
+                ),
                 format_log_text_len=cast(Callable[[str | None], int], self._module_func("format_log_text_len")),
                 log=cast(Callable[[str], None], self._module_func("log_line")),
             )

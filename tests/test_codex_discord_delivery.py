@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 import codex_discord_delivery as delivery
 import codex_discord_delivery_runtime as delivery_runtime
@@ -79,13 +80,17 @@ class DiscordDeliveryTests(unittest.IsolatedAsyncioTestCase):
             _ = delivery_runtime.read_attachment_source_bytes("C:/tmp/report.txt")
 
     def test_read_attachment_source_bytes_supports_local_output_file_path(self) -> None:
-        output_root = delivery_runtime.CODEX_SESSION_MIRROR_ATTACHMENT_DIR
-        output_root.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(dir=output_root) as temp_dir:
-            attachment_path = Path(temp_dir) / "report.txt"
+        with TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            attachment_path = output_root / "report.txt"
             _ = attachment_path.write_bytes(b"hello file")
 
-            payload = delivery_runtime.read_attachment_source_bytes(str(attachment_path))
+            with mock.patch.object(
+                delivery_runtime,
+                "CODEX_SESSION_MIRROR_ATTACHMENT_DIR",
+                output_root,
+            ):
+                payload = delivery_runtime.read_attachment_source_bytes(str(attachment_path))
 
         self.assertEqual(payload, b"hello file")
 

@@ -30,7 +30,7 @@ async def run_bridge_and_send(
     run_bridge_command_func: Callable[[list[str]], tuple[int, str]],
     cleanup_archive_mirror_after_bridge_command_func: Callable[
         [ArchiveOwnerT | None, list[str], int, str],
-        str | None,
+        Awaitable[str | None],
     ],
     split_delivery_chunks_func: Callable[[str], Sequence[str]],
     send_chunks_func: SendChunksFunc[ChannelT, int],
@@ -38,7 +38,7 @@ async def run_bridge_and_send(
     log_func: Callable[[str], None],
 ) -> tuple[int, str]:
     exit_code, output = await asyncio.to_thread(run_bridge_command_func, argv)
-    cleanup_warning = cleanup_archive_mirror_after_bridge_command_func(
+    cleanup_warning = await cleanup_archive_mirror_after_bridge_command_func(
         archive_cleanup_owner,
         argv,
         exit_code,

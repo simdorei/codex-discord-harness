@@ -82,6 +82,8 @@ class DiscordPersistentBusyChoiceQueueChannelIntegrationTests(unittest.IsolatedA
 
     @override
     def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
         self._old_mirror_db_path = bot.MIRROR_DB_PATH
         self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -95,6 +97,7 @@ class DiscordPersistentBusyChoiceQueueChannelIntegrationTests(unittest.IsolatedA
 
     @override
     def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
         if self._old_mirror_db_path is not None:
             bot.MIRROR_DB_PATH = self._old_mirror_db_path
         if self._old_discord_log_path is None:
@@ -173,7 +176,7 @@ class DiscordPersistentBusyChoiceQueueChannelIntegrationTests(unittest.IsolatedA
             await _report_unhandled()(interaction, delay_sec=0)
 
         log_text = self._log_text()
-        self.assertEqual(interaction.response.defer_kwargs, [{"thinking": True, "ephemeral": False}])
+        self.assertEqual(interaction.response.defer_kwargs, [{"thinking": False, "ephemeral": False}])
         self.assertEqual(interaction.message.edits, [None])
         self.assertEqual(
             interaction.followup.messages,

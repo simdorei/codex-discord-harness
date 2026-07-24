@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio  # noqa: ANYIO_OK
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -77,7 +77,10 @@ class BotSessionMirrorAdapterRuntime:
             get_or_init_session_mirror_cursor=self.get_or_init_session_mirror_cursor,
             has_session_mirror_event=self.has_session_mirror_event,
             claim_session_mirror_event=self.claim_session_mirror_event,
-            deactivate_session_mirror_output_target=self.deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=cast(
+                Callable[[str], Awaitable[bool]],
+                self._module_func("release_session_mirror_output_target"),
+            ),
             send_typing_pulse=self.send_typing_pulse,
             events_bridge=cast(
                 discord_bot_session_mirror_factory.SessionMirrorEventsBridge,
@@ -135,14 +138,17 @@ class BotSessionMirrorAdapterRuntime:
 
     async def send_typing_pulse(self, channel: MessageableChannel, target_thread_id: str, context: str) -> None:
         starter = cast(Callable[..., None], self._module_func("start_session_mirror_typing_pulse"))
-        deactivate = cast(Callable[[str | None], None], self._module_func("deactivate_session_mirror_output_target"))
+        release = cast(
+            Callable[[str], Awaitable[bool]],
+            self._module_func("release_session_mirror_output_target"),
+        )
         starter(
             channel,
             target_thread_id,
             context,
-            channel_typing=cast(object, self._module_func("channel_typing")),
+            channel_typing=self._module_func("channel_typing"),
             log=cast(Callable[[str], None], self._module_func("log_line")),
-            on_start_error=deactivate,
+            on_start_error=release,
         )
 
     def get_archive_skip_logged(
@@ -207,11 +213,6 @@ class BotSessionMirrorAdapterRuntime:
         return cast(Callable[[str, str], bool], self._module_func("claim_session_mirror_event"))(
             event_digest,
             codex_thread_id,
-        )
-
-    def deactivate_session_mirror_output_target(self, target_thread_id: str) -> None:
-        cast(Callable[[str], None], self._module_func("deactivate_session_mirror_output_target"))(
-            target_thread_id,
         )
 
     def _module_func(self, name: str) -> ModuleValue:

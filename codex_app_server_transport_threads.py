@@ -12,8 +12,21 @@ from codex_app_server_transport_replies import (
 
 
 class ThreadLoaderClient(Protocol):
-    def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject: ...
-    def resume_thread(self, thread_id: str, *, timeout_sec: float = 10.0) -> JsonObject: ...
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        timeout_sec: float = 10.0,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def is_thread_subscribed(self, thread_id: str) -> bool: ...
 
 
 THREAD_LOAD_TIMEOUT_SEC: Final = 40.0
@@ -71,17 +84,32 @@ def ensure_thread_loaded(
     *,
     timeout_sec: float = THREAD_LOAD_TIMEOUT_SEC,
     monotonic_func: Callable[[], float] = time.monotonic,
+    expected_generation: int | None = None,
 ) -> JsonObject:
     deadline = monotonic_func() + max(timeout_sec, 0.0)
-    thread_payload = client.read_thread(thread_id, include_turns=False).get("thread")
+    if expected_generation is None:
+        thread_payload = client.read_thread(thread_id, include_turns=False).get("thread")
+    else:
+        thread_payload = client.read_thread(
+            thread_id,
+            include_turns=False,
+            expected_generation=expected_generation,
+        ).get("thread")
     if not isinstance(thread_payload, dict):
         return {}
-    if get_thread_status_type(thread_payload) != "notLoaded":
+    if get_thread_status_type(thread_payload) != "notLoaded" and client.is_thread_subscribed(thread_id):
         return thread_payload
     remaining = max(0.0, deadline - monotonic_func())
     if remaining <= 0:
         raise TimeoutError("Timed out waiting for app-server response to thread/resume.")
-    resumed = client.resume_thread(thread_id, timeout_sec=remaining)
+    if expected_generation is None:
+        resumed = client.resume_thread(thread_id, timeout_sec=remaining)
+    else:
+        resumed = client.resume_thread(
+            thread_id,
+            timeout_sec=remaining,
+            expected_generation=expected_generation,
+        )
     resumed_thread = resumed.get("thread") or {}
     if not isinstance(resumed_thread, dict):
         raise CodexAppServerTransportError("thread/resume did not return a thread payload.")

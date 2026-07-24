@@ -63,6 +63,13 @@ def no_recent_prompt(target_thread_id: str | None, prompt: str) -> bool:
 
 
 class DiscordPlainAskDirectIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_plain_ask_does_not_check_busy_before_prompt_flow(self) -> None:
         original_get_interactive_state = bot.get_interactive_state_for_thread
         original_get_busy_state = bot.get_busy_state_for_thread

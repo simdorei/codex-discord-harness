@@ -17,6 +17,13 @@ from tests.test_codex_discord_plain_ask_direct_integration import (
 
 
 class DiscordPlainAskDeliveryLockIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_plain_ask_offers_choice_before_first_direct_ask_acquires_delivery_lock(self) -> None:
         original_get_interactive_state = bot.get_interactive_state_for_thread
         original_has_recent_prompt = bot.has_recent_codex_app_user_prompt

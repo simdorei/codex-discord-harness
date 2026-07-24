@@ -155,6 +155,12 @@ class PendingRequestState:
     def active_turn_id(self, thread_id: str) -> str | None:
         return self.active_turns.get(thread_id)
 
+    def has_active_turns(self) -> bool:
+        return bool(self.active_turns)
+
+    def has_pending_server_requests(self) -> bool:
+        return bool(self.server_requests)
+
     def turn_completion(self, thread_id: str, turn_id: str) -> TurnCompletion | None:
         for completion in reversed(self.turn_completions):
             if completion.thread_id == thread_id and completion.turn_id == turn_id:

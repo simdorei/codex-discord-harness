@@ -280,6 +280,8 @@ class EnvPatch:
 
 class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self._old_app_server_transport_env = os.environ.get("CODEX_DISCORD_APP_SERVER_TRANSPORT")
+        os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = "0"
         self._goal_status_patch = mock.patch.object(
             bot.app_server_transport.DEFAULT_CLIENT,
             "get_thread_goal_status",
@@ -303,6 +305,10 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self._goal_status_patch.stop()
+        if self._old_app_server_transport_env is None:
+            os.environ.pop("CODEX_DISCORD_APP_SERVER_TRANSPORT", None)
+        else:
+            os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = self._old_app_server_transport_env
         bot.MIRROR_DB_PATH = self._old_mirror_db_path
         if self._old_discord_log_path is None:
             os.environ.pop("CODEX_DISCORD_LOG_PATH", None)

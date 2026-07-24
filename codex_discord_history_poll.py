@@ -3,6 +3,7 @@ from __future__ import annotations
 from asyncio import CancelledError  # noqa: ANYIO_OK
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Generic, Protocol, TypeVar, cast
 
 import codex_discord_diagnostics_history as discord_diagnostics_history
@@ -10,10 +11,10 @@ import codex_discord_diagnostics_history as discord_diagnostics_history
 
 MessageT = TypeVar("MessageT")
 HistoryMessageT_co = TypeVar("HistoryMessageT_co", covariant=True)
+HistoryMessageWatermark = tuple[datetime, int]
 GetCachedHistoryChannel = Callable[[int], tuple[object | None, str]]
 FetchHistoryChannel = Callable[[int], Awaitable[object | None]]
 ClaimHistoryMessage = Callable[[MessageT], bool]
-HistoryBootstrapPredicate = Callable[[MessageT], bool]
 ProcessHistoryPollMessage = Callable[[MessageT, int], Awaitable[None]]
 LogFunc = Callable[[str], None]
 FormatLogTextLenFunc = Callable[[str], int | str]
@@ -56,8 +57,10 @@ class PollHistoryChannelDeps(Generic[MessageT]):
     history_limit: int
     is_primed_channel: Callable[[int], bool]
     mark_primed_channel: Callable[[int], None]
+    get_channel_watermark: Callable[[int], HistoryMessageWatermark | None]
+    set_channel_watermark: Callable[[int, HistoryMessageWatermark], None]
+    now: Callable[[], datetime]
     claim_message: ClaimHistoryMessage[MessageT]
-    is_bootstrap_user_message: HistoryBootstrapPredicate[MessageT]
     process_history_poll_message: ProcessHistoryPollMessage[MessageT]
     log: LogFunc
 
@@ -90,6 +93,7 @@ async def poll_history_channel(
     *,
     deps: PollHistoryChannelDeps[MessageT],
 ) -> None:
+    poll_started_watermark = (_normalize_datetime(deps.now()), 0)
     channel, source = deps.get_cached_channel_or_thread(channel_id)
     if channel is None:
         try:
@@ -107,9 +111,11 @@ async def poll_history_channel(
 
     history_channel = cast(HistorySource[MessageT], channel)
     is_primed = deps.is_primed_channel(int(channel_id))
+    history_messages: list[MessageT] = []
     claimed_messages: list[MessageT] = []
     try:
         async for message in history_channel.history(limit=deps.history_limit):
+            history_messages.append(message)
             if deps.claim_message(message):
                 claimed_messages.append(message)
     except deps.delivery_exceptions as exc:
@@ -118,23 +124,92 @@ async def poll_history_channel(
             + f"source={source} error_type={type(exc).__name__}"
         )
         return
+    latest_watermark = _latest_message_watermark(history_messages)
     if not is_primed:
         deps.mark_primed_channel(int(channel_id))
-        bootstrap_messages = [
-            message
-            for message in reversed(claimed_messages)
-            if deps.is_bootstrap_user_message(message)
-        ]
+        eligible_messages = _messages_after_watermark(claimed_messages, poll_started_watermark)
+        prime_watermark = poll_started_watermark
+        if latest_watermark is not None:
+            prime_watermark = max(prime_watermark, latest_watermark)
+        deps.set_channel_watermark(int(channel_id), prime_watermark)
         deps.log(
             f"history_poll_primed label={label} channel={channel_id} "
-            + f"source={source} messages={len(claimed_messages)} "
-            + f"bootstrap_user_messages={len(bootstrap_messages)}"
+            + f"source={source} fetched_messages={len(history_messages)} "
+            + f"claimed_messages={len(claimed_messages)} "
+            + f"eligible_messages={len(eligible_messages)} "
+            + f"discarded_messages={len(claimed_messages) - len(eligible_messages)}"
         )
-        for message in bootstrap_messages:
+        for message in eligible_messages:
             await deps.process_history_poll_message(message, channel_id)
         return
-    for message in reversed(claimed_messages):
+
+    watermark = deps.get_channel_watermark(int(channel_id))
+    if watermark is None:
+        reprime_watermark = poll_started_watermark
+        if latest_watermark is not None:
+            reprime_watermark = max(reprime_watermark, latest_watermark)
+        deps.set_channel_watermark(int(channel_id), reprime_watermark)
+        deps.log(
+            f"history_poll_reprimed label={label} channel={channel_id} "
+            + f"source={source} reason=missing_watermark "
+            + f"fetched_messages={len(history_messages)} "
+            + f"claimed_messages={len(claimed_messages)} "
+            + f"discarded_messages={len(claimed_messages)}"
+        )
+        return
+    if latest_watermark is not None and latest_watermark > watermark:
+        deps.set_channel_watermark(int(channel_id), latest_watermark)
+    eligible_messages = _messages_after_watermark(claimed_messages, watermark)
+    for message in eligible_messages:
         await deps.process_history_poll_message(message, channel_id)
+
+
+def _latest_message_watermark(messages: list[MessageT]) -> HistoryMessageWatermark | None:
+    watermarks = [value for message in messages if (value := _message_watermark(message))]
+    return max(watermarks, default=None)
+
+
+def _is_message_after_watermark(message: object, watermark: HistoryMessageWatermark | None) -> bool:
+    message_watermark = _message_watermark(message)
+    if message_watermark is None:
+        return False
+    return watermark is None or message_watermark > watermark
+
+
+def _messages_after_watermark(
+    messages: list[MessageT],
+    watermark: HistoryMessageWatermark,
+) -> list[MessageT]:
+    return [
+        message
+        for message in reversed(messages)
+        if _is_message_after_watermark(message, watermark)
+    ]
+
+
+def _message_watermark(message: object) -> HistoryMessageWatermark | None:
+    created_at = _message_created_at(message)
+    try:
+        message_id = int(getattr(message, "id", None))
+    except (TypeError, ValueError):
+        return None
+    if created_at is None:
+        return None
+    return created_at, message_id
+
+
+def _message_created_at(message: object) -> datetime | None:
+    created_at = getattr(message, "created_at", None)
+    if not isinstance(created_at, datetime):
+        return None
+    return _normalize_datetime(created_at)
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    created_at = value
+    if created_at.tzinfo is None:
+        return created_at.replace(tzinfo=timezone.utc)
+    return created_at.astimezone(timezone.utc)
 
 
 async def history_poll_loop(deps: HistoryPollLoopDeps) -> None:

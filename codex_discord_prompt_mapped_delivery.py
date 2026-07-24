@@ -13,7 +13,7 @@ TextLenFunc = Callable[[str | None], int]
 OutputPredicate = Callable[[str], bool]
 BusyPredicate = Callable[[int, str], bool]
 PendingFormatter = Callable[[str], str]
-OutputTargetDeactivator = Callable[[str | None], None]
+OutputTargetReleaser = Callable[[str | None], Awaitable[bool]]
 SelectedThreadSetter = Callable[[str], None]
 DiscordOriginPromptMarker = Callable[[str | None, str], None]
 
@@ -88,7 +88,7 @@ class MappedPromptDeliveryDeps(Generic[ChannelT]):
     send_chunks: ChunkSender[ChannelT]
     is_delivery_confirmation_timeout: OutputPredicate
     format_pending_ask_delivery_output: PendingFormatter
-    deactivate_session_mirror_output_target: OutputTargetDeactivator
+    release_session_mirror_output_target: OutputTargetReleaser
     is_selected_thread_busy_error: BusyPredicate
     send_codex_app_menu_if_available: AppMenuSender[ChannelT]
     send_resume_failure: ResumeFailureSender[ChannelT]
@@ -157,7 +157,12 @@ async def handle_mapped_prompt_delivery(
         )
     if exit_code == 0:
         return MappedPromptDeliveryResult(handled=True, accepted=True, turn_id=turn_id)
-    deps.deactivate_session_mirror_output_target(target_thread_id)
+    released = await deps.release_session_mirror_output_target(target_thread_id)
+    if not released:
+        deps.log(
+            "mapped_prompt_output_release_deferred "
+            + f"target={target_thread_id or '-'} exit={exit_code}"
+        )
     if deps.is_selected_thread_busy_error(exit_code, output) and await deps.send_codex_app_menu_if_available(
         channel,
         target_thread_id,

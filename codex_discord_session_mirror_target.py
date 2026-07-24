@@ -86,7 +86,7 @@ class SessionMirrorTargetDeps(Generic[ThreadT, ContextUsageT, EventT, ChannelT])
     has_session_mirror_event: Callable[[str, str], bool]
     send_session_mirror_item: item_sender.SessionMirrorItemSender[ChannelT]
     claim_session_mirror_event: Callable[[str, str], bool]
-    deactivate_session_mirror_output_target: Callable[[str], None]
+    release_session_mirror_output_target: Callable[[str], Awaitable[bool]]
     log: Callable[[str], None]
     send_typing_pulse: Callable[[ChannelT, str, str], Awaitable[None]] = noop_send_typing_pulse
     is_thread_busy: Callable[[Path], bool] = default_thread_busy
@@ -178,7 +178,8 @@ async def _deactivate_output_target_if_idle(
         return False
     if isinstance(goal_lookup, GoalPresent) and goal_lookup.status is not ThreadGoalStatus.COMPLETE:
         return False
-    await asyncio.to_thread(deps.deactivate_session_mirror_output_target, codex_thread_id)
+    if not await deps.release_session_mirror_output_target(codex_thread_id):
+        return False
     deps.log(f"session_mirror_output_deactivated_idle target={codex_thread_id}")
     return True
 
@@ -270,7 +271,7 @@ async def mirror_session_target(
                 rollout_path,
                 cursor,
             ),
-            deactivate_session_mirror_output_target=deps.deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=deps.release_session_mirror_output_target,
             log=deps.log,
         ),
     )

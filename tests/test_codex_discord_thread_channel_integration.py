@@ -1,6 +1,7 @@
 # pyright: reportAssignmentType=false, reportAttributeAccessIssue=false, reportPrivateLocalImportUsage=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 import tempfile
@@ -19,6 +20,7 @@ class FetchThreadError(RuntimeError):
 
 class DiscordThreadChannelIntegrationTests(unittest.IsolatedAsyncioTestCase):
     _old_db_path: Path = Path()
+    _old_discord_log_path: str | None = None
     _root: Path = Path()
     _temp_dir: tempfile.TemporaryDirectory[str] | None = None
 
@@ -28,12 +30,20 @@ class DiscordThreadChannelIntegrationTests(unittest.IsolatedAsyncioTestCase):
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._temp_dir = temp_dir
         self._root = Path(temp_dir.name)
+        self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
+        os.environ["CODEX_DISCORD_LOG_PATH"] = str(
+            self._root / "discord-smoke.log"
+        )
         bot.MIRROR_DB_PATH = self._root / "mirror.sqlite"
         bot.init_mirror_db()
 
     @override
     def tearDown(self) -> None:
         bot.MIRROR_DB_PATH = self._old_db_path
+        if self._old_discord_log_path is None:
+            _ = os.environ.pop("CODEX_DISCORD_LOG_PATH", None)
+        else:
+            os.environ["CODEX_DISCORD_LOG_PATH"] = self._old_discord_log_path
         if self._temp_dir is not None:
             self._temp_dir.cleanup()
             self._temp_dir = None

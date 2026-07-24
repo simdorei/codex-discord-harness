@@ -73,6 +73,7 @@ STORE_SCHEMA_STATEMENTS: tuple[str, ...] = (
         "channel_id INTEGER NOT NULL, "
         "owner_user_id INTEGER, "
         "discord_message_id INTEGER, "
+        "app_server_generation INTEGER NOT NULL DEFAULT 0, "
         "prompt TEXT NOT NULL, "
         "queued INTEGER NOT NULL, "
         "ack_sent INTEGER NOT NULL, "
@@ -98,3 +99,16 @@ STORE_SCHEMA_STATEMENTS: tuple[str, ...] = (
 def init_store_schema(conn: sqlite3.Connection) -> None:
     for statement in STORE_SCHEMA_STATEMENTS:
         _ = conn.execute(statement)
+    _migrate_codex_turn_queue(conn)
+
+
+def _migrate_codex_turn_queue(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(codex_turn_queue)").fetchall()
+    }
+    if "app_server_generation" not in columns:
+        _ = conn.execute(
+            "ALTER TABLE codex_turn_queue "
+            "ADD COLUMN app_server_generation INTEGER NOT NULL DEFAULT 0"
+        )

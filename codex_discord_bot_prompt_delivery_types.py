@@ -72,6 +72,15 @@ class CodexAppMenuSender(Protocol[ChannelContraT]):
     ) -> Awaitable[bool]: ...
 
 
+class PromptAdmission(Protocol[ChannelContraT]):
+    def __call__(
+        self,
+        channel: ChannelContraT,
+        source_message: object | None,
+        expected_generation: int | None,
+    ) -> AbstractAsyncContextManager[bool]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BotPromptDeliveryRuntimeDeps(Generic[ChannelT, RelayT, SendResultT]):
     resolve_target_ref: discord_prompt_delivery_prepare.TargetResolver
@@ -120,5 +129,6 @@ class BotPromptDeliveryRuntimeDeps(Generic[ChannelT, RelayT, SendResultT]):
     state_none: str
     state_input: str
     state_approval: str
+    prompt_admission: PromptAdmission[ChannelT]
     format_log_text_len: Callable[[str | None], int]
     log: Callable[[str], None]

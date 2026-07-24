@@ -4,14 +4,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 CursorUpdater = Callable[[str, str, int], Awaitable[None]]
-OutputTargetDeactivator = Callable[[str], None]
+OutputTargetReleaser = Callable[[str], Awaitable[bool]]
 LogFunc = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
 class SessionMirrorCommitDeps:
     update_session_mirror_cursor: CursorUpdater
-    deactivate_session_mirror_output_target: OutputTargetDeactivator
+    release_session_mirror_output_target: OutputTargetReleaser
     log: LogFunc
 
 
@@ -26,9 +26,9 @@ async def commit_session_mirror_delivery(
     terminal_sent: bool,
     deps: SessionMirrorCommitDeps,
 ) -> None:
-    if terminal_sent:
-        deps.deactivate_session_mirror_output_target(codex_thread_id)
     await deps.update_session_mirror_cursor(codex_thread_id, rollout_path, next_cursor)
+    if terminal_sent:
+        _ = await deps.release_session_mirror_output_target(codex_thread_id)
     if sent_count:
         deps.log(
             f"session_mirror_sent target={codex_thread_id} channel={discord_thread_id} "

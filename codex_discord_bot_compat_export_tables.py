@@ -68,7 +68,6 @@ EXPORTS_BY_MODULE: Mapping[str, tuple[str, ...]] = {
         "resolve_discord_history_channel",
     ),
     "codex_discord_empty_content_notice": ("should_send_empty_content_notice",),
-    "codex_discord_history_bootstrap": ("is_history_bootstrap_user_message",),
     "codex_discord_interaction_gate": ("is_discord_user_allowed",),
     "codex_discord_interaction_log": (
         "format_discord_user_id_for_log",

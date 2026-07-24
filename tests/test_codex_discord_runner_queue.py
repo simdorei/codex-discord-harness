@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio  # noqa: ANYIO_OK
 from dataclasses import dataclass
 from typing import override
 import unittest
 
+import codex_discord_runner as discord_runner
 import codex_discord_runner_queue as runner_queue
 from codex_discord_runtime import normalize_runner_key
 
@@ -103,3 +105,33 @@ class RunnerQueueTests(unittest.IsolatedAsyncioTestCase):
                 "target_key": normalize_runner_key("thread-1"),
             },
         )
+
+    async def test_generation_expiry_drain_retains_only_current_generation_jobs(self) -> None:
+        queue: asyncio.Queue[runner_queue.QueueItem] = asyncio.Queue()
+        for job_id, generation in (("old", 2), ("current", 3), ("legacy", 0)):
+            await queue.put(
+                {
+                    "job_id": job_id,
+                    "app_server_generation": generation,
+                    "prompt": job_id,
+                }
+            )
+        runner: runner_queue.ThreadRunner = {
+            "queue": queue,
+            "task": None,
+            "active": True,
+            "target_thread_id": "thread-1",
+            "queued_job_ids": {"old", "current", "legacy"},
+        }
+
+        discarded = discord_runner._drain_generation_expired_queue(
+            queue,
+            runner,
+            current_generation=3,
+        )
+        retained = queue.get_nowait()
+        queue.task_done()
+
+        self.assertEqual(discarded, 2)
+        self.assertEqual(retained["job_id"], "current")
+        self.assertEqual(runner["queued_job_ids"], {"current"})

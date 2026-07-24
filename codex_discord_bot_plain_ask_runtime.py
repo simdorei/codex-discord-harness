@@ -30,25 +30,28 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
         source_message: MessageT | None = None,
         target_thread_id: str | None = None,
     ) -> None:
-        await discord_prompt_flow.send_prompt_flow_preamble(
-            channel,
-            prompt,
-            target_thread_id,
-            queued=queued,
-            deps=discord_prompt_flow.PromptFlowPreambleDeps(
-                build_context_warning=self.deps.build_context_warning,
-                build_ask_start_message=self.deps.build_ask_start_message,
-                send_chunks=self.deps.send_prompt_chunks,
-            ),
-        )
-        await self.deps.run_prompt_and_send(
-            channel,
-            prompt,
-            queued=queued,
-            ack_sent=True,
-            source_message=source_message,
-            target_thread_id=target_thread_id,
-        )
+        async with self.deps.prompt_admission(channel, source_message, None) as accepted:
+            if not accepted:
+                return
+            await discord_prompt_flow.send_prompt_flow_preamble(
+                channel,
+                prompt,
+                target_thread_id,
+                queued=queued,
+                deps=discord_prompt_flow.PromptFlowPreambleDeps(
+                    build_context_warning=self.deps.build_context_warning,
+                    build_ask_start_message=self.deps.build_ask_start_message,
+                    send_chunks=self.deps.send_prompt_chunks,
+                ),
+            )
+            await self.deps.run_prompt_and_send(
+                channel,
+                prompt,
+                queued=queued,
+                ack_sent=True,
+                source_message=source_message,
+                target_thread_id=target_thread_id,
+            )
 
     def make_busy_choice_payload(
         self,
@@ -205,6 +208,7 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
                 discord_plain_ask.RunPromptFlowFunc[MessageT],
                 self.deps.run_plain_prompt_flow,
             ),
+            prompt_admission=self.deps.prompt_admission,
             enqueue_thread_ask=self.enqueue_plain_thread_ask,
             send_busy_choice_message=self.send_plain_busy_choice_message,
             send_chunks=self.send_plain_ask_chunks,

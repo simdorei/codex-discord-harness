@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import cast
 
+import codex_discord_app_server_admission_factory as discord_app_server_admission_factory
 import codex_discord_busy_choice_queue_action as discord_busy_choice_queue_action
 import codex_discord_busy_choice_steer_action as discord_busy_choice_steer_action
 import codex_discord_busy_choice_steer_failure as discord_busy_choice_steer_failure
@@ -40,6 +41,10 @@ class BotComponentDepsRuntime:
             enqueue_thread_ask=cast(
                 discord_persistent_busy_queue.ThreadAskEnqueuer,
                 getattr(module, "enqueue_thread_ask"),
+            ),
+            prompt_admission=discord_app_server_admission_factory.make_prompt_admission(
+                module,
+                cast(Callable[..., Awaitable[object]], getattr(module, "send_chunks")),
             ),
             handle_queue_followup=discord_persistent_busy_choice.handle_persistent_busy_queue_followup,
             format_log_text_len=cast(
@@ -196,6 +201,10 @@ class BotComponentDepsRuntime:
             ),
             send_followup=cast(discord_busy_choice_queue_action.BusyDirectFollowupSender, getattr(module, "send_busy_direct_followup")),
             enqueue_thread_ask=cast(discord_busy_choice_queue_action.ThreadAskEnqueuer, getattr(module, "enqueue_thread_ask")),
+            prompt_admission=discord_app_server_admission_factory.make_prompt_admission(
+                module,
+                cast(Callable[..., Awaitable[object]], getattr(module, "send_chunks")),
+            ),
             format_log_text_len=cast(discord_busy_choice_queue_action.LogTextLenFormatter, getattr(module, "format_log_text_len")),
             log=cast(discord_busy_choice_queue_action.LogFunc, getattr(module, "log_line")),
         )

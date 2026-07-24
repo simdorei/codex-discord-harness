@@ -19,8 +19,6 @@ import codex_discord_prompt_busy_result as discord_prompt_busy_result
 import codex_discord_prompt_delivery_flow as discord_prompt_delivery_flow
 import codex_discord_prompt_delivery_prepare as discord_prompt_delivery_prepare
 import codex_discord_recorded_busy_transport as discord_recorded_busy_transport
-
-
 @dataclass(frozen=True, slots=True)
 class BotPromptDeliveryRuntime(Generic[ChannelT, RelayT, SendResultT]):
     deps: BotPromptDeliveryRuntimeDeps[ChannelT, RelayT, SendResultT]
@@ -47,7 +45,6 @@ class BotPromptDeliveryRuntime(Generic[ChannelT, RelayT, SendResultT]):
             prepare_session_mirror_delegation=self.deps.prepare_session_mirror_delegation,
             snapshot_ask_prompt_delivery_state=self.deps.snapshot_ask_prompt_delivery_state,
         )
-
     async def handle_recorded_busy_transport_prompt(
         self,
         channel: ChannelT,
@@ -80,7 +77,6 @@ class BotPromptDeliveryRuntime(Generic[ChannelT, RelayT, SendResultT]):
                 log=self.deps.log,
             ),
         )
-
     async def wait_for_mirrored_busy_delegation_settle(
         self,
         prompt: str,
@@ -99,7 +95,6 @@ class BotPromptDeliveryRuntime(Generic[ChannelT, RelayT, SendResultT]):
                 log=self.deps.log,
             ),
         )
-
     async def run_prompt_and_send(
         self,
         channel: ChannelT,
@@ -109,24 +104,34 @@ class BotPromptDeliveryRuntime(Generic[ChannelT, RelayT, SendResultT]):
         ack_sent: bool = False,
         source_message: discord_busy.BusyChoiceSource | None = None,
         target_thread_id: str | None = None,
+        expected_app_server_generation: int | None = None,
     ) -> discord_prompt_delivery_prepare.PromptDeliveryPreparationResult:
-        target_thread_id, _target_ref = self.deps.resolve_target_ref(target_thread_id)
-        lock = self.deps.get_ask_delivery_lock(target_thread_id)
-        waited = lock.locked()
-        if waited:
-            self.deps.log(f"ask_delivery_wait target={target_thread_id or '-'}")
-        async with lock:
+        async with self.deps.prompt_admission(
+            channel,
+            source_message,
+            expected_app_server_generation,
+        ) as accepted:
+            target_thread_id, target_ref = self.deps.resolve_target_ref(target_thread_id)
+            if not accepted:
+                return discord_prompt_delivery_prepare.discarded_prompt_delivery(
+                    target_thread_id,
+                    target_ref,
+                )
+            lock = self.deps.get_ask_delivery_lock(target_thread_id)
+            waited = lock.locked()
             if waited:
-                self.deps.log(f"ask_delivery_wait_done target={target_thread_id or '-'}")
-            return await self._run_prompt_and_send_unlocked(
-                channel,
-                prompt,
-                queued=queued,
-                ack_sent=ack_sent,
-                source_message=source_message,
-                target_thread_id=target_thread_id,
-            )
-
+                self.deps.log(f"ask_delivery_wait target={target_thread_id or '-'}")
+            async with lock:
+                if waited:
+                    self.deps.log(f"ask_delivery_wait_done target={target_thread_id or '-'}")
+                return await self._run_prompt_and_send_unlocked(
+                    channel,
+                    prompt,
+                    queued=queued,
+                    ack_sent=ack_sent,
+                    source_message=source_message,
+                    target_thread_id=target_thread_id,
+                )
     async def send_codex_app_menu_if_available(
         self,
         channel: ChannelT,

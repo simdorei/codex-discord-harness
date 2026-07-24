@@ -228,17 +228,3 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_get_history_poll_seconds_uses_default_for_invalid_env(self) -> None:
         with patch.dict(os.environ, {"DISCORD_HISTORY_POLL_SECONDS": "invalid"}, clear=True):
             self.assertEqual(runtime_config.get_history_poll_seconds(default=15.0), 15.0)
-
-    def test_get_history_poll_bootstrap_lookback_seconds_defaults_to_default(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(runtime_config.get_history_poll_bootstrap_lookback_seconds(default=120.0), 120.0)
-
-    def test_get_history_poll_bootstrap_lookback_seconds_clamps_to_range(self) -> None:
-        with patch.dict(os.environ, {"DISCORD_HISTORY_BOOTSTRAP_LOOKBACK_SECONDS": "-1"}, clear=True):
-            self.assertEqual(runtime_config.get_history_poll_bootstrap_lookback_seconds(default=120.0), 0.0)
-        with patch.dict(os.environ, {"DISCORD_HISTORY_BOOTSTRAP_LOOKBACK_SECONDS": "999"}, clear=True):
-            self.assertEqual(runtime_config.get_history_poll_bootstrap_lookback_seconds(default=120.0), 600.0)
-
-    def test_get_history_poll_bootstrap_lookback_seconds_uses_default_for_invalid_env(self) -> None:
-        with patch.dict(os.environ, {"DISCORD_HISTORY_BOOTSTRAP_LOOKBACK_SECONDS": "invalid"}, clear=True):
-            self.assertEqual(runtime_config.get_history_poll_bootstrap_lookback_seconds(default=120.0), 120.0)

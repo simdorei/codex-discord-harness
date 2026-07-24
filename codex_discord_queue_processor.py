@@ -13,6 +13,7 @@ class QueueAttempt:
     attempt_number: int
     thread_id: str
     turn_id: str
+    app_server_generation: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,10 +32,30 @@ class QueueTurnOwnershipAmbiguousError(RuntimeError):
     pass
 
 
+class QueueGenerationExpiredError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        stage: str,
+        expected_generation: int,
+        current_generation: int,
+        healthy: bool,
+    ) -> None:
+        current_label = str(current_generation) if healthy else "unhealthy"
+        super().__init__(
+            "Durable queue app-server generation expired "
+            f"during {stage}: expected={expected_generation} current={current_label}"
+        )
+        self.stage = stage
+        self.expected_generation = expected_generation
+        self.current_generation = current_generation
+        self.healthy = healthy
+
+
 @dataclass(frozen=True, slots=True)
 class QueueTurnCoordinatorDeps:
     acquire_turn: Callable[..., Awaitable[QueueAttempt]]
-    wait_for_turn_completion: Callable[[str, str], Awaitable[TurnCompletion]]
+    wait_for_turn_completion: Callable[[str, str, int], Awaitable[TurnCompletion]]
     complete_job: Callable[[QueueJob], Awaitable[None]]
     flush_jobs: Callable[[QueueJob, str | None], Awaitable[list[QueueJobSummary]]]
     report_retry: Callable[[QueueJob, str], Awaitable[None]]
@@ -88,7 +109,11 @@ async def process_queue_job(
             + f"job={job.get('job_id') or '-'} target={attempt.thread_id} "
             + f"turn={attempt.turn_id} attempt={attempt.attempt_number}"
         )
-        completion = await deps.wait_for_turn_completion(attempt.thread_id, attempt.turn_id)
+        completion = await deps.wait_for_turn_completion(
+            attempt.thread_id,
+            attempt.turn_id,
+            attempt.app_server_generation,
+        )
         if completion.status is TurnStatus.COMPLETED:
             await deps.complete_job(job)
             deps.log(

@@ -44,10 +44,14 @@ from codex_discord_store_processed_messages import (
     mark_processed_discord_message_id as mark_processed_discord_message_id,
 )
 from codex_discord_store_queue import (
+    QueueGenerationAdoption as QueueGenerationAdoption,
     QueueEnqueueResult as QueueEnqueueResult,
     StoredQueueJob as StoredQueueJob,
+    adopt_queue_jobs_generation as adopt_queue_jobs_generation,
     begin_queue_job_attempt as begin_queue_job_attempt,
     complete_queue_job as complete_queue_job,
+    discard_queue_jobs_for_generation as discard_queue_jobs_for_generation,
+    discard_observed_queue_jobs as discard_observed_queue_jobs,
     enqueue_queue_job as enqueue_queue_job,
     flush_queue_jobs as flush_queue_jobs,
     list_queue_jobs as list_queue_jobs,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Literal, Protocol
 
 from codex_discord_components import parse_busy_choice_custom_id
@@ -72,6 +73,7 @@ class PersistentBusySourceAuthor:
 class PersistentBusySourceMessage:
     author: PersistentBusySourceAuthor
     channel: PersistentBusyChannel
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +107,13 @@ def normalize_record_channel_id(record: BusyChoiceRecord) -> int:
     return normalize_record_user_id(record["channel_id"])
 
 
+def normalize_record_created_at(record: BusyChoiceRecord) -> datetime:
+    value = record["created_at"]
+    if not isinstance(value, int | float):
+        raise TypeError("Persistent busy choice is missing its numeric creation time.")
+    return datetime.fromtimestamp(float(value), tz=timezone.utc)
+
+
 def make_persistent_busy_source_message(
     record: BusyChoiceRecord,
     channel: PersistentBusyChannel,
@@ -112,6 +121,7 @@ def make_persistent_busy_source_message(
     return PersistentBusySourceMessage(
         author=PersistentBusySourceAuthor(id=normalize_record_user_id(record["owner_user_id"])),
         channel=channel,
+        created_at=normalize_record_created_at(record),
     )
 
 

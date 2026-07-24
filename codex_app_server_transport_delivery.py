@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 import codex_desktop_bridge as bridge
@@ -24,11 +25,44 @@ __all__ = [
 
 
 class AppServerDeliveryClient(Protocol):
-    def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject: ...
-    def resume_thread(self, thread_id: str, *, timeout_sec: float = 10.0) -> JsonObject: ...
-    def start_turn(self, thread_id: str, prompt: str) -> JsonObject: ...
-    def steer_turn(self, thread_id: str, prompt: str, *, expected_turn_id: str) -> JsonObject: ...
-    def get_active_turn_id(self, thread_id: str) -> str | None: ...
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        timeout_sec: float = 10.0,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def start_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def steer_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_turn_id: str,
+        expected_generation: int | None = None,
+    ) -> JsonObject: ...
+    def get_active_turn_id(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> str | None: ...
+    def is_thread_subscribed(self, thread_id: str) -> bool: ...
+    def thread_subscription_lock(self, thread_id: str) -> AbstractContextManager[None]: ...
+    def note_thread_activity(self, thread_id: str) -> None: ...
 
 
 # The facade exports implementation functions dynamically, so static analysis cannot see them.
@@ -42,14 +76,20 @@ def start_turn_no_wait(
     *,
     bridge_module: BridgeModule = _DEFAULT_BRIDGE_MODULE,
     confirm_timeout_sec: float = 6.0,
+    expected_generation: int | None = None,
 ) -> AppServerDeliveryResult:
     context = build_delivery_context(
         target_thread_id,
         bridge_module=bridge_module,
     )
     thread = context.thread
-    _ = ensure_thread_loaded(client, thread.id)
-    result = client.start_turn(thread.id, prompt)
+    with client.thread_subscription_lock(thread.id):
+        client.note_thread_activity(thread.id)
+        _ = ensure_thread_loaded(client, thread.id, expected_generation=expected_generation)
+        if expected_generation is None:
+            result = client.start_turn(thread.id, prompt)
+        else:
+            result = client.start_turn(thread.id, prompt, expected_generation=expected_generation)
     turn_id = result_turn_id(result)
     delivered_thread = wait_for_delivery(
         context,
@@ -82,21 +122,38 @@ def steer_or_start_no_wait(
     *,
     bridge_module: BridgeModule = _DEFAULT_BRIDGE_MODULE,
     confirm_timeout_sec: float = 6.0,
+    expected_generation: int | None = None,
 ) -> AppServerDeliveryResult:
     context = build_delivery_context(
         target_thread_id,
         bridge_module=bridge_module,
     )
     thread = context.thread
-    _ = ensure_thread_loaded(client, thread.id)
-    active_turn_id = client.get_active_turn_id(thread.id)
-    method = "turn/steer" if active_turn_id else "turn/start"
-    if active_turn_id:
-        result = client.steer_turn(thread.id, prompt, expected_turn_id=active_turn_id)
-        turn_id = result_turn_id(result, fallback=active_turn_id)
-    else:
-        result = client.start_turn(thread.id, prompt)
-        turn_id = result_turn_id(result)
+    with client.thread_subscription_lock(thread.id):
+        client.note_thread_activity(thread.id)
+        _ = ensure_thread_loaded(client, thread.id, expected_generation=expected_generation)
+        if expected_generation is None:
+            active_turn_id = client.get_active_turn_id(thread.id)
+        else:
+            active_turn_id = client.get_active_turn_id(thread.id, expected_generation=expected_generation)
+        method = "turn/steer" if active_turn_id else "turn/start"
+        if active_turn_id:
+            if expected_generation is None:
+                result = client.steer_turn(thread.id, prompt, expected_turn_id=active_turn_id)
+            else:
+                result = client.steer_turn(
+                    thread.id,
+                    prompt,
+                    expected_turn_id=active_turn_id,
+                    expected_generation=expected_generation,
+                )
+            turn_id = result_turn_id(result, fallback=active_turn_id)
+        else:
+            if expected_generation is None:
+                result = client.start_turn(thread.id, prompt)
+            else:
+                result = client.start_turn(thread.id, prompt, expected_generation=expected_generation)
+            turn_id = result_turn_id(result)
     delivered_thread = wait_for_delivery(
         context,
         prompt,

@@ -6,6 +6,7 @@ from typing import Final, TypeAlias, TypeVar
 import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
 import codex_discord_app_server as discord_app_server
+import codex_discord_app_server_admission as discord_app_server_admission
 import codex_discord_prompt_transport as prompt_transport
 import codex_discord_runtime_config as runtime_config
 import codex_discord_stream as discord_stream
@@ -56,12 +57,22 @@ def make_prompt_transport_deps(
     def start_turn_no_wait_impl(prompt: str, target_thread_id: str | None) -> AppServerDeliveryResult:
         if start_turn_no_wait is not None:
             return start_turn_no_wait(prompt, target_thread_id)
+        expected_generation = discord_app_server_admission.current_expected_app_server_generation()
+        if expected_generation is None:
+            return app_server_transport.steer_or_start_no_wait(
+                app_server_transport.DEFAULT_CLIENT,
+                prompt,
+                target_thread_id,
+                bridge_module=bridge_module,
+                confirm_timeout_sec=get_app_server_delivery_confirm_timeout(),
+            )
         return app_server_transport.steer_or_start_no_wait(
             app_server_transport.DEFAULT_CLIENT,
             prompt,
             target_thread_id,
             bridge_module=bridge_module,
             confirm_timeout_sec=get_app_server_delivery_confirm_timeout(),
+            expected_generation=expected_generation,
         )
 
     def run_legacy_stream(

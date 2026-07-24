@@ -83,9 +83,9 @@ class BotPromptTransportAdapterRuntime:
                 ),
                 is_delivery_confirmation_timeout=self.is_delivery_confirmation_timeout,
                 format_pending_ask_delivery_output=self.format_pending_ask_delivery_output,
-                deactivate_session_mirror_output_target=cast(
-                    discord_prompt_mapped_delivery.OutputTargetDeactivator,
-                    self._module_func("deactivate_session_mirror_output_target"),
+                release_session_mirror_output_target=cast(
+                    discord_prompt_mapped_delivery.OutputTargetReleaser,
+                    self._module_func("release_session_mirror_output_target"),
                 ),
                 is_selected_thread_busy_error=self.is_selected_thread_busy_error,
                 send_codex_app_menu_if_available=self.send_codex_app_menu_if_available,

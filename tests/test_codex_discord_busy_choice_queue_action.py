@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -10,7 +11,6 @@ USER_ID = 242286902982606848
 PROMPT = "please queue"
 TARGET_THREAD_ID = "thread-1"
 POSITION = 4
-IMMEDIATE_CONTENT = "No active job now. Starting this message."
 QUEUED_CONTENT = f"Queued at position {POSITION}."
 EventName = Literal["busy_state", "runner_busy", "followup", "enqueue", "log"]
 
@@ -68,22 +68,18 @@ class BusyChoiceQueueActionTests(unittest.IsolatedAsyncioTestCase):
 
         await self._run_action(harness, interaction, channel, source_message)
 
-        self.assertEqual(harness.order, ["busy_state", "runner_busy", "log", "followup", "log", "enqueue", "log"])
+        self.assertEqual(harness.order, ["busy_state", "runner_busy", "log", "enqueue", "log"])
         self.assertEqual(
             harness.logs,
             [
                 f"queue_next_immediate user={USER_ID} target={TARGET_THREAD_ID} prompt_len=12",
-                f"queue_next_immediate_sent user={USER_ID} target={TARGET_THREAD_ID}",
                 f"queue_next_immediate_enqueued user={USER_ID} position={POSITION} target={TARGET_THREAD_ID}",
             ],
         )
-        self.assertEqual(
-            harness.followups,
-            [FollowupEvent(interaction, IMMEDIATE_CONTENT, "button_followup", "queue_next_immediate")],
-        )
+        self.assertEqual(harness.followups, [])
         self.assertEqual(
             harness.enqueues,
-            [EnqueueEvent(channel, PROMPT, TARGET_THREAD_ID, False, True, source_message)],
+            [EnqueueEvent(channel, PROMPT, TARGET_THREAD_ID, False, False, source_message)],
         )
 
     async def test_queued_path_enqueues_follows_up_and_logs_in_order(self) -> None:
@@ -134,7 +130,6 @@ class BusyChoiceQueueActionTests(unittest.IsolatedAsyncioTestCase):
             harness.logs,
             [
                 f"queue_next_immediate user={USER_ID} target=- prompt_len=0",
-                f"queue_next_immediate_sent user={USER_ID} target=-",
                 f"queue_next_immediate_enqueued user={USER_ID} position={POSITION} target=-",
             ],
         )
@@ -148,14 +143,31 @@ class BusyChoiceQueueActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(harness.followups, [])
         self.assertEqual(harness.logs, [])
 
-    async def test_immediate_path_does_not_send_queued_followup(self) -> None:
+    async def test_immediate_path_leaves_start_ack_to_queue_runner(self) -> None:
         harness = self._make_harness(busy_state="idle", runner_busy=False)
 
         await self._run_action(harness, FakeInteraction(), FakeChannel(), FakeSourceMessage())
 
-        self.assertEqual(len(harness.followups), 1)
-        self.assertEqual(harness.followups[0].content, IMMEDIATE_CONTENT)
-        self.assertEqual(harness.followups[0].context, "queue_next_immediate")
+        self.assertEqual(harness.followups, [])
+        self.assertFalse(harness.enqueues[0].ack_sent)
+
+    async def test_immediate_enqueue_failure_does_not_send_starting_followup(self) -> None:
+        harness = self._make_harness(busy_state="idle", runner_busy=False, enqueue_error=True)
+
+        with self.assertRaisesRegex(RuntimeError, "enqueue failed"):
+            await self._run_action(harness, FakeInteraction(), FakeChannel(), FakeSourceMessage())
+
+        self.assertEqual(harness.followups, [])
+        self.assertEqual(len(harness.enqueues), 1)
+
+    async def test_rejected_admission_stops_before_busy_ui_or_enqueue(self) -> None:
+        harness = self._make_harness(busy_state="idle", runner_busy=False, admitted=False)
+
+        await self._run_action(harness, FakeInteraction(), FakeChannel(), FakeSourceMessage())
+
+        self.assertEqual(harness.order, [])
+        self.assertEqual(harness.followups, [])
+        self.assertEqual(harness.enqueues, [])
 
     async def _run_action(
         self,
@@ -183,6 +195,7 @@ class BusyChoiceQueueActionTests(unittest.IsolatedAsyncioTestCase):
         busy_state: str,
         runner_busy: bool,
         enqueue_error: bool = False,
+        admitted: bool = True,
     ) -> QueueHarness:
         order: list[EventName] = []
         followups: list[FollowupEvent] = []
@@ -230,11 +243,20 @@ class BusyChoiceQueueActionTests(unittest.IsolatedAsyncioTestCase):
             logs.append(message)
             order.append("log")
 
+        @asynccontextmanager
+        async def prompt_admission(
+            _channel: queue_action.QueueChannel,
+            _source_message: queue_action.QueueSourceMessage,
+            _expected_generation: int | None,
+        ):
+            yield admitted
+
         deps = queue_action.BusyChoiceQueueActionDeps(
             get_busy_state_for_thread=get_busy_state,
             is_thread_runner_busy=is_thread_runner_busy,
             send_followup=send_followup,
             enqueue_thread_ask=enqueue_thread_ask,
+            prompt_admission=prompt_admission,
             format_log_text_len=len,
             log=log,
         )

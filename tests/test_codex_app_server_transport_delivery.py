@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -35,6 +37,27 @@ class AppServerDeliveryFlowTests(unittest.TestCase):
         self.assertEqual(thread["id"], "thread-1")
         self.assertEqual(client.resume_calls, [("thread-1", 32.0)])
 
+    def test_loaded_but_unsubscribed_thread_resumes_before_starting_turn(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir) / "session.jsonl"
+            _ = session_path.write_text("", encoding="utf-8")
+            thread = _thread(session_path)
+            bridge = FakeBridge(thread, delivered_thread=thread)
+            client = FakeDeliveryClient(subscribed=False, start_result={"turn": {"id": "turn-1"}})
+
+            result = delivery.start_turn_no_wait(
+                client,
+                "hello",
+                thread.id,
+                bridge_module=bridge,
+                confirm_timeout_sec=1.0,
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(client.resumed, [(thread.id, 40.0)])
+        self.assertEqual(client.started, [(thread.id, "hello")])
+        self.assertEqual(client.lifecycle_events, ["lock-enter", "activity", "lock-exit"])
+
     def test_start_turn_verified_delivery_preserves_context(self) -> None:
         with TemporaryDirectory() as temp_dir:
             session_path = Path(temp_dir) / "session.jsonl"
@@ -61,6 +84,24 @@ class AppServerDeliveryFlowTests(unittest.TestCase):
         self.assertEqual(bridge.waited_prompts, ["hello"])
         self.assertIn("[delivery_verified] label:thread-1", result.output)
         self.assertIn("transport: resident-app-server turn/start", result.output)
+
+    def test_start_delivery_propagates_expected_generation_to_read_and_start(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir) / "session.jsonl"
+            _ = session_path.write_text("", encoding="utf-8")
+            thread = _thread(session_path)
+            bridge = FakeBridge(thread, delivered_thread=thread)
+            client = FakeDeliveryClient(start_result={"turn": {"id": "turn-1"}})
+
+            _ = delivery.start_turn_no_wait(
+                client,
+                "hello",
+                thread.id,
+                bridge_module=bridge,
+                expected_generation=7,
+            )
+
+        self.assertEqual(client.generation_checks, [("read", 7), ("start", 7)])
 
     def test_steer_cross_thread_mismatch_preserves_failure(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -134,6 +175,27 @@ class AppServerDeliveryFlowTests(unittest.TestCase):
         self.assertEqual(client.steered, [(thread.id, "hello", "active-1")])
         self.assertIn("[delivery_pending]", result.output)
 
+    def test_steer_delivery_propagates_expected_generation_through_active_turn_read(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            session_path = Path(temp_dir) / "session.jsonl"
+            _ = session_path.write_text("", encoding="utf-8")
+            thread = _thread(session_path)
+            bridge = FakeBridge(thread, delivered_thread=thread)
+            client = FakeDeliveryClient(active_turn_id="turn-active")
+
+            _ = delivery.steer_or_start_no_wait(
+                client,
+                "hello",
+                thread.id,
+                bridge_module=bridge,
+                expected_generation=11,
+            )
+
+        self.assertEqual(
+            client.generation_checks,
+            [("read", 11), ("active", 11), ("steer", 11)],
+        )
+
     def test_zero_confirm_timeout_without_turn_id_returns_pending(self) -> None:
         with TemporaryDirectory() as temp_dir:
             session_path = Path(temp_dir) / "session.jsonl"
@@ -162,33 +224,91 @@ class FakeDeliveryClient:
         self,
         *,
         active_turn_id: str | None = None,
+        subscribed: bool = True,
         start_result: JsonObject | None = None,
         steer_result: JsonObject | None = None,
     ) -> None:
         self.active_turn_id: str | None = active_turn_id
+        self.subscribed: bool = subscribed
         self.start_result: JsonObject = start_result or {}
         self.steer_result: JsonObject = steer_result or {}
         self.started: list[tuple[str, str]] = []
         self.steered: list[tuple[str, str, str]] = []
+        self.resumed: list[tuple[str, float]] = []
+        self.lifecycle_events: list[str] = []
+        self.generation_checks: list[tuple[str, int | None]] = []
 
-    def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject:
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         _ = include_turns
+        self.generation_checks.append(("read", expected_generation))
         return {"thread": {"id": thread_id, "status": {"type": "idle"}}}
 
-    def resume_thread(self, thread_id: str, *, timeout_sec: float = 10.0) -> JsonObject:
-        _ = timeout_sec
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        timeout_sec: float = 10.0,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
+        self.resumed.append((thread_id, timeout_sec))
+        self.generation_checks.append(("resume", expected_generation))
+        self.subscribed = True
         return {"thread": {"id": thread_id, "status": {"type": "idle"}}}
 
-    def start_turn(self, thread_id: str, prompt: str) -> JsonObject:
+    def is_thread_subscribed(self, thread_id: str) -> bool:
+        _ = thread_id
+        return self.subscribed
+
+    @contextmanager
+    def thread_subscription_lock(self, thread_id: str) -> Generator[None, None, None]:
+        _ = thread_id
+        self.lifecycle_events.append("lock-enter")
+        try:
+            yield
+        finally:
+            self.lifecycle_events.append("lock-exit")
+
+    def note_thread_activity(self, thread_id: str) -> None:
+        _ = thread_id
+        self.lifecycle_events.append("activity")
+
+    def start_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         self.started.append((thread_id, prompt))
+        self.generation_checks.append(("start", expected_generation))
         return self.start_result
 
-    def steer_turn(self, thread_id: str, prompt: str, *, expected_turn_id: str) -> JsonObject:
+    def steer_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        *,
+        expected_turn_id: str,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
         self.steered.append((thread_id, prompt, expected_turn_id))
+        self.generation_checks.append(("steer", expected_generation))
         return self.steer_result
 
-    def get_active_turn_id(self, thread_id: str) -> str | None:
+    def get_active_turn_id(
+        self,
+        thread_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> str | None:
         _ = thread_id
+        self.generation_checks.append(("active", expected_generation))
         return self.active_turn_id
 
 
@@ -196,13 +316,31 @@ class _NotLoadedClient:
     def __init__(self) -> None:
         self.resume_calls: list[tuple[str, float]] = []
 
-    def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject:
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
+        _ = expected_generation
         _ = include_turns
         return {"thread": {"id": thread_id, "status": {"type": "notLoaded"}}}
 
-    def resume_thread(self, thread_id: str, *, timeout_sec: float = 10.0) -> JsonObject:
+    def resume_thread(
+        self,
+        thread_id: str,
+        *,
+        timeout_sec: float = 10.0,
+        expected_generation: int | None = None,
+    ) -> JsonObject:
+        _ = expected_generation
         self.resume_calls.append((thread_id, timeout_sec))
         return {"thread": {"id": thread_id, "status": {"type": "idle"}}}
+
+    def is_thread_subscribed(self, thread_id: str) -> bool:
+        _ = thread_id
+        return False
 
 
 class FakeBridge:

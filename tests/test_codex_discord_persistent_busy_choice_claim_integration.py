@@ -103,6 +103,8 @@ class DiscordPersistentBusyChoiceClaimIntegrationTests(unittest.IsolatedAsyncioT
 
     @override
     def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
         self._old_mirror_db_path = bot.MIRROR_DB_PATH
         self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -116,6 +118,7 @@ class DiscordPersistentBusyChoiceClaimIntegrationTests(unittest.IsolatedAsyncioT
 
     @override
     def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
         if self._old_mirror_db_path is not None:
             bot.MIRROR_DB_PATH = self._old_mirror_db_path
         if self._old_discord_log_path is None:

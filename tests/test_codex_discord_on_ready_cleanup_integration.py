@@ -37,17 +37,23 @@ def _on_ready() -> OnReady:
 
 class DiscordOnReadyCleanupIntegrationTests(unittest.IsolatedAsyncioTestCase):
     _old_discord_log_path: str | None = None
+    _old_mirror_db_path: Path = Path()
     _temp_dir: tempfile.TemporaryDirectory[str] | None = None
 
     @override
     def setUp(self) -> None:
+        self._old_mirror_db_path = bot.MIRROR_DB_PATH
         self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
         temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._temp_dir = temp_dir
-        os.environ["CODEX_DISCORD_LOG_PATH"] = str(Path(temp_dir.name) / "discord-smoke.log")
+        temp_root = Path(temp_dir.name)
+        bot.MIRROR_DB_PATH = temp_root / "mirror.sqlite"
+        os.environ["CODEX_DISCORD_LOG_PATH"] = str(temp_root / "discord-smoke.log")
+        bot.init_mirror_db()
 
     @override
     def tearDown(self) -> None:
+        bot.MIRROR_DB_PATH = self._old_mirror_db_path
         if self._old_discord_log_path is None:
             _ = os.environ.pop("CODEX_DISCORD_LOG_PATH", None)
         else:

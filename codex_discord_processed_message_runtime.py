@@ -51,7 +51,7 @@ class ProcessedMessageRuntime:
             )
         except (OSError, sqlite3.Error) as exc:
             self.log(f"processed_message_persist_failed message={message_id} error_type={type(exc).__name__}")
-            return True
+            return False
 
     def claim_discord_message(self, owner: SeenCacheOwner, message: DiscordMessageIdInput) -> bool:
         message_id = self.get_message_id_func(message)

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TypeAlias, cast
 
+import codex_app_server_transport as app_server_transport
 import codex_discord_busy_component_runtime as discord_busy_component_runtime
 import codex_discord_interaction_channel_runtime as discord_interaction_channel_runtime
 import codex_discord_processed_message_runtime as discord_processed_message_runtime
@@ -17,6 +18,7 @@ import codex_discord_project_runtime as discord_project_runtime
 import codex_discord_ready_runtime as discord_ready_runtime
 import codex_discord_session_mirror as discord_session_mirror
 import codex_discord_session_mirror_cursor as discord_session_mirror_cursor
+import codex_discord_session_mirror_release_runtime as discord_session_mirror_release_runtime
 import codex_discord_session_mirror_state_runtime as discord_session_mirror_state_runtime
 import codex_discord_stale_busy_components as discord_stale_busy_components
 import codex_discord_store as discord_store
@@ -38,6 +40,21 @@ class BotStateWiringRuntime:
         self._install_processed_message_runtime()
 
     def _install_session_mirror_state(self) -> None:
+        release_runtime = discord_session_mirror_release_runtime.SessionMirrorReleaseRuntime(
+            discord_session_mirror_release_runtime.SessionMirrorReleaseRuntimeDeps(
+                transport_enabled=lambda: cast(
+                    Callable[[], bool],
+                    getattr(self.module, "app_server_transport_enabled"),
+                )(),
+                client=app_server_transport.DEFAULT_CLIENT,
+                get_output_target_activation=self._get_output_target_activation,
+                deactivate_output_target_if_unchanged=(
+                    self._deactivate_session_mirror_output_target_if_unchanged
+                ),
+                clear_expiring_output_target=self._clear_expiring_output_target,
+                log=self._log,
+            )
+        )
         runtime = discord_session_mirror_state_runtime.SessionMirrorStateRuntime(
             get_db_path=self._get_db_path,
             get_session_mirror_state=self._get_session_mirror_state,
@@ -49,17 +66,35 @@ class BotStateWiringRuntime:
             time_now=time.time,
             preserve_seconds=cast(float, getattr(self.module, "SESSION_MIRROR_CURSOR_PRIME_PRESERVE_SECONDS")),
             active_ttl_seconds=cast(float, getattr(self.module, "SESSION_MIRROR_ACTIVE_OUTPUT_TTL_SECONDS")),
+            on_expired_output_target=release_runtime.schedule_expired_output_target,
             exception_types=(OSError, RuntimeError, sqlite3.Error),
             format_exception=traceback.format_exc,
             log=self._log,
         )
         self._set("SESSION_MIRROR_STATE_RUNTIME", runtime)
+        self._set("SESSION_MIRROR_RELEASE_RUNTIME", release_runtime)
+        self._set(
+            "schedule_expired_session_mirror_output_target_release",
+            release_runtime.schedule_expired_output_target,
+        )
         self._set("get_or_init_session_mirror_cursor", runtime.get_or_init_session_mirror_cursor)
         self._set("update_session_mirror_cursor", runtime.update_session_mirror_cursor)
         self._set("prime_session_mirror_cursor_for_target", runtime.prime_session_mirror_cursor_for_target)
         self._set("activate_session_mirror_output_target", runtime.activate_session_mirror_output_target)
         self._set("activate_pending_session_mirror_output_target", runtime.activate_pending_session_mirror_output_target)
         self._set("deactivate_session_mirror_output_target", self._deactivate_session_mirror_output_target)
+        self._set(
+            "get_session_mirror_output_target_activation",
+            runtime.get_session_mirror_output_target_activation,
+        )
+        self._set(
+            "deactivate_session_mirror_output_target_if_unchanged",
+            self._deactivate_session_mirror_output_target_if_unchanged,
+        )
+        self._set(
+            "release_session_mirror_output_target",
+            release_runtime.release_output_target,
+        )
         self._set("is_active_session_mirror_output_target", runtime.is_active_session_mirror_output_target)
         self._set("is_pending_session_mirror_cursor_target", runtime.is_pending_session_mirror_cursor_target)
         self._set("clear_pending_session_mirror_cursor_target", runtime.clear_pending_session_mirror_cursor_target)
@@ -152,6 +187,49 @@ class BotStateWiringRuntime:
             getattr(self.module, "SESSION_MIRROR_STATE_RUNTIME"),
         )
         runtime.deactivate_session_mirror_output_target(target_thread_id)
+
+    def _deactivate_session_mirror_output_target_if_unchanged(
+        self,
+        target_thread_id: str | None,
+        expected_activation: float | None,
+    ) -> bool:
+        runtime = cast(
+            discord_session_mirror_state_runtime.SessionMirrorStateRuntime,
+            getattr(self.module, "SESSION_MIRROR_STATE_RUNTIME"),
+        )
+        deactivated = runtime.deactivate_session_mirror_output_target_if_unchanged(
+            target_thread_id,
+            expected_activation,
+        )
+        if deactivated:
+            stop_typing = getattr(self.module, "stop_session_mirror_typing_pulse", None)
+            if callable(stop_typing):
+                cast(Callable[[str | None], None], stop_typing)(target_thread_id)
+        return deactivated
+
+    def _get_output_target_activation(
+        self,
+        target_thread_id: str | None,
+    ) -> float | None:
+        runtime = cast(
+            discord_session_mirror_state_runtime.SessionMirrorStateRuntime,
+            getattr(self.module, "SESSION_MIRROR_STATE_RUNTIME"),
+        )
+        return runtime.get_session_mirror_output_target_activation(target_thread_id)
+
+    def _clear_expiring_output_target(
+        self,
+        target_thread_id: str,
+        expected_activation: float,
+    ) -> None:
+        runtime = cast(
+            discord_session_mirror_state_runtime.SessionMirrorStateRuntime,
+            getattr(self.module, "SESSION_MIRROR_STATE_RUNTIME"),
+        )
+        runtime.clear_expiring_session_mirror_output_target(
+            target_thread_id,
+            expected_activation,
+        )
 
     def _get_session_mirror_state(self) -> discord_session_mirror.SessionMirrorState:
         return cast(

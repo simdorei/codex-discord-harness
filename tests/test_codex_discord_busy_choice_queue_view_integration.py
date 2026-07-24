@@ -44,6 +44,13 @@ def find_queue_button(view: BusyChoiceQueueViewWithChildren) -> QueueButton:
 
 
 class DiscordBusyChoiceQueueViewIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_queue_next_immediate_uses_runner_queue(self) -> None:
         original_get_busy_state = bot.get_busy_state_for_thread
         original_is_thread_runner_busy = bot.is_thread_runner_busy
@@ -102,10 +109,11 @@ class DiscordBusyChoiceQueueViewIntegrationTests(unittest.IsolatedAsyncioTestCas
 
             self.assertEqual(
                 calls,
-                [(message.channel, "please queue", "thread-1", False, True, message)],
+                [(message.channel, "please queue", "thread-1", False, False, message)],
             )
+            self.assertEqual(interaction.response.defer_kwargs, [{"thinking": False}])
             self.assertEqual(interaction.message.edits, [None])
-            self.assertEqual(interaction.followup.messages, ["No active job now. Starting this message."])
+            self.assertEqual(interaction.followup.messages, [])
             self.assertIn("queue_next_immediate user=242286902982606848", log_text)
             self.assertIn("component_message_components_cleared context=busy_choice_queue", log_text)
             self.assertIn("prompt_len=12", log_text)

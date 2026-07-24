@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import TypeAlias
 
 from codex_discord_queue_processor import (
+    QueueGenerationExpiredError,
     QueueProcessResult,
     QueueTurnCoordinatorDeps,
     QueueTurnOwnershipAmbiguousError,
@@ -184,6 +185,19 @@ async def thread_runner_loop(
                 )
                 if result is QueueProcessResult.FLUSHED:
                     _drain_pending_queue(queue, runner)
+        except QueueGenerationExpiredError as exc:
+            current_generation = exc.current_generation if exc.healthy else None
+            discarded = _drain_generation_expired_queue(
+                queue,
+                runner,
+                current_generation=current_generation,
+            )
+            log_func(
+                f"queue_generation_discarded target={target_thread_id or '-'} "
+                f"expected={exc.expected_generation} "
+                f"current={current_generation if current_generation is not None else 'unhealthy'} "
+                f"memory_discarded={discarded}"
+            )
         except QueueTurnOwnershipAmbiguousError as exc:
             deleted_jobs = await queue_coordinator_deps.flush_jobs(job_for_failure, target_thread_id)
             await queue_coordinator_deps.report_batch_failure(job_for_failure, str(exc), deleted_jobs)
@@ -219,3 +233,34 @@ def _drain_pending_queue(
         if job_id:
             queued_job_ids.discard(job_id)
         queue.task_done()
+
+
+def _drain_generation_expired_queue(
+    queue: asyncio.Queue[QueueItem],
+    runner: ThreadRunner,
+    *,
+    current_generation: int | None,
+) -> int:
+    queued_job_ids = runner.setdefault("queued_job_ids", set())
+    retained: list[QueueItem] = []
+    discarded = 0
+    while True:
+        try:
+            pending = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        queue.task_done()
+        job_id = str(pending.get("job_id") or "")
+        if job_id:
+            queued_job_ids.discard(job_id)
+        generation = int(pending.get("app_server_generation") or 0)
+        if current_generation is not None and generation == current_generation:
+            retained.append(pending)
+        else:
+            discarded += 1
+    for pending in retained:
+        queue.put_nowait(pending)
+        job_id = str(pending.get("job_id") or "")
+        if job_id:
+            queued_job_ids.add(job_id)
+    return discarded

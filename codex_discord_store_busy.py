@@ -110,17 +110,17 @@ def get_busy_choice_record(
     now = time.time()
     with sqlite3.connect(db_path) as conn:
         row = cast(
-            tuple[int, int, str | None, str | None, int, float, float | None] | None,
+            tuple[int, int, str | None, str | None, int, float, float, float | None] | None,
             conn.execute(
                 "SELECT owner_user_id, channel_id, target_thread_id, prompt, "
-                + "allow_steer, expires_at, claimed_at "
+                + "allow_steer, created_at, expires_at, claimed_at "
                 + "FROM busy_choices WHERE choice_id = ?",
                 (choice_id,),
             ).fetchone(),
         )
         if not row:
             return None
-        if float(row[5]) <= now or row[6] is not None:
+        if float(row[6]) <= now or row[7] is not None:
             _ = conn.execute("DELETE FROM busy_choices WHERE choice_id = ?", (choice_id,))
             return None
     return {
@@ -130,7 +130,8 @@ def get_busy_choice_record(
         "target_thread_id": str(row[2] or "") or None,
         "prompt": str(row[3] or ""),
         "allow_steer": bool(row[4]),
-        "expires_at": float(row[5]),
+        "created_at": float(row[5]),
+        "expires_at": float(row[6]),
     }
 
 

@@ -172,7 +172,7 @@ class BusyChoiceView(discord.ui.View):
         if self.claimed:
             await self._send_already_handled(interaction, action="queue_next", context="queue_next_already_claimed", followup=False)
             return
-        _ = await interaction.response.defer(thinking=True)
+        _ = await interaction.response.defer(thinking=False)
         if not self.claim():
             await self._send_already_handled(interaction, action="queue_next", context="queue_next_already_handled", followup=True)
             return

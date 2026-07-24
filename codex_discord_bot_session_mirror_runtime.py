@@ -97,7 +97,7 @@ class SessionMirrorRuntimeDeps(Generic[ChannelT]):
     resolve_target_ref: Callable[[str], tuple[str | None, str]]
     has_session_mirror_event: Callable[[str, str], bool]
     claim_session_mirror_event: Callable[[str, str], bool]
-    deactivate_session_mirror_output_target: Callable[[str], None]
+    release_session_mirror_output_target: Callable[[str], Awaitable[bool]]
     log: LogFunc
     send_typing_pulse: Callable[[ChannelT, str, str], Awaitable[None]] = noop_send_typing_pulse
     is_thread_busy: Callable[[Path], bool] = lambda session_path: True
@@ -215,7 +215,7 @@ class SessionMirrorRuntime(Generic[ChannelT]):
             has_session_mirror_event=self.deps.has_session_mirror_event,
             send_session_mirror_item=owner.send_session_mirror_item,
             claim_session_mirror_event=self.deps.claim_session_mirror_event,
-            deactivate_session_mirror_output_target=self.deps.deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=self.deps.release_session_mirror_output_target,
             send_typing_pulse=lambda channel, target_thread_id, context: self.deps.send_typing_pulse(
                 channel,
                 target_thread_id,

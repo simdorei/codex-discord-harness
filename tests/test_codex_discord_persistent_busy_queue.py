@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import codex_discord_persistent_busy_choice as persistent_busy_choice
@@ -74,17 +75,7 @@ class PersistentBusyQueueActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(handled)
         self.assertEqual(harness.busy_state_calls, [TARGET_THREAD_ID])
         self.assertEqual(harness.runner_busy_calls, [TARGET_THREAD_ID])
-        self.assertEqual(
-            harness.followups,
-            [
-                FollowupCall(
-                    interaction=interaction,
-                    content="No active job now. Starting this message.",
-                    log_prefix="button_followup",
-                    context="persistent_queue_next_immediate",
-                )
-            ],
-        )
+        self.assertEqual(harness.followups, [])
         self.assertEqual(
             harness.enqueues,
             [
@@ -93,7 +84,7 @@ class PersistentBusyQueueActionTests(unittest.IsolatedAsyncioTestCase):
                     prompt=PROMPT,
                     target_thread_id=TARGET_THREAD_ID,
                     queued=False,
-                    ack_sent=True,
+                    ack_sent=False,
                     source_message=source_message,
                 )
             ],
@@ -174,6 +165,28 @@ class PersistentBusyQueueActionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(harness.queue_followups, [])
 
+    async def test_immediate_enqueue_failure_does_not_send_starting_followup(self) -> None:
+        harness = self._make_harness(busy_state="idle", runner_busy=False, enqueue_error=True)
+
+        with self.assertRaisesRegex(RuntimeError, "enqueue failed"):
+            _ = await self._run_action(harness, FakeInteraction(), FakeChannel(), FakeSourceMessage())
+
+        self.assertEqual(harness.followups, [])
+        self.assertEqual(len(harness.enqueues), 1)
+
+    async def test_rejected_admission_stops_before_busy_ui_or_enqueue(self) -> None:
+        harness = self._make_harness(busy_state="idle", runner_busy=False, admitted=False)
+
+        handled = await self._run_action(harness, FakeInteraction(), FakeChannel(), FakeSourceMessage())
+
+        self.assertFalse(handled)
+        self.assertEqual(harness.busy_state_calls, [])
+        self.assertEqual(harness.runner_busy_calls, [])
+        self.assertEqual(harness.followups, [])
+        self.assertEqual(harness.enqueues, [])
+        self.assertEqual(harness.queue_followups, [])
+        self.assertEqual(harness.logs, [])
+
     async def _run_action(
         self,
         harness: QueueHarness,
@@ -202,6 +215,7 @@ class PersistentBusyQueueActionTests(unittest.IsolatedAsyncioTestCase):
         busy_state: str,
         runner_busy: bool,
         enqueue_error: bool = False,
+        admitted: bool = True,
     ) -> QueueHarness:
         busy_state_calls: list[str | None] = []
         runner_busy_calls: list[str | None] = []
@@ -255,11 +269,20 @@ class PersistentBusyQueueActionTests(unittest.IsolatedAsyncioTestCase):
             queue_followups.append((interaction, user_id, choice_id, position, target_thread_id, prompt))
             return True
 
+        @asynccontextmanager
+        async def prompt_admission(
+            _channel: persistent_busy_queue.QueueChannel,
+            _source_message: persistent_busy_queue.QueueSourceMessage,
+            _expected_generation: int | None,
+        ):
+            yield admitted
+
         deps = persistent_busy_queue.PersistentBusyQueueActionDeps(
             get_busy_state_for_thread=get_busy_state,
             is_thread_runner_busy=is_thread_runner_busy,
             send_followup=send_followup,
             enqueue_thread_ask=enqueue_thread_ask,
+            prompt_admission=prompt_admission,
             handle_queue_followup=handle_queue_followup,
             format_log_text_len=len,
             log=logs.append,

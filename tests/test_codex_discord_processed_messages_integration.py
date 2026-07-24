@@ -69,7 +69,7 @@ class DiscordProcessedMessagesIntegrationTests(unittest.TestCase):
 
         self.assertTrue(bot.claim_discord_message(SlottedOwner(), _message(123)))
 
-    def test_processed_message_persistence_failures_log_and_fail_open(self) -> None:
+    def test_processed_message_persistence_failures_log_and_fail_closed(self) -> None:
         owner = SimpleNamespace(_processed_message_ids={})
         message = _message(123)
 
@@ -78,7 +78,7 @@ class DiscordProcessedMessagesIntegrationTests(unittest.TestCase):
             "claim_persistent_discord_message_id",
             side_effect=sqlite3.OperationalError("locked"),
         ):
-            self.assertTrue(bot.claim_discord_message(owner, message))
+            self.assertFalse(bot.claim_discord_message(owner, message))
         with mock.patch.object(
             bot.discord_store,
             "mark_processed_discord_message_id",

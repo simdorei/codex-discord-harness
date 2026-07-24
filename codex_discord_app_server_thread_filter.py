@@ -14,7 +14,7 @@ from codex_thread_models import ThreadInfo
 class AppServerThreadReader(Protocol):
     def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject: ...
 
-    def restart(self) -> None: ...
+    def try_restart_if_quiescent(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,16 +47,18 @@ def filter_app_server_available_threads_with_deps(
         return threads
 
     client = deps.get_client()
-    refreshed = False
+    refresh_attempted = False
     available: list[ThreadInfo] = []
     for thread in threads:
         if _can_read_thread(client, thread.id):
             available.append(thread)
             continue
-        if not refreshed:
+        if not refresh_attempted:
+            refresh_attempted = True
             deps.log(f"mirror_sync_app_server_refresh_start target={thread.id}")
-            client.restart()
-            refreshed = True
+            if not client.try_restart_if_quiescent():
+                deps.log(f"mirror_sync_app_server_refresh_deferred target={thread.id}")
+                continue
             if _can_read_thread(client, thread.id):
                 deps.log(f"mirror_sync_app_server_refresh_recovered target={thread.id}")
                 available.append(thread)

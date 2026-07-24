@@ -58,6 +58,13 @@ class BotCoreWiringRuntime:
             runtime_mutex_name=cast(str, getattr(self.module, "RUNTIME_MUTEX_NAME")),
             get_runtime_lock_path=lambda: cast(Path, getattr(self.module, "RUNTIME_LOCK_PATH")),
             log=cast(Callable[[str], None], getattr(self.module, "log_line")),
+            on_expired_output_target=lambda target_thread_id, activated_at: cast(
+                Callable[[str, float], None],
+                getattr(
+                    self.module,
+                    "schedule_expired_session_mirror_output_target_release",
+                ),
+            )(target_thread_id, activated_at),
         )
         self._set("RUNTIME_STATE_BRIDGE", runtime_state_bridge)
         self._set("get_session_mirror_state", runtime_state_bridge.get_session_mirror_state)

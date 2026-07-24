@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 
+import codex_app_server_transport as app_server_transport
 import codex_discord_runtime as discord_runtime
 import codex_discord_runtime_lock as discord_runtime_lock
 import codex_discord_runner_queue as discord_runner_queue
@@ -17,6 +18,8 @@ import codex_discord_session_mirror_output_targets as discord_session_mirror_out
 LogFunc = Callable[[str], None]
 GetPathFunc = Callable[[], Path]
 ExitProcessFunc = Callable[[int], None]
+CloseAppServerFunc = Callable[[], None]
+ExpiredOutputTargetHandler = Callable[[str, float], None]
 RunnerRecord = discord_runtime.RunnerState | discord_runner_queue.ThreadRunner
 
 
@@ -44,6 +47,8 @@ class RuntimeStateBridge:
     runtime_mutex_name: str
     get_runtime_lock_path: GetPathFunc
     log: LogFunc
+    on_expired_output_target: ExpiredOutputTargetHandler | None = None
+    close_app_server: CloseAppServerFunc = app_server_transport.DEFAULT_CLIENT.close
     exit_process: ExitProcessFunc = os._exit
 
     def get_session_mirror_state(self) -> discord_session_mirror.SessionMirrorState:
@@ -58,6 +63,7 @@ class RuntimeStateBridge:
             self.session_mirror_state,
             target_thread_id,
             active_ttl_seconds=self.active_output_ttl_seconds,
+            on_expired=self.on_expired_output_target,
         ):
             return True
         async with self.runtime_state.active_direct_ask_lock:
@@ -154,5 +160,12 @@ class RuntimeStateBridge:
 
     def exit_bot_process(self, exit_code: int, *, reason: str) -> None:
         self.log(f"bot_process_exit_requested reason={reason} code={exit_code}")
+        try:
+            self.close_app_server()
+        except Exception as exc:  # noqa: BLE001 - process exit must still close the Job handle.
+            self.log(
+                "bot_process_app_server_close_failed "
+                + f"reason={reason} error_type={type(exc).__name__} error={str(exc)[:300]}"
+            )
         self.remove_runtime_lock_for_current_process(reason=reason)
         self.exit_process(exit_code)

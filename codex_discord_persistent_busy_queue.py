@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import codex_discord_persistent_busy_choice as discord_persistent_busy_choice
+from codex_discord_bot_prompt_delivery_types import PromptAdmission
 
 BusyState = tuple[str, str | None, str | None]
 SyncBusyStateGetter = Callable[[str | None], BusyState]
@@ -65,6 +66,7 @@ class PersistentBusyQueueActionDeps:
     is_thread_runner_busy: ThreadRunnerBusyChecker
     send_followup: BusyDirectFollowupSender
     enqueue_thread_ask: ThreadAskEnqueuer
+    prompt_admission: PromptAdmission[QueueChannel]
     handle_queue_followup: QueueFollowupHandler
     format_log_text_len: LogTextLenFormatter
     log: LogFunc
@@ -76,6 +78,7 @@ def make_persistent_busy_queue_action_deps(
     is_thread_runner_busy: ThreadRunnerBusyChecker,
     send_followup: BusyDirectFollowupSender,
     enqueue_thread_ask: ThreadAskEnqueuer,
+    prompt_admission: PromptAdmission[QueueChannel],
     handle_queue_followup: QueueFollowupHandler,
     format_log_text_len: LogTextLenFormatter,
     log: LogFunc,
@@ -88,6 +91,7 @@ def make_persistent_busy_queue_action_deps(
         is_thread_runner_busy=is_thread_runner_busy,
         send_followup=send_followup,
         enqueue_thread_ask=enqueue_thread_ask,
+        prompt_admission=prompt_admission,
         handle_queue_followup=handle_queue_followup,
         format_log_text_len=format_log_text_len,
         log=log,
@@ -105,42 +109,39 @@ async def handle_persistent_busy_queue_action(
     prompt: str,
     deps: PersistentBusyQueueActionDeps,
 ) -> bool:
-    busy_state, _busy_thread_id, _busy_ref = await deps.get_busy_state_for_thread(target_thread_id)
-    if busy_state == "idle" and not await deps.is_thread_runner_busy(target_thread_id):
-        await deps.send_followup(
-            interaction,
-            "No active job now. Starting this message.",
-            log_prefix="button_followup",
-            context="persistent_queue_next_immediate",
-        )
+    async with deps.prompt_admission(channel, source_message, None) as accepted:
+        if not accepted:
+            return False
+        busy_state, _busy_thread_id, _busy_ref = await deps.get_busy_state_for_thread(target_thread_id)
+        if busy_state == "idle" and not await deps.is_thread_runner_busy(target_thread_id):
+            position = await deps.enqueue_thread_ask(
+                channel,
+                prompt,
+                target_thread_id,
+                queued=False,
+                ack_sent=False,
+                source_message=source_message,
+            )
+            prompt_len = deps.format_log_text_len(prompt)
+            deps.log(f"busy_choice_persistent_queue_immediate user={user_id} choice={choice_id} position={position} target={target_thread_id or '-'} prompt_len={prompt_len}")
+            return True
+
         position = await deps.enqueue_thread_ask(
             channel,
             prompt,
             target_thread_id,
-            queued=False,
-            ack_sent=True,
+            queued=True,
             source_message=source_message,
         )
-        prompt_len = deps.format_log_text_len(prompt)
-        deps.log(f"busy_choice_persistent_queue_immediate user={user_id} choice={choice_id} position={position} target={target_thread_id or '-'} prompt_len={prompt_len}")
-        return True
-
-    position = await deps.enqueue_thread_ask(
-        channel,
-        prompt,
-        target_thread_id,
-        queued=True,
-        source_message=source_message,
-    )
-    return await deps.handle_queue_followup(
-        interaction,
-        user_id=user_id,
-        choice_id=choice_id,
-        position=position,
-        target_thread_id=target_thread_id,
-        prompt=prompt,
-        deps=discord_persistent_busy_choice.PersistentBusyQueueFollowupDeps(
-            send_followup=deps.send_followup,
-            log=deps.log,
-        ),
-    )
+        return await deps.handle_queue_followup(
+            interaction,
+            user_id=user_id,
+            choice_id=choice_id,
+            position=position,
+            target_thread_id=target_thread_id,
+            prompt=prompt,
+            deps=discord_persistent_busy_choice.PersistentBusyQueueFollowupDeps(
+                send_followup=deps.send_followup,
+                log=deps.log,
+            ),
+        )

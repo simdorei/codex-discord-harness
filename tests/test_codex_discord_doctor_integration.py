@@ -40,8 +40,6 @@ class DiscordDoctorIntegrationTests(unittest.TestCase):
                     allowed_user_ids=set(),
                     startup_channel_id=222,
                     history_poll_seconds=15.0,
-                    history_poll_bootstrap_lookback_seconds=120.0,
-                    _history_poll_bootstrap_after="2026-06-03T06:21:10+00:00",
                     _history_poll_task=SimpleNamespace(done=lambda: False),
                     _history_poll_last_at="2026-06-03T06:23:10+00:00",
                     _history_poll_primed_channels={111, 222},
@@ -83,8 +81,6 @@ class DiscordDoctorIntegrationTests(unittest.TestCase):
         self.assertIn("raw_debug_events: True", output)
         self.assertIn("qa_commands_enabled: True", output)
         self.assertIn("history_poll_seconds: 15.0", output)
-        self.assertIn("history_poll_bootstrap_lookback_seconds: 120.0", output)
-        self.assertIn("history_poll_bootstrap_after: 2026-06-03T06:21:10+00:00", output)
         self.assertIn("history_poll_alive: True", output)
         self.assertIn("history_poll_last_at: 2026-06-03T06:23:10+00:00", output)
         self.assertIn("history_poll_primed_channels: 2", output)

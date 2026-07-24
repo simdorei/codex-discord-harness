@@ -100,8 +100,13 @@ class BotHistoryRuntime:
             history_limit=self.deps.history_limit,
             is_primed_channel=lambda channel_id: channel_id in _history_poll_primed_channels(owner),
             mark_primed_channel=lambda channel_id: _history_poll_primed_channels(owner).add(channel_id),
+            get_channel_watermark=lambda channel_id: _history_poll_channel_watermarks(owner).get(channel_id),
+            set_channel_watermark=lambda channel_id, value: _history_poll_channel_watermarks(owner).__setitem__(
+                channel_id,
+                value,
+            ),
+            now=lambda: datetime.now(timezone.utc),
             claim_message=lambda message: self.deps.claim_message(owner, message),
-            is_bootstrap_user_message=lambda message: _is_history_bootstrap_user_message(owner, message),
             process_history_poll_message=lambda message, channel_id: self.deps.process_history_poll_message(
                 owner,
                 message,
@@ -150,18 +155,12 @@ def _history_poll_primed_channels(owner: HistoryPollOwner) -> set[int]:
     return channels
 
 
-def _is_history_bootstrap_user_message(
+def _history_poll_channel_watermarks(
     owner: HistoryPollOwner,
-    message: discord_diagnostics_history.DiscordHistoryMessage,
-) -> bool:
-    if getattr(getattr(message, "author", None), "bot", False):
-        return False
-    cutoff = getattr(owner, "_history_poll_bootstrap_after", None)
-    created_at = getattr(message, "created_at", None)
-    if not isinstance(cutoff, datetime) or not isinstance(created_at, datetime):
-        return False
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.replace(tzinfo=timezone.utc)
-    return created_at >= cutoff
+) -> dict[int, discord_history_poll.HistoryMessageWatermark]:
+    value = getattr(owner, "_history_poll_channel_watermarks", None)
+    if isinstance(value, dict):
+        return cast(dict[int, discord_history_poll.HistoryMessageWatermark], value)
+    watermarks: dict[int, discord_history_poll.HistoryMessageWatermark] = {}
+    setattr(owner, "_history_poll_channel_watermarks", watermarks)
+    return watermarks

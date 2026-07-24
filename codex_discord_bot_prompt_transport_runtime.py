@@ -43,7 +43,7 @@ class BotPromptTransportRuntimeDeps(Generic[ChannelT, RelayT, SteeringResultT]):
     send_chunks: discord_prompt_mapped_delivery.ChunkSender[ChannelT]
     is_delivery_confirmation_timeout: discord_prompt_mapped_delivery.OutputPredicate
     format_pending_ask_delivery_output: discord_prompt_mapped_delivery.PendingFormatter
-    deactivate_session_mirror_output_target: discord_prompt_mapped_delivery.OutputTargetDeactivator
+    release_session_mirror_output_target: discord_prompt_mapped_delivery.OutputTargetReleaser
     is_selected_thread_busy_error: discord_prompt_mapped_delivery.BusyPredicate
     send_codex_app_menu_if_available: discord_prompt_mapped_delivery.AppMenuSender[ChannelT]
     send_resume_failure: discord_prompt_mapped_delivery.ResumeFailureSender[ChannelT]
@@ -85,7 +85,7 @@ class BotPromptTransportRuntime(Generic[ChannelT, RelayT, SteeringResultT]):
             send_chunks=self.deps.send_chunks,
             is_delivery_confirmation_timeout=self.deps.is_delivery_confirmation_timeout,
             format_pending_ask_delivery_output=self.deps.format_pending_ask_delivery_output,
-            deactivate_session_mirror_output_target=self.deps.deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=self.deps.release_session_mirror_output_target,
             is_selected_thread_busy_error=self.deps.is_selected_thread_busy_error,
             send_codex_app_menu_if_available=self.deps.send_codex_app_menu_if_available,
             send_resume_failure=self.deps.send_resume_failure,

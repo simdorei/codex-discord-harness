@@ -15,6 +15,7 @@ SessionMirrorEnabledFunc = Callable[[], bool]
 SessionMirrorCursorGetter = Callable[[str, str, int], int]
 SessionMirrorCursorUpdater = Callable[[str, str, int], None]
 OutputTargetPredicate = Callable[[str], bool]
+ExpiredOutputTargetHandler = Callable[[str, float], None]
 TimeFunc = Callable[[], float]
 FormatExceptionFunc = Callable[[], str]
 LogFunc = Callable[[str], None]
@@ -32,6 +33,7 @@ class SessionMirrorStateRuntime:
     time_now: TimeFunc
     preserve_seconds: float
     active_ttl_seconds: float
+    on_expired_output_target: ExpiredOutputTargetHandler
     exception_types: discord_session_mirror_cursor.MirrorCursorExceptionTypes
     format_exception: FormatExceptionFunc
     log: LogFunc
@@ -83,6 +85,7 @@ class SessionMirrorStateRuntime:
             self.get_session_mirror_state(),
             target_thread_id,
             active_ttl_seconds=self.active_ttl_seconds,
+            on_expired=self.on_expired_output_target,
         )
 
     def activate_pending_session_mirror_output_target(self, target_thread_id: str | None) -> None:
@@ -90,6 +93,7 @@ class SessionMirrorStateRuntime:
             self.get_session_mirror_state(),
             target_thread_id,
             active_ttl_seconds=self.active_ttl_seconds,
+            on_expired=self.on_expired_output_target,
         )
 
     def deactivate_session_mirror_output_target(self, target_thread_id: str | None) -> None:
@@ -98,11 +102,43 @@ class SessionMirrorStateRuntime:
             target_thread_id,
         )
 
+    def get_session_mirror_output_target_activation(
+        self,
+        target_thread_id: str | None,
+    ) -> float | None:
+        return discord_session_mirror_output_targets.get_session_mirror_output_target_activation(
+            self.get_session_mirror_state(),
+            target_thread_id,
+        )
+
+    def deactivate_session_mirror_output_target_if_unchanged(
+        self,
+        target_thread_id: str | None,
+        expected_activation: float | None,
+    ) -> bool:
+        return discord_session_mirror_output_targets.deactivate_session_mirror_output_target_if_unchanged(
+            self.get_session_mirror_state(),
+            target_thread_id,
+            expected_activation,
+        )
+
+    def clear_expiring_session_mirror_output_target(
+        self,
+        target_thread_id: str,
+        expected_activation: float,
+    ) -> None:
+        discord_session_mirror_output_targets.clear_expiring_session_mirror_output_target(
+            self.get_session_mirror_state(),
+            target_thread_id,
+            expected_activation,
+        )
+
     def is_active_session_mirror_output_target(self, target_thread_id: str | None) -> bool:
         return discord_session_mirror_output_targets.is_active_session_mirror_output_target(
             self.get_session_mirror_state(),
             target_thread_id,
             active_ttl_seconds=self.active_ttl_seconds,
+            on_expired=self.on_expired_output_target,
         )
 
     def is_pending_session_mirror_cursor_target(self, target_thread_id: str | None) -> bool:
@@ -110,6 +146,7 @@ class SessionMirrorStateRuntime:
             self.get_session_mirror_state(),
             target_thread_id,
             active_ttl_seconds=self.active_ttl_seconds,
+            on_expired=self.on_expired_output_target,
         )
 
     def clear_pending_session_mirror_cursor_target(self, target_thread_id: str | None) -> None:

@@ -8,12 +8,14 @@ from types import ModuleType
 from typing import cast, TypeAlias
 
 import codex_app_server_transport as app_server_transport
+import codex_discord_app_server_admission as app_server_admission
 import codex_discord_durable_queue_runtime as durable_queue_runtime
 import codex_discord_prompt_delivery_prepare as prompt_delivery_prepare
 import codex_discord_queue_targets as discord_queue_targets
 import codex_discord_runner as discord_runner
 import codex_discord_runner_runtime as discord_runner_runtime
 import codex_discord_runtime as discord_runtime
+import codex_discord_store as store
 from codex_discord_runner_queue import RunnerMap
 ModuleValue: TypeAlias = object
 
@@ -64,17 +66,31 @@ class BotRunnerAdapterRuntime:
 
     def make_durable_queue_runtime(self) -> durable_queue_runtime.DurableQueueRuntime:
         client = app_server_transport.DEFAULT_CLIENT
+
+        def get_db_path() -> Path:
+            return cast(Path, getattr(self.module, "MIRROR_DB_PATH"))
+
+        client.set_external_work_guard(
+            lambda: bool(store.list_queue_jobs(get_db_path()))
+        )
         return durable_queue_runtime.DurableQueueRuntime(
             durable_queue_runtime.DurableQueueRuntimeDeps(
-                get_db_path=lambda: cast(Path, getattr(self.module, "MIRROR_DB_PATH")),
-                get_turn_states=lambda thread_id: client.get_thread_turn_states(
+                get_db_path=get_db_path,
+                get_app_server_lifecycle=client.lifecycle_snapshot,
+                ensure_app_server_ready=client.start,
+                get_expected_app_server_generation=app_server_admission.current_expected_app_server_generation,
+                admit_app_server_generation=client.delivery_admission,
+                notify_app_server_work_changed=client.notify_child_cleanup_blocker_changed,
+                get_turn_states=lambda thread_id, generation: client.get_thread_turn_states(
                     thread_id,
                     timeout_sec=8.0,
+                    expected_generation=generation,
                 ),
-                wait_for_live_turn=lambda thread_id, turn_id, timeout_sec: client.wait_for_turn_completion(
+                wait_for_live_turn=lambda thread_id, turn_id, timeout_sec, generation: client.wait_for_turn_completion(
                     thread_id,
                     turn_id,
                     timeout_sec=timeout_sec,
+                    expected_generation=generation,
                 ),
                 run_prompt_and_send=self.run_prompt_and_send,
                 send_chunks=self.send_chunks,

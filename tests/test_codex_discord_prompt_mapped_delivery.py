@@ -43,6 +43,7 @@ class DepsFixture:
     transport_calls: list[tuple[str, str | None]] = field(default_factory=list)
     marked_discord_origin_prompts: list[tuple[str | None, str]] = field(default_factory=list)
     deactivated: list[str | None] = field(default_factory=list)
+    release_result: bool = True
     app_menu_calls: list[tuple[str | None, str, str]] = field(default_factory=list)
     resume_failures: list[tuple[str, str]] = field(default_factory=list)
     selected_thread_ids: list[str] = field(default_factory=list)
@@ -103,6 +104,11 @@ class DepsFixture:
     def set_selected_thread_id(self, thread_id: str) -> None:
         self.selected_thread_ids.append(thread_id)
 
+    async def release(self, thread_id: str | None) -> bool:
+        if self.release_result:
+            self.deactivated.append(thread_id)
+        return self.release_result
+
     def build(self) -> mapped_delivery.MappedPromptDeliveryDeps[FakeChannel]:
         return mapped_delivery.MappedPromptDeliveryDeps(
             prepare_mapped_session_mirror_output=self.prepare,
@@ -114,7 +120,7 @@ class DepsFixture:
             send_chunks=self.send_chunks,
             is_delivery_confirmation_timeout=lambda output: self.pending,
             format_pending_ask_delivery_output=lambda output: f"[delivery_pending]\n{output}",
-            deactivate_session_mirror_output_target=self.deactivated.append,
+            release_session_mirror_output_target=self.release,
             is_selected_thread_busy_error=lambda exit_code, output: self.busy,
             send_codex_app_menu_if_available=self.send_app_menu,
             send_resume_failure=self.send_resume_failure,
@@ -245,6 +251,25 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fixture.deactivated, ["thread-1"])
         self.assertEqual(channel.messages, ["Ask failed (transport exit 7)\n\nboom"])
         self.assertEqual(fixture.resume_failures, [])
+
+    async def test_failure_preserves_output_target_when_subscription_release_is_deferred(self) -> None:
+        fixture = DepsFixture(
+            transport_result=(7, "boom"),
+            release_result=False,
+        )
+        channel = FakeChannel()
+
+        result = await mapped_delivery.handle_mapped_prompt_delivery(
+            channel,
+            "please run",
+            "thread-1",
+            deps=fixture.build(),
+        )
+
+        self.assertTrue(result.handled)
+        self.assertEqual(fixture.deactivated, [])
+        self.assertIn("mapped_prompt_output_release_deferred", "\n".join(fixture.logs))
+        self.assertEqual(channel.messages, ["Ask failed (transport exit 7)\n\nboom"])
 
     async def test_resume_timeout_failure_includes_resume_button_delivery(self) -> None:
         fixture = DepsFixture(

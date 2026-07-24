@@ -129,8 +129,6 @@ def build_discord_doctor_message(
         f"raw_debug_events: {bool(getattr(bot, '_enable_debug_events', False))}",
         f"qa_commands_enabled: {discord_qa_commands_enabled_func()}",
         f"history_poll_seconds: {getattr(bot, 'history_poll_seconds', '-')}",
-        f"history_poll_bootstrap_lookback_seconds: {getattr(bot, 'history_poll_bootstrap_lookback_seconds', '-')}",
-        f"history_poll_bootstrap_after: {getattr(bot, '_history_poll_bootstrap_after', '-')}",
         f"history_poll_alive: {history_poll_alive}",
         f"history_poll_last_at: {getattr(bot, '_history_poll_last_at', '-')}",
         f"history_poll_primed_channels: {len(history_poll_primed_channels)}",

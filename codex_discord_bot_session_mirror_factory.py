@@ -6,11 +6,11 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Protocol, TypeVar
 
+import codex_app_server_transport as app_server_transport
 import codex_discord_bot_session_mirror_runtime as session_mirror_runtime
 import codex_discord_session_mirror as discord_session_mirror
 import codex_discord_session_mirror_item_delivery as discord_session_mirror_item_delivery
 import codex_discord_session_mirror_target as discord_session_mirror_target
-import codex_app_server_transport as app_server_transport
 from codex_discord_text import env_flag, parse_bounded_int_arg
 from codex_session_events import JsonEvent
 from codex_thread_models import ThreadContextUsage, ThreadInfo
@@ -55,7 +55,7 @@ def make_session_mirror_runtime(
     get_or_init_session_mirror_cursor: Callable[[str, str, int], int],
     has_session_mirror_event: Callable[[str, str], bool],
     claim_session_mirror_event: Callable[[str, str], bool],
-    deactivate_session_mirror_output_target: Callable[[str], None],
+    release_session_mirror_output_target: Callable[[str], Awaitable[bool]],
     events_bridge: SessionMirrorEventsBridge,
     log: Callable[[str], None],
     send_typing_pulse: Callable[[ChannelT, str, str], Awaitable[None]] | None = None,
@@ -63,15 +63,36 @@ def make_session_mirror_runtime(
     def app_server_enabled() -> bool:
         return env_flag("CODEX_DISCORD_APP_SERVER_TRANSPORT", True)
 
+    def healthy_app_server_generation() -> tuple[int | None, app_server_transport.AppServerLifecycleSnapshot]:
+        snapshot = app_server_transport.DEFAULT_CLIENT.lifecycle_snapshot()
+        generation = snapshot.generation if snapshot.healthy and snapshot.generation > 0 else None
+        return generation, snapshot
+
     def get_active_turn_id(thread_id: str) -> str | None:
         if not app_server_enabled():
             return None
-        return app_server_transport.DEFAULT_CLIENT.get_active_turn_id_or_raise(thread_id)
+        generation, snapshot = healthy_app_server_generation()
+        if generation is None:
+            raise app_server_transport.AppServerGenerationMismatch(
+                expected_generation=snapshot.generation,
+                actual_generation=snapshot.generation,
+                healthy=False,
+            )
+        return app_server_transport.DEFAULT_CLIENT.get_active_turn_id_or_raise(
+            thread_id,
+            expected_generation=generation,
+        )
 
     def get_thread_goal_lookup(thread_id: str) -> app_server_transport.ThreadGoalLookup:
         if not app_server_enabled():
             return app_server_transport.GoalAbsent()
-        return app_server_transport.DEFAULT_CLIENT.get_thread_goal_lookup(thread_id)
+        generation, _snapshot = healthy_app_server_generation()
+        if generation is None:
+            return app_server_transport.GoalTransportError("Codex app-server is not healthy.")
+        return app_server_transport.DEFAULT_CLIENT.get_thread_goal_lookup(
+            thread_id,
+            expected_generation=generation,
+        )
 
     def read_new_session_events(
         session_path: Path,
@@ -123,7 +144,7 @@ def make_session_mirror_runtime(
             resolve_target_ref=resolve_target_ref,
             has_session_mirror_event=has_session_mirror_event,
             claim_session_mirror_event=claim_session_mirror_event,
-            deactivate_session_mirror_output_target=deactivate_session_mirror_output_target,
+            release_session_mirror_output_target=release_session_mirror_output_target,
             log=log,
             send_typing_pulse=send_typing_pulse or session_mirror_runtime.noop_send_typing_pulse,
             is_thread_busy=lambda session_path: events_bridge.is_thread_busy(session_path),

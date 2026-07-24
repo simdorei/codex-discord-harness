@@ -9,6 +9,11 @@ from codex_discord_project_types import BridgeProjectModule, ProjectThread
 
 ThreadT = TypeVar("ThreadT", bound=ProjectThread)
 
+_CODEX_PROJECTLESS_CHAT_CWD_PREFIXES = (
+    "new-chat",
+    "chatgpt-conversation-",
+)
+
 
 def _thread_cwd(thread: ProjectThread, *, bridge_module: BridgeProjectModule) -> str:
     cwd = str(thread.cwd).strip() if thread.cwd is not None else ""
@@ -20,9 +25,10 @@ def is_codex_projectless_chat_cwd(cwd: str, *, bridge_module: BridgeProjectModul
     parts = re.split(r"[\\/]+", normalized)
     if len(parts) < 4:
         return False
+    leaf_name = parts[-1].lower()
     return (
         len(parts) >= 5
-        and parts[-1].lower().startswith("new-chat")
+        and any(leaf_name.startswith(prefix) for prefix in _CODEX_PROJECTLESS_CHAT_CWD_PREFIXES)
         and re.match(r"^\d{4}-\d{2}-\d{2}$", parts[-2] or "") is not None
         and parts[-3].lower() == "codex"
         and parts[-4].lower() == "documents"

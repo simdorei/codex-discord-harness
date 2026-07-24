@@ -204,9 +204,9 @@ class BotServiceWiringRuntime:
                     Callable[[], discord_session_mirror_archive.SessionMirrorStateLike],
                     self._module_func("get_session_mirror_state"),
                 ),
-                deactivate_session_mirror_output_target=cast(
-                    Callable[[str | None], None],
-                    self._module_func("deactivate_session_mirror_output_target"),
+                release_session_mirror_output_target=cast(
+                    Callable[[str | None], Awaitable[bool]],
+                    self._module_func("release_session_mirror_output_target"),
                 ),
                 format_log_argv=cast(Callable[[list[str]], str], self._module_func("format_log_argv")),
                 log=self._log,

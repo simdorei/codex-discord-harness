@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
 import codex_discord_busy as discord_busy
+from codex_discord_bot_prompt_delivery_types import PromptAdmission
 import codex_discord_plain_ask as discord_plain_ask
 import codex_discord_plain_ask_handler as discord_plain_ask_handler
 import codex_discord_plain_ask_runtime as discord_plain_ask_runtime
@@ -111,6 +112,7 @@ class BotPlainAskRuntimeDeps(Generic[MessageableT, MessageT, ViewT, SendResultT]
     send_prompt_chunks: discord_prompt_flow.ChunkSender[MessageableT]
     enqueue_thread_ask: ThreadAskEnqueuer[MessageableT, MessageT]
     run_prompt_and_send: PromptSender[MessageableT, MessageT]
+    prompt_admission: PromptAdmission[MessageableT]
     run_plain_prompt_flow: PlainPromptFlowRunner[MessageableT, MessageT]
     build_context_warning: Callable[[str | None], str]
     build_ask_start_message: discord_prompt_flow.QueuedAskStartBuilder

@@ -75,6 +75,7 @@ class SessionMirrorState:
 
     active_output_targets: dict[str, float] = field(default_factory=dict)
     pending_cursor_targets: set[str] = field(default_factory=set)
+    expiring_output_targets: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

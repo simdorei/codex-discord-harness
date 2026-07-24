@@ -33,6 +33,7 @@ class QueueJob(TypedDict, total=False):
     channel_id: int
     owner_user_id: int | None
     discord_message_id: int | None
+    app_server_generation: int
     prompt: str
     target_thread_id: str | None
     queued: bool

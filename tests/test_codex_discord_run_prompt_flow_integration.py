@@ -2,6 +2,8 @@ from __future__ import annotations
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 import asyncio  # noqa: ANYIO_OK
+from contextlib import asynccontextmanager
+from dataclasses import replace
 import unittest
 
 import codex_discord_bot as bot
@@ -13,6 +15,39 @@ from tests.test_codex_discord_bot import FakeMessage, FakeTarget
 
 
 class DiscordRunPromptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejected_admission_sends_no_prompt_preamble(self) -> None:
+        calls: list[str] = []
+
+        @asynccontextmanager
+        async def reject_admission(
+            _channel: object,
+            _source_message: object | None,
+            _expected_generation: int | None,
+        ):
+            yield False
+
+        async def fail_if_run(*_args: object, **_kwargs: object) -> None:
+            calls.append("run")
+
+        runtime = type(bot.PLAIN_ASK_RUNTIME)(
+            replace(
+                bot.PLAIN_ASK_RUNTIME.deps,
+                prompt_admission=reject_admission,
+                run_prompt_and_send=fail_if_run,
+            )
+        )
+        channel = FakeTarget()
+
+        await runtime.run_prompt_flow(
+            channel,
+            "must not start",
+            source_message=FakeMessage(),
+            target_thread_id="thread-1",
+        )
+
+        self.assertEqual(channel.messages, [])
+        self.assertEqual(calls, [])
+
     async def test_run_prompt_flow_sends_ask_start_repeatback(self) -> None:
         original_get_thread_runner = bot.get_thread_runner
         original_build_context_warning = bot.build_context_warning
@@ -193,7 +228,19 @@ class DiscordRunPromptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             channel = FakeTarget()
             source_message = FakeMessage()
 
-            await bot.run_prompt_flow(
+            @asynccontextmanager
+            async def accept_admission(
+                _channel: object,
+                _source_message: object | None,
+                _expected_generation: int | None,
+            ):
+                yield True
+
+            runtime = type(bot.PLAIN_ASK_RUNTIME)(
+                replace(bot.PLAIN_ASK_RUNTIME.deps, prompt_admission=accept_admission)
+            )
+
+            await runtime.run_prompt_flow(
                 channel,
                 "please queue",
                 source_message=source_message,

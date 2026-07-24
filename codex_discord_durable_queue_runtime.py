@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import asyncio  # noqa: ANYIO_OK
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 import uuid
 
+from codex_app_server_transport_lifecycle import (
+    AppServerGenerationMismatch,
+    AppServerLifecycleSnapshot,
+)
 from codex_app_server_transport_turn_outcomes import (
     TurnCompletion,
     TurnCompletionFound,
@@ -15,6 +20,7 @@ from codex_app_server_transport_turn_outcomes import (
 )
 import codex_discord_prompt_delivery_prepare as prompt_delivery_prepare
 from codex_discord_durable_queue_restore import QueueRestoreBot, restore_queue_jobs
+import codex_discord_queue_generation as queue_generation
 from codex_discord_queue_job_memory import (
     copy_stored_queue_state,
     queue_job_baseline,
@@ -36,10 +42,14 @@ import codex_discord_store as store
 from codex_discord_store_queue import QueueJobState, StoredQueueJob
 
 
-TurnStateGetter = Callable[[str], dict[str, TurnCompletion]]
-LiveTurnWaiter = Callable[[str, str, float], TurnCompletionObservation]
+TurnStateGetter = Callable[[str, int], dict[str, TurnCompletion]]
+LiveTurnWaiter = Callable[[str, str, float, int], TurnCompletionObservation]
 PromptSender = Callable[..., Awaitable[prompt_delivery_prepare.PromptDeliveryPreparationResult]]
 ChunkSender = Callable[..., Awaitable[int]]
+QueueAdmission = Callable[
+    [int | None],
+    AbstractContextManager[AppServerLifecycleSnapshot],
+]
 
 
 class QueueTurnDeliveryError(RuntimeError):
@@ -49,6 +59,11 @@ class QueueTurnDeliveryError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class DurableQueueRuntimeDeps:
     get_db_path: Callable[[], Path]
+    get_app_server_lifecycle: queue_generation.LifecycleSnapshotGetter
+    ensure_app_server_ready: Callable[[], None]
+    get_expected_app_server_generation: Callable[[], int | None]
+    admit_app_server_generation: QueueAdmission
+    notify_app_server_work_changed: Callable[[], None]
     get_turn_states: TurnStateGetter
     wait_for_live_turn: LiveTurnWaiter
     run_prompt_and_send: PromptSender
@@ -76,20 +91,56 @@ class DurableQueueRuntime:
         discord_message_id = int(getattr(source_message, "id", 0) or 0) or None
         if channel_id <= 0:
             raise QueueTurnDeliveryError("Durable queue delivery requires a Discord channel id.")
-        result = await asyncio.to_thread(
-            store.enqueue_queue_job,
-            self.deps.get_db_path(),
-            job_id=str(uuid.uuid4()),
-            target_thread_id=target_thread_id,
-            channel_id=channel_id,
-            owner_user_id=owner_user_id,
-            discord_message_id=discord_message_id,
-            prompt=prompt,
-            queued=queued,
-            ack_sent=ack_sent,
-        )
-        records = await asyncio.to_thread(store.list_queue_jobs, self.deps.get_db_path(), target_thread_id)
-        return to_memory_queue_job(result.job, channel, source_message), result.created, len(records)
+        expected_generation = self.deps.get_expected_app_server_generation()
+        with self.deps.admit_app_server_generation(expected_generation) as snapshot:
+            generation = int(snapshot.generation if expected_generation is None else expected_generation)
+            if (
+                not snapshot.healthy
+                or generation <= 0
+                or int(snapshot.generation) != generation
+            ):
+                await queue_generation.require_queue_generation(
+                    self.deps,
+                    generation,
+                    "enqueue_admission",
+                )
+            _ = await queue_generation.discard_stale_queue_jobs(self.deps, snapshot)
+            queue_generation.reject_source_before_accepting_since(
+                self.deps,
+                source_message,
+                snapshot,
+                channel_id=channel_id,
+            )
+            await queue_generation.require_queue_generation(
+                self.deps,
+                generation,
+                "enqueue_before_store",
+            )
+            result = await asyncio.to_thread(
+                store.enqueue_queue_job,
+                self.deps.get_db_path(),
+                job_id=str(uuid.uuid4()),
+                target_thread_id=target_thread_id,
+                channel_id=channel_id,
+                owner_user_id=owner_user_id,
+                discord_message_id=discord_message_id,
+                app_server_generation=generation,
+                prompt=prompt,
+                queued=queued,
+                ack_sent=ack_sent,
+            )
+            await queue_generation.require_queue_generation(
+                self.deps,
+                generation,
+                "enqueue_after_store",
+            )
+            records = await asyncio.to_thread(
+                store.list_queue_jobs,
+                self.deps.get_db_path(),
+                target_thread_id,
+                app_server_generation=generation,
+            )
+            return to_memory_queue_job(result.job, channel, source_message), result.created, len(records)
 
     async def acquire_turn(
         self,
@@ -103,11 +154,13 @@ class DurableQueueRuntime:
         thread_id = str(target_thread_id or job.get("target_thread_id") or "").strip()
         if not job_id or not thread_id:
             raise QueueTurnDeliveryError("Durable queue job is missing its job or thread id.")
+        generation = queue_job_int(job.get("app_server_generation"))
+        await queue_generation.require_queue_generation(self.deps, generation, "acquire")
         if not recovery:
-            restored = await self._reconcile_restored_attempt(job, thread_id)
+            restored = await self._reconcile_restored_attempt(job, thread_id, generation)
             if restored is not None:
                 return restored
-        states = await self._wait_for_startable_turn(thread_id)
+        states = await self._wait_for_startable_turn(thread_id, generation)
         state = str(job.get("state") or QueueJobState.PENDING.value)
         attempt_count = queue_job_int(job.get("attempt_count"))
         if state != QueueJobState.STARTING.value or recovery:
@@ -116,37 +169,76 @@ class DurableQueueRuntime:
                 self.deps.get_db_path(),
                 job_id,
                 baseline_turn_ids=tuple(states),
+                app_server_generation=generation,
             )
             copy_stored_queue_state(job, record)
             attempt_count = record.attempt_count
         channel = job.get("channel")
         if channel is None or not hasattr(channel, "send"):
             raise QueueTurnDeliveryError("Durable queue job has no send-capable Discord channel.")
-        preparation = await self.deps.run_prompt_and_send(
-            channel,
-            prompt,
-            queued=True,
-            ack_sent=bool(job.get("ack_sent")),
-            source_message=job.get("source_message"),
-            target_thread_id=thread_id,
-        )
+        await queue_generation.require_queue_generation(self.deps, generation, "turn_start")
+        try:
+            preparation = await self.deps.run_prompt_and_send(
+                channel,
+                prompt,
+                queued=bool(job.get("queued")),
+                ack_sent=bool(job.get("ack_sent")),
+                source_message=job.get("source_message"),
+                target_thread_id=thread_id,
+                expected_app_server_generation=generation,
+            )
+        except AppServerGenerationMismatch as exc:
+            await queue_generation.translate_transport_generation_expiry(
+                self.deps,
+                exc,
+                generation,
+                "turn_start",
+                job_id=job_id,
+            )
         mapped = preparation.mapped_result
         if mapped is None or not mapped.accepted or not mapped.turn_id:
             detail = mapped.error_message if mapped is not None else "mapped app-server delivery was not used"
             raise QueueTurnDeliveryError(f"Queue turn was not accepted: {detail[:500]}")
+        await queue_generation.require_queue_generation(
+            self.deps,
+            generation,
+            "turn_accepted",
+        )
         record = await asyncio.to_thread(
             store.mark_queue_job_running,
             self.deps.get_db_path(),
             job_id,
             mapped.turn_id,
+            app_server_generation=generation,
         )
         copy_stored_queue_state(job, record)
-        return QueueAttempt(attempt_count, thread_id, mapped.turn_id)
+        return QueueAttempt(attempt_count, thread_id, mapped.turn_id, generation)
 
-    async def _wait_for_startable_turn(self, thread_id: str) -> dict[str, TurnCompletion]:
+    async def _wait_for_startable_turn(
+        self,
+        thread_id: str,
+        generation: int,
+    ) -> dict[str, TurnCompletion]:
         waiting_logged = False
         while True:
-            states = await asyncio.to_thread(self.deps.get_turn_states, thread_id)
+            await queue_generation.require_queue_generation(
+                self.deps,
+                generation,
+                "wait_for_startable_turn",
+            )
+            try:
+                states = await asyncio.to_thread(
+                    self.deps.get_turn_states,
+                    thread_id,
+                    generation,
+                )
+            except AppServerGenerationMismatch as exc:
+                await queue_generation.translate_transport_generation_expiry(
+                    self.deps,
+                    exc,
+                    generation,
+                    "wait_for_startable_turn",
+                )
             active_turn_ids = [
                 turn_id
                 for turn_id, completion in states.items()
@@ -164,9 +256,38 @@ class DurableQueueRuntime:
                 waiting_logged = True
             await asyncio.sleep(1.0)
 
-    async def wait_for_turn_completion(self, thread_id: str, turn_id: str) -> TurnCompletion:
+    async def wait_for_turn_completion(
+        self,
+        thread_id: str,
+        turn_id: str,
+        generation: int,
+    ) -> TurnCompletion:
         while True:
-            observation = await asyncio.to_thread(self.deps.wait_for_live_turn, thread_id, turn_id, 2.0)
+            await queue_generation.require_queue_generation(
+                self.deps,
+                generation,
+                "wait_for_turn_completion",
+            )
+            try:
+                observation = await asyncio.to_thread(
+                    self.deps.wait_for_live_turn,
+                    thread_id,
+                    turn_id,
+                    2.0,
+                    generation,
+                )
+            except AppServerGenerationMismatch as exc:
+                await queue_generation.translate_transport_generation_expiry(
+                    self.deps,
+                    exc,
+                    generation,
+                    "wait_for_turn_completion",
+                )
+            await queue_generation.require_queue_generation(
+                self.deps,
+                generation,
+                "wait_for_turn_completion",
+            )
             if isinstance(observation, TurnCompletionFound):
                 return observation.completion
             if isinstance(observation, TurnCompletionTransportError):
@@ -175,7 +296,18 @@ class DurableQueueRuntime:
                     + f"error={observation.message[:300]}"
                 )
             try:
-                states = await asyncio.to_thread(self.deps.get_turn_states, thread_id)
+                states = await asyncio.to_thread(
+                    self.deps.get_turn_states,
+                    thread_id,
+                    generation,
+                )
+            except AppServerGenerationMismatch as exc:
+                await queue_generation.translate_transport_generation_expiry(
+                    self.deps,
+                    exc,
+                    generation,
+                    "reconcile_turn_completion",
+                )
             except (OSError, RuntimeError, TimeoutError) as exc:
                 self.deps.log(
                     f"queue_turn_reconcile_retry target={thread_id} turn={turn_id} "
@@ -190,14 +322,31 @@ class DurableQueueRuntime:
 
     async def complete_job(self, job: QueueJob) -> None:
         job_id = str(job.get("job_id") or "")
+        generation = queue_job_int(job.get("app_server_generation"))
+        await queue_generation.require_queue_generation(
+            self.deps,
+            generation,
+            "complete_job",
+        )
         _ = await asyncio.to_thread(store.complete_queue_job, self.deps.get_db_path(), job_id)
+        self.deps.notify_app_server_work_changed()
 
     async def flush_jobs(self, job: QueueJob, target_thread_id: str | None) -> list[QueueJobSummary]:
+        generation = queue_job_int(job.get("app_server_generation"))
+        await queue_generation.require_queue_generation(self.deps, generation, "flush_jobs")
         thread_id = str(target_thread_id or job.get("target_thread_id") or "")
-        records = await asyncio.to_thread(store.flush_queue_jobs, self.deps.get_db_path(), thread_id)
+        records = await asyncio.to_thread(
+            store.flush_queue_jobs,
+            self.deps.get_db_path(),
+            thread_id,
+            app_server_generation=generation,
+        )
+        self.deps.notify_app_server_work_changed()
         return [QueueJobSummary(record.job_id, record.prompt) for record in records]
 
     async def report_retry(self, job: QueueJob, reason: str) -> None:
+        generation = queue_job_int(job.get("app_server_generation"))
+        await queue_generation.require_queue_generation(self.deps, generation, "report_retry")
         channel = job.get("channel")
         if channel is not None and hasattr(channel, "send"):
             _ = await self.deps.send_chunks(
@@ -242,24 +391,49 @@ class DurableQueueRuntime:
         channel_id: int | None,
         owner_user_id: int | None,
     ) -> StoredQueueJob | None:
-        return await asyncio.to_thread(
+        record = await asyncio.to_thread(
             store.retract_queue_job,
             self.deps.get_db_path(),
             target_thread_id,
             channel_id=channel_id,
             owner_user_id=owner_user_id,
         )
+        if record is not None:
+            self.deps.notify_app_server_work_changed()
+        return record
 
-    async def _reconcile_restored_attempt(self, job: QueueJob, thread_id: str) -> QueueAttempt | None:
+    async def _reconcile_restored_attempt(
+        self,
+        job: QueueJob,
+        thread_id: str,
+        generation: int,
+    ) -> QueueAttempt | None:
         state = str(job.get("state") or QueueJobState.PENDING.value)
         attempt_count = queue_job_int(job.get("attempt_count"))
         turn_id = str(job.get("turn_id") or "").strip()
         if state == QueueJobState.RUNNING.value and turn_id:
-            return QueueAttempt(attempt_count, thread_id, turn_id)
+            return QueueAttempt(attempt_count, thread_id, turn_id, generation)
         if state != QueueJobState.STARTING.value:
             return None
         baseline = queue_job_baseline(job)
-        states = await asyncio.to_thread(self.deps.get_turn_states, thread_id)
+        await queue_generation.require_queue_generation(
+            self.deps,
+            generation,
+            "reconcile_restored_attempt",
+        )
+        try:
+            states = await asyncio.to_thread(
+                self.deps.get_turn_states,
+                thread_id,
+                generation,
+            )
+        except AppServerGenerationMismatch as exc:
+            await queue_generation.translate_transport_generation_expiry(
+                self.deps,
+                exc,
+                generation,
+                "reconcile_restored_attempt",
+            )
         candidates = [candidate for candidate in states if candidate not in baseline]
         if len(candidates) > 1:
             raise QueueTurnOwnershipAmbiguousError(
@@ -273,6 +447,7 @@ class DurableQueueRuntime:
             self.deps.get_db_path(),
             str(job.get("job_id") or ""),
             turn_id,
+            app_server_generation=generation,
         )
         copy_stored_queue_state(job, record)
-        return QueueAttempt(record.attempt_count, thread_id, turn_id)
+        return QueueAttempt(record.attempt_count, thread_id, turn_id, generation)

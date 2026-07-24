@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 
 import codex_app_server_transport as app_server_transport
 import codex_desktop_bridge as bridge
+import codex_discord_app_server_admission as discord_app_server_admission
 from codex_app_server_transport_delivery import AppServerDeliveryClient, BridgeModule
 from codex_app_server_transport_replies import CodexAppServerTransportError, JsonObject
 
@@ -30,6 +31,7 @@ class AppServerTransportModule(Protocol):
         *,
         bridge_module: BridgeModule,
         confirm_timeout_sec: float,
+        expected_generation: int | None = None,
     ) -> app_server_transport.AppServerDeliveryResult: ...
 
     def steer_or_start_no_wait(
@@ -40,6 +42,7 @@ class AppServerTransportModule(Protocol):
         *,
         bridge_module: BridgeModule,
         confirm_timeout_sec: float,
+        expected_generation: int | None = None,
     ) -> app_server_transport.AppServerDeliveryResult: ...
 
 
@@ -80,6 +83,7 @@ def run_prompt_no_wait(
         target_thread_id,
         bridge_module=bridge_module,
         confirm_timeout_sec=confirm_timeout_sec,
+        expected_generation=discord_app_server_admission.current_expected_app_server_generation(),
     )
     return result.exit_code, result.output
 
@@ -99,6 +103,7 @@ def run_steering_no_wait(
         target_thread_id,
         bridge_module=bridge_module,
         confirm_timeout_sec=confirm_timeout_sec,
+        expected_generation=discord_app_server_admission.current_expected_app_server_generation(),
     )
 
 

@@ -21,10 +21,11 @@ def _thread(thread_id: str) -> ThreadInfo:
 
 
 class FakeClient:
-    def __init__(self, outcomes: list[bool | Exception]) -> None:
+    def __init__(self, outcomes: list[bool | Exception], *, restart_allowed: bool = True) -> None:
         self.outcomes = outcomes
         self.reads: list[str] = []
         self.restart_count = 0
+        self.restart_allowed = restart_allowed
 
     def read_thread(self, thread_id: str, *, include_turns: bool = False) -> JsonObject:
         self.reads.append(thread_id)
@@ -34,8 +35,9 @@ class FakeClient:
             raise outcome
         return {"ok": outcome}
 
-    def restart(self) -> None:
+    def try_restart_if_quiescent(self) -> bool:
         self.restart_count += 1
+        return self.restart_allowed
 
 
 class AppServerThreadFilterTests(unittest.TestCase):
@@ -98,6 +100,27 @@ class AppServerThreadFilterTests(unittest.TestCase):
             )
 
         self.assertEqual(client.restart_count, 0)
+
+    def test_does_not_restart_or_retry_when_shared_transport_is_busy(self) -> None:
+        client = FakeClient(
+            [CodexAppServerTransportError("thread/read failed: Thread not found: thread-1")],
+            restart_allowed=False,
+        )
+        logs: list[str] = []
+
+        filtered = thread_filter.filter_app_server_available_threads_with_deps(
+            [_thread("thread-1")],
+            deps=thread_filter.AppServerThreadFilterDeps(
+                app_server_transport_enabled=lambda: True,
+                get_client=lambda: client,
+                log=logs.append,
+            ),
+        )
+
+        self.assertEqual(filtered, [])
+        self.assertEqual(client.restart_count, 1)
+        self.assertEqual(client.reads, ["thread-1"])
+        self.assertIn("mirror_sync_app_server_refresh_deferred target=thread-1", logs)
 
 
 if __name__ == "__main__":

@@ -33,10 +33,15 @@ class ProcessorFixture:
         _ = job, target_thread_id
         self.attempts.append((prompt, recovery))
         attempt_number = len(self.attempts)
-        return QueueAttempt(attempt_number, "thread-1", f"turn-{attempt_number}")
+        return QueueAttempt(attempt_number, "thread-1", f"turn-{attempt_number}", 3)
 
-    async def wait_for_completion(self, thread_id: str, turn_id: str) -> TurnCompletion:
-        _ = thread_id, turn_id
+    async def wait_for_completion(
+        self,
+        thread_id: str,
+        turn_id: str,
+        app_server_generation: int,
+    ) -> TurnCompletion:
+        _ = thread_id, turn_id, app_server_generation
         return self.outcomes.pop(0)
 
     async def complete_job(self, job: QueueJob) -> None:

@@ -16,6 +16,28 @@ class ActiveTurnReadTimeout(TimeoutError):
 
 
 class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
+    def test_has_active_turn_uses_thread_status_without_turn_history(self) -> None:
+        client = transport.PersistentCodexAppServer(executable_resolver=lambda: "unused")
+        with mock.patch.object(
+            client,
+            "read_thread",
+            return_value={"thread": {"id": "thread-1", "status": {"type": "active"}}},
+        ) as read_thread:
+            self.assertTrue(client.has_active_turn_or_raise("thread-1"))
+
+        read_thread.assert_called_once_with("thread-1", include_turns=False)
+
+    def test_has_active_turn_returns_false_for_ephemeral_idle_thread(self) -> None:
+        client = transport.PersistentCodexAppServer(executable_resolver=lambda: "unused")
+        with mock.patch.object(
+            client,
+            "read_thread",
+            return_value={"thread": {"id": "thread-1", "ephemeral": True, "status": {"type": "idle"}}},
+        ) as read_thread:
+            self.assertFalse(client.has_active_turn_or_raise("thread-1"))
+
+        read_thread.assert_called_once_with("thread-1", include_turns=False)
+
     def test_get_active_turn_id_logs_transport_failure_and_returns_none(self) -> None:
         logs: list[str] = []
         client = transport.PersistentCodexAppServer(log_func=logs.append)

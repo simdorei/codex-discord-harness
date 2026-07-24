@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import threading
+import time
 import unittest
 from collections.abc import Callable
-from typing import IO, Final, cast, override
+from typing import IO, Final, cast, final, override
 from unittest import mock
 
 import codex_app_server_transport_process as process_mod
@@ -17,6 +19,7 @@ from codex_app_server_transport_replies import (
     JsonObject,
 )
 from codex_app_server_transport_resident import ResidentCodexAppServerTransport
+from codex_app_server_transport_turn_outcomes import TurnCompletionPending
 
 
 class ResidentAppServerProcessHelperTests(unittest.TestCase):
@@ -28,10 +31,17 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
             popen_calls.append((args, kwargs))
             return process
 
-        with mock.patch.object(subprocess, "Popen", popen):
+        with (
+            mock.patch.object(subprocess, "Popen", popen),
+            mock.patch.object(
+                process_mod,
+                "create_kill_on_close_job_for_suspended_process",
+                return_value=None,
+            ),
+        ):
             started = process_mod.start_resident_app_server_process("codex.exe")
 
-        self.assertIs(started, process)
+        self.assertEqual(started.pid, process.pid)
         self.assertEqual(len(popen_calls), 1)
         args, kwargs = popen_calls[0]
         self.assertEqual(args, ["codex.exe", "app-server"])
@@ -42,7 +52,11 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
         self.assertEqual(kwargs["encoding"], "utf-8")
         self.assertEqual(kwargs["errors"], "replace")
         self.assertEqual(kwargs["bufsize"], 1)
-        self.assertEqual(kwargs["creationflags"], getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.assertEqual(
+            kwargs["creationflags"],
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_SUSPENDED", 0),
+        )
 
     def test_process_helper_wraps_oserror_with_executable_detail(self) -> None:
         def popen(*_args: object, **_kwargs: object) -> subprocess.Popen[str]:
@@ -60,14 +74,14 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
         self.assertFalse(process_mod.has_resident_app_server_stdio(_process(stdin=None)))
         self.assertFalse(process_mod.has_resident_app_server_stdio(_process(stdout=None)))
 
-    def test_close_helper_closes_stdin_and_terminates_running_process(self) -> None:
+    def test_close_helper_closes_stdin_and_allows_graceful_exit(self) -> None:
         process = _FakeProcess()
         logs: list[str] = []
 
         process_mod.close_resident_app_server_process(_as_popen(process), logs.append)
 
         self.assertTrue(cast(io.StringIO, process.stdin).closed)
-        self.assertTrue(process.terminated)
+        self.assertFalse(process.terminated)
         self.assertEqual(process.wait_timeout, 1.5)
         self.assertFalse(process.killed)
         self.assertEqual(logs, [])
@@ -82,10 +96,10 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
         self.assertIsNone(process.wait_timeout)
         self.assertFalse(process.killed)
 
-    def test_close_helper_logs_close_terminate_and_kill_failures(self) -> None:
+    def test_close_helper_logs_unowned_terminate_and_kill_failures(self) -> None:
         process = _FakeProcess(
             stdin=_FailingCloseStdin(),
-            terminate_error=RuntimeError("terminate boom"),
+            wait_error=RuntimeError("wait boom"),
             kill_error=RuntimeError("kill boom"),
         )
         logs: list[str] = []
@@ -96,13 +110,28 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
             logs,
             [
                 "app_server_transport_stdin_close_failed error_type=OSError error=close boom",
-                "app_server_transport_terminate_failed error_type=RuntimeError error=terminate boom",
+                "app_server_transport_graceful_wait_failed error_type=RuntimeError error=wait boom",
+                "app_server_transport_graceful_close_timed_out pid=4242",
+                "app_server_transport_terminate_failed error_type=RuntimeError error=wait boom",
                 "app_server_transport_kill_failed error_type=RuntimeError error=kill boom",
             ],
         )
 
 
 class ResidentTransportStartTests(unittest.TestCase):
+    def test_lifecycle_snapshot_is_passive_before_start(self) -> None:
+        resolver_calls: list[bool] = []
+        transport = ResidentCodexAppServerTransport(
+            executable_resolver=lambda: resolver_calls.append(True) or "codex.exe"
+        )
+
+        snapshot = transport.lifecycle_snapshot()
+
+        self.assertEqual(snapshot.generation, 0)
+        self.assertFalse(snapshot.healthy)
+        self.assertIsNone(snapshot.accepting_since)
+        self.assertEqual(resolver_calls, [])
+
     def test_start_preserves_state_reset_handshake_thread_and_log(self) -> None:
         logs: list[str] = []
         process = _process()
@@ -140,6 +169,44 @@ class ResidentTransportStartTests(unittest.TestCase):
         self.assertTrue(transport.stdout_thread_started)
         self.assertIn("app_server_transport_started executable=codex.exe", logs)
 
+    def test_successful_initialize_publishes_healthy_generation_snapshot(self) -> None:
+        process = _process()
+        transport = _StartProbeTransport(executable="codex.exe", wall_time_func=lambda: 1_234.5)
+
+        with (
+            mock.patch.object(resident_mod, "start_resident_app_server_process", return_value=process),
+            mock.patch.object(threading, "Thread", _FakeThread),
+        ):
+            transport.start()
+
+        snapshot = transport.lifecycle_snapshot()
+        self.assertEqual(snapshot.generation, 1)
+        self.assertTrue(snapshot.healthy)
+        self.assertEqual(snapshot.accepting_since, 1_234.5)
+
+        transport.close()
+        closed_snapshot = transport.lifecycle_snapshot()
+        self.assertEqual(closed_snapshot.generation, 1)
+        self.assertFalse(closed_snapshot.healthy)
+        self.assertIsNone(closed_snapshot.accepting_since)
+
+    def test_reader_exit_marks_current_generation_unhealthy(self) -> None:
+        process = _process()
+        transport = _StartProbeTransport(executable="codex.exe", wall_time_func=lambda: 1_234.5)
+
+        with (
+            mock.patch.object(resident_mod, "start_resident_app_server_process", return_value=process),
+            mock.patch.object(threading, "Thread", _FakeThread),
+        ):
+            transport.start()
+
+        transport.drain_process(process)
+
+        snapshot = transport.lifecycle_snapshot()
+        self.assertEqual(snapshot.generation, 1)
+        self.assertFalse(snapshot.healthy)
+        self.assertIsNone(snapshot.accepting_since)
+
     def test_start_closes_process_when_stdio_is_unavailable(self) -> None:
         process = _FakeProcess(stdin=None, stdout=io.StringIO())
         transport = _StartProbeTransport(executable="codex.exe")
@@ -156,7 +223,7 @@ class ResidentTransportStartTests(unittest.TestCase):
                 transport.start()
 
         self.assertIsNone(transport.process)
-        self.assertTrue(process.terminated)
+        self.assertFalse(process.terminated)
         self.assertEqual(process.wait_timeout, 1.5)
 
     def test_close_locked_resets_owner_state_and_delegates_process_close(self) -> None:
@@ -164,6 +231,7 @@ class ResidentTransportStartTests(unittest.TestCase):
         calls: list[subprocess.Popen[str]] = []
         transport = _StartProbeTransport(executable="codex.exe")
         transport.install_process(process, initialized=True)
+        transport.mark_thread_subscribed("thread-1")
 
         def close_process(process_to_close: subprocess.Popen[str], _log: Callable[[str], None]) -> None:
             calls.append(process_to_close)
@@ -174,6 +242,55 @@ class ResidentTransportStartTests(unittest.TestCase):
         self.assertEqual(calls, [process])
         self.assertIsNone(transport.process)
         self.assertFalse(transport.initialized)
+        self.assertFalse(transport.is_thread_subscribed("thread-1"))
+
+    def test_close_failure_preserves_process_subscription_and_child_cleanup_debt(self) -> None:
+        process = _process()
+        transport = _StartProbeTransport(executable="codex.exe")
+        transport.install_process(process, initialized=True)
+        transport._generation = 17
+        transport._children.reset(17)
+        transport.mark_thread_subscribed("thread-1")
+        transport._handle_raw_line(
+            json.dumps(
+                {
+                    "method": "thread/started",
+                    "params": {
+                        "thread": {
+                            "id": "child-1",
+                            "parentThreadId": "thread-1",
+                        }
+                    },
+                }
+            )
+        )
+
+        with mock.patch.object(
+            resident_mod,
+            "close_resident_app_server_process",
+            side_effect=OSError("job close failed"),
+        ):
+            with self.assertRaisesRegex(OSError, "job close failed"):
+                transport.close_locked()
+
+        self.assertIs(transport.process, process)
+        self.assertTrue(transport.is_thread_subscribed("thread-1"))
+        self.assertTrue(transport.child_lifecycle_snapshot().cleanup_pending)
+
+    def test_first_generation_uses_the_process_unique_seed(self) -> None:
+        process = _process()
+        transport = _StartProbeTransport(
+            executable="codex.exe",
+            generation_seed_func=lambda: 9000,
+        )
+
+        with (
+            mock.patch.object(resident_mod, "start_resident_app_server_process", return_value=process),
+            mock.patch.object(threading, "Thread", _FakeThread),
+        ):
+            transport.start()
+
+        self.assertEqual(transport.lifecycle_snapshot().generation, 9000)
 
 
 class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
@@ -187,6 +304,73 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             transport.release_request_slot()
 
         self.assertEqual(transport.written_messages, [])
+
+    def test_expected_generation_does_not_auto_start_an_unhealthy_server(self) -> None:
+        resolver_calls: list[bool] = []
+        transport = ResidentCodexAppServerTransport(
+            executable_resolver=lambda: resolver_calls.append(True) or "codex.exe"
+        )
+
+        with self.assertRaisesRegex(transport_mod.AppServerGenerationExpiredError, "expected generation 1"):
+            _ = transport.request("thread/read", {}, expected_generation=1)
+
+        self.assertEqual(resolver_calls, [])
+
+    def test_expected_generation_is_checked_before_request_write(self) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=2)
+
+        with self.assertRaisesRegex(transport_mod.AppServerGenerationExpiredError, "found generation 2"):
+            _ = transport.request("turn/start", {}, expected_generation=1)
+
+        self.assertEqual(transport.written_messages, [])
+
+    def test_expected_generation_is_rechecked_after_waiting_for_request_slot(self) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        errors: list[Exception] = []
+        transport.hold_request_slot()
+
+        def request_after_slot() -> None:
+            try:
+                _ = transport.request("turn/start", {}, expected_generation=1)
+            except Exception as exc:  # noqa: BLE001 - assertion captures the lifecycle error.
+                errors.append(exc)
+
+        request_thread = threading.Thread(target=request_after_slot)
+        request_thread.start()
+        transport.set_generation(2)
+        transport.release_request_slot()
+        request_thread.join(timeout=2.0)
+
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], transport_mod.AppServerGenerationExpiredError)
+        self.assertEqual(transport.written_messages, [])
+
+    def test_turn_completion_wait_rejects_expired_generation(self) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=2)
+
+        with self.assertRaisesRegex(transport_mod.AppServerGenerationExpiredError, "found generation 2"):
+            _ = transport.wait_for_turn_completion(
+                "thread-1",
+                "turn-1",
+                timeout_sec=0.0,
+                expected_generation=1,
+            )
+
+    def test_turn_completion_wait_accepts_current_healthy_generation(self) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=2)
+
+        observation = transport.wait_for_turn_completion(
+            "thread-1",
+            "turn-1",
+            timeout_sec=0.0,
+            expected_generation=2,
+        )
+
+        self.assertIsInstance(observation, TurnCompletionPending)
 
     def test_response_for_active_request_is_recorded(self) -> None:
         transport = _RequestBoundaryProbe()
@@ -207,6 +391,33 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
 
         self.assertEqual(transport.responses_snapshot(), {})
         self.assertEqual(logs, ["app_server_transport_late_response_discarded id=late-request"])
+
+    def test_old_process_reader_cannot_mutate_the_current_generation(self) -> None:
+        logs: list[str] = []
+        transport = _RequestBoundaryProbe(log_func=logs.append)
+        old_process = _process()
+        current_process = _process()
+        transport.install_lifecycle(current_process, generation=22)
+
+        transport._handle_raw_line(
+            json.dumps(
+                {
+                    "method": "thread/started",
+                    "params": {
+                        "thread": {
+                            "id": "old-child",
+                            "parentThreadId": "old-root",
+                        }
+                    },
+                }
+            ),
+            source_process=old_process,
+        )
+
+        self.assertEqual(transport.child_lifecycle_snapshot().child_thread_ids, ())
+        self.assertTrue(
+            any("app_server_transport_stale_reader_line_discarded" in line for line in logs)
+        )
 
 
 class ResidentThreadResumeRetryTests(unittest.TestCase):
@@ -245,11 +456,45 @@ class ResidentThreadResumeRetryTests(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertIn("app_server_thread_resume_retry", logs[0])
         self.assertIn("thread=thread-1", logs[0])
+        self.assertTrue(transport.is_thread_subscribed("thread-1"))
+
+    def test_transport_methods_forward_expected_generation_to_requests(self) -> None:
+        transport = transport_mod.PersistentCodexAppServer(executable_resolver=lambda: "codex.exe")
+
+        with mock.patch.object(
+            transport,
+            "request",
+            return_value={"thread": {"id": "thread-1", "turns": []}, "turn": {"id": "turn-1"}},
+        ) as request:
+            _ = transport.read_thread("thread-1", expected_generation=7)
+            _ = transport.resume_thread("thread-1", expected_generation=7)
+            _ = transport.start_turn("thread-1", "hello", expected_generation=7)
+            _ = transport.steer_turn(
+                "thread-1",
+                "hello",
+                expected_turn_id="turn-1",
+                expected_generation=7,
+            )
+            _ = transport.get_thread_turn_states("thread-1", expected_generation=7)
+
+        self.assertEqual([call.kwargs["expected_generation"] for call in request.call_args_list], [7, 7, 7, 7, 7])
 
 
 class _StartProbeTransport(ResidentCodexAppServerTransport):
-    def __init__(self, *, executable: str, log_func: Callable[[str], None] | None = None) -> None:
-        super().__init__(executable_resolver=lambda: executable, log_func=log_func)
+    def __init__(
+        self,
+        *,
+        executable: str,
+        log_func: Callable[[str], None] | None = None,
+        wall_time_func: Callable[[], float] = time.time,
+        generation_seed_func: Callable[[], int] = lambda: 1,
+    ) -> None:
+        super().__init__(
+            executable_resolver=lambda: executable,
+            log_func=log_func,
+            wall_time_func=wall_time_func,
+            generation_seed_func=generation_seed_func,
+        )
         self.requests: list[tuple[str, JsonMapping, float]] = []
         self.notifications: list[tuple[str, JsonMapping]] = []
 
@@ -264,8 +509,16 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
     def responses_snapshot(self) -> dict[str, JsonObject]:
         return dict(self._responses)
 
-    def install_process(self, process: subprocess.Popen[str], *, initialized: bool) -> None:
-        self.process: subprocess.Popen[str] | None = process
+    def drain_process(self, process: process_mod.ResidentProcess) -> None:
+        self._drain_stdout(process)
+
+    def install_process(
+        self,
+        process: process_mod.ResidentProcess,
+        *,
+        initialized: bool,
+    ) -> None:
+        self.process = process
         self._initialized: bool = initialized
 
     @property
@@ -277,7 +530,16 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
         return isinstance(self._stdout_thread, _FakeThread) and self._stdout_thread.started
 
     @override
-    def _request_started(self, method: str, params: JsonMapping, *, timeout_sec: float) -> JsonObject:
+    def _request_started(
+        self,
+        method: str,
+        params: JsonMapping,
+        *,
+        timeout_sec: float,
+        expected_generation: int | None = None,
+        _request_slot_acquired: bool = False,
+    ) -> JsonObject:
+        _ = (expected_generation, _request_slot_acquired)
         self.requests.append((method, dict(params), timeout_sec))
         return {}
 
@@ -286,6 +548,7 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
         self.notifications.append((method, dict(params or {})))
 
 
+@final
 class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
     def __init__(self, *, log_func: Callable[[str], None] | None = None) -> None:
         super().__init__(executable_resolver=lambda: "codex.exe", log_func=log_func)
@@ -299,6 +562,16 @@ class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
 
     def request_started(self, method: str, *, timeout_sec: float) -> JsonObject:
         return self._request_started(method, {}, timeout_sec=timeout_sec)
+
+    def install_lifecycle(self, process: subprocess.Popen[str], *, generation: int) -> None:
+        self.process = process
+        self._initialized = True
+        self._generation = generation
+        self._accepting_since = 100.0
+
+    def set_generation(self, generation: int) -> None:
+        with self._lock:
+            self._generation = generation
 
     def seed_active_request(self, request_id: str) -> None:
         self._active_request_id = request_id
@@ -337,13 +610,16 @@ class _FakeProcess:
         terminate_error: Exception | None = None,
         wait_error: Exception | None = None,
         kill_error: Exception | None = None,
+        pid: int = 4242,
     ) -> None:
         self.stdin: IO[str] | None = io.StringIO() if stdin is _DEFAULT_PIPE else cast(IO[str] | None, stdin)
         self.stdout: IO[str] | None = io.StringIO() if stdout is _DEFAULT_PIPE else cast(IO[str] | None, stdout)
+        self.stderr: IO[str] | None = io.StringIO()
         self.poll_result: int | None = poll_result
         self.terminate_error: Exception | None = terminate_error
         self.wait_error: Exception | None = wait_error
         self.kill_error: Exception | None = kill_error
+        self.pid: int = pid
         self.terminated: bool = False
         self.killed: bool = False
         self.wait_timeout: float | None = None

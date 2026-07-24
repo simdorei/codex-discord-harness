@@ -17,6 +17,10 @@ class FakeAuthor:
     bot: bool = False
 
 
+class AppServerUnavailableError(RuntimeError):
+    pass
+
+
 class FakeMessage:
     def __init__(
         self,
@@ -79,10 +83,9 @@ ON_MESSAGE = cast(OnMessageFunc, bot.CodexDiscordBot.on_message)
 
 
 class FakePollClient:
-    def __init__(self, channel: FakeHistoryChannel, *, bootstrap_after: dt.datetime | None = None) -> None:
+    def __init__(self, channel: FakeHistoryChannel) -> None:
         self._processed_message_ids: dict[int, set[int]] = {}
         self._history_poll_primed_channels: set[int] = set()
-        self._history_poll_bootstrap_after: dt.datetime | None = bootstrap_after
         self.enable_prefix_commands: bool = True
         self.channel: FakeHistoryChannel = channel
 
@@ -129,8 +132,16 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_history_poll_primes_then_processes_new_user_message_once(self) -> None:
         handled: list[tuple[str, str | None]] = []
         channel = FakeHistoryChannel()
-        old_message = FakeMessage("old", message_id=100)
-        new_message = FakeMessage("please hook", message_id=101)
+        old_message = FakeMessage(
+            "old",
+            message_id=100,
+            created_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=1),
+        )
+        new_message = FakeMessage(
+            "please hook",
+            message_id=101,
+            created_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1),
+        )
         old_message.channel = channel
         new_message.channel = channel
         client = FakePollClient(channel)
@@ -181,7 +192,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source=history_poll", log_text)
         self.assertIn("duplicate_message_skipped source=gateway chat=333 message=101", log_text)
 
-    async def test_history_poll_first_prime_processes_bootstrap_user_messages(self) -> None:
+    async def test_history_poll_first_prime_discards_offline_backlog(self) -> None:
         handled: list[tuple[str, str | None]] = []
         channel = FakeHistoryChannel()
         cutoff = dt.datetime(2026, 6, 3, 15, 0, tzinfo=dt.timezone.utc)
@@ -190,7 +201,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         old_message.channel = channel
         fresh_message.channel = channel
         channel.history_messages = [fresh_message, old_message]
-        client = FakePollClient(channel, bootstrap_after=cutoff)
+        client = FakePollClient(channel)
 
         async def runner_idle(target_thread_id: str | None) -> bool:
             _ = target_thread_id
@@ -225,12 +236,173 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ):
             log_text = await self._run_with_log(run_poll)
 
-        self.assertEqual(handled, [("bootstrap hook", "thread-1")])
+        self.assertEqual(handled, [])
         self.assertIn("history_poll_primed label=allowed channel=333", log_text)
-        self.assertIn("bootstrap_user_messages=1", log_text)
-        self.assertIn("history_poll_message channel=333", log_text)
-        self.assertIn("source=history_poll", log_text)
+        self.assertIn("fetched_messages=2", log_text)
+        self.assertIn("claimed_messages=2", log_text)
+        self.assertIn("eligible_messages=0", log_text)
+        self.assertIn("discarded_messages=2", log_text)
+        self.assertNotIn("history_poll_message channel=333", log_text)
         self.assertNotIn("old", log_text)
+
+    async def test_history_poll_watermark_blocks_old_message_after_processed_ids_are_lost(self) -> None:
+        handled: list[str] = []
+        channel = FakeHistoryChannel()
+        old_message = FakeMessage(
+            "old backlog",
+            message_id=100,
+            created_at=dt.datetime(2026, 6, 3, 15, 0, tzinfo=dt.timezone.utc),
+        )
+        old_message.channel = channel
+        channel.history_messages = [old_message]
+        client = FakePollClient(channel)
+
+        async def fake_handle_plain_ask(
+            message: FakeMessage,
+            prompt: str,
+            *,
+            target_thread_id: str | None = None,
+        ) -> None:
+            _ = (message, target_thread_id)
+            handled.append(prompt)
+
+        async def run_poll(log_path: Path) -> None:
+            _ = log_path
+            bot_client = cast(bot.CodexDiscordBot, client)
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            client._processed_message_ids.clear()
+            bot.discord_store.cleanup_processed_discord_messages(
+                bot.MIRROR_DB_PATH,
+                retention_seconds=0,
+                now=dt.datetime.now(dt.timezone.utc).timestamp() + 1,
+            )
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+
+        with (
+            mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
+            mock.patch.object(bot, "get_busy_state_for_thread", return_value=("idle", None, "")),
+            mock.patch.object(bot, "is_thread_runner_busy", mock.AsyncMock(return_value=False)),
+            mock.patch.object(bot, "handle_plain_ask", fake_handle_plain_ask),
+        ):
+            log_text = await self._run_with_log(run_poll)
+
+        self.assertEqual(handled, [])
+        self.assertEqual(log_text.count("history_poll_primed label=allowed channel=333"), 1)
+        self.assertNotIn("history_poll_message channel=333", log_text)
+
+    async def test_history_poll_accepts_message_created_after_empty_prime(self) -> None:
+        handled: list[str] = []
+        channel = FakeHistoryChannel()
+        client = FakePollClient(channel)
+
+        async def fake_handle_plain_ask(
+            message: FakeMessage,
+            prompt: str,
+            *,
+            target_thread_id: str | None = None,
+        ) -> None:
+            _ = (message, target_thread_id)
+            handled.append(prompt)
+
+        async def run_poll(log_path: Path) -> None:
+            _ = log_path
+            bot_client = cast(bot.CodexDiscordBot, client)
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            new_message = FakeMessage(
+                "new after start",
+                message_id=101,
+                created_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1),
+            )
+            new_message.channel = channel
+            channel.history_messages = [new_message]
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+
+        with (
+            mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
+            mock.patch.object(bot, "get_busy_state_for_thread", return_value=("idle", None, "")),
+            mock.patch.object(bot, "is_thread_runner_busy", mock.AsyncMock(return_value=False)),
+            mock.patch.object(bot, "handle_plain_ask", fake_handle_plain_ask),
+        ):
+            await self._run_with_log(run_poll)
+
+        self.assertEqual(handled, ["new after start"])
+
+    async def test_history_poll_empty_prime_still_blocks_old_message_seen_later(self) -> None:
+        handled: list[str] = []
+        channel = FakeHistoryChannel()
+        client = FakePollClient(channel)
+
+        async def fake_handle_plain_ask(
+            message: FakeMessage,
+            prompt: str,
+            *,
+            target_thread_id: str | None = None,
+        ) -> None:
+            _ = (message, target_thread_id)
+            handled.append(prompt)
+
+        async def run_poll(log_path: Path) -> None:
+            _ = log_path
+            bot_client = cast(bot.CodexDiscordBot, client)
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            delayed_old_message = FakeMessage(
+                "delayed old backlog",
+                message_id=101,
+                created_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1),
+            )
+            delayed_old_message.channel = channel
+            channel.history_messages = [delayed_old_message]
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+
+        with (
+            mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
+            mock.patch.object(bot, "get_busy_state_for_thread", return_value=("idle", None, "")),
+            mock.patch.object(bot, "is_thread_runner_busy", mock.AsyncMock(return_value=False)),
+            mock.patch.object(bot, "handle_plain_ask", fake_handle_plain_ask),
+        ):
+            log_text = await self._run_with_log(run_poll)
+
+        self.assertEqual(handled, [])
+        self.assertNotIn("history_poll_message channel=333", log_text)
+
+    async def test_history_poll_app_server_failure_is_not_replayed(self) -> None:
+        attempts: list[str] = []
+        channel = FakeHistoryChannel()
+        client = FakePollClient(channel)
+
+        async def fail_handle_plain_ask(
+            message: FakeMessage,
+            prompt: str,
+            *,
+            target_thread_id: str | None = None,
+        ) -> None:
+            _ = (message, target_thread_id)
+            attempts.append(prompt)
+            raise AppServerUnavailableError("app server unavailable")
+
+        async def run_poll(log_path: Path) -> None:
+            _ = log_path
+            bot_client = cast(bot.CodexDiscordBot, client)
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            offline_message = FakeMessage(
+                "while app server offline",
+                message_id=101,
+                created_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=1),
+            )
+            offline_message.channel = channel
+            channel.history_messages = [offline_message]
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+
+        with (
+            mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
+            mock.patch.object(bot, "get_busy_state_for_thread", return_value=("idle", None, "")),
+            mock.patch.object(bot, "is_thread_runner_busy", mock.AsyncMock(return_value=False)),
+            mock.patch.object(bot, "handle_plain_ask", fail_handle_plain_ask),
+        ):
+            await self._run_with_log(run_poll)
+
+        self.assertEqual(attempts, ["while app server offline"])
 
 
 if __name__ == "__main__":

@@ -66,6 +66,9 @@ class DiscordProjectHelperTests(unittest.TestCase):
             data={"project-order": [r"C:\Repo"]},
         )
         projectless = FakeThread(r"C:\Users\me\Documents\Codex\2026-06-20\new-chat")
+        chatgpt_projectless = FakeThread(
+            r"C:\Users\me\Documents\Codex\2026-07-22\chatgpt-conversation-6a50"
+        )
         unsaved = FakeThread(r"C:\Other")
 
         self.assertEqual(
@@ -78,12 +81,48 @@ class DiscordProjectHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             projects.filter_mirrorable_threads(
-                [FakeThread(r"C:\Repo"), projectless, unsaved],
+                [FakeThread(r"C:\Repo"), projectless, chatgpt_projectless, unsaved],
                 bridge_module=bridge,
                 projectless_chat_key="projectless-chat",
             ),
-            [FakeThread(r"C:\Repo"), projectless],
+            [FakeThread(r"C:\Repo"), projectless, chatgpt_projectless],
         )
+
+    def test_chatgpt_conversation_cwd_uses_shared_projectless_chat(self) -> None:
+        bridge: project_types.BridgeProjectModule = FakeBridge()
+        thread = FakeThread(
+            r"\\?\C:\Users\me\Documents\Codex\2026-07-22\chatgpt-conversation-b3f8"
+        )
+
+        self.assertTrue(
+            projects.is_codex_projectless_chat_cwd(
+                str(thread.cwd),
+                bridge_module=bridge,
+            )
+        )
+        self.assertEqual(
+            projects.get_project_key(
+                thread,
+                bridge_module=bridge,
+                projectless_chat_key="projectless-chat",
+            ),
+            "projectless-chat",
+        )
+        self.assertEqual(projects.get_project_name(thread, bridge_module=bridge), "채팅")
+
+    def test_chatgpt_conversation_cwd_requires_codex_date_directory(self) -> None:
+        bridge: project_types.BridgeProjectModule = FakeBridge()
+        invalid_paths = (
+            r"C:\Repo\chatgpt-conversation-b3f8",
+            r"C:\Users\me\Documents\Codex\not-a-date\chatgpt-conversation-b3f8",
+            r"C:\Users\me\Documents\Other\2026-07-22\chatgpt-conversation-b3f8",
+        )
+
+        for cwd in invalid_paths:
+            with self.subTest(cwd=cwd):
+                self.assertFalse(
+                    projects.is_codex_projectless_chat_cwd(cwd, bridge_module=bridge)
+                )
 
     def test_resolve_new_thread_cwd_prefers_mirrored_thread_then_project_channel(self) -> None:
         bridge: project_types.BridgeProjectModule = FakeBridge(

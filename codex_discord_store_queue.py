@@ -19,6 +19,12 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 DecodeJsonValue: TypeAlias = Callable[[str], JsonValue]
 _decode_json_value: DecodeJsonValue = json.loads
 
+QUEUE_JOB_COLUMNS = (
+    "job_id, target_thread_id, channel_id, owner_user_id, discord_message_id, "
+    "app_server_generation, prompt, queued, ack_sent, state, attempt_count, turn_id, "
+    "baseline_turn_ids, last_error, created_at, updated_at"
+)
+
 
 @unique
 class QueueJobState(StrEnum):
@@ -34,6 +40,7 @@ class StoredQueueJob:
     channel_id: int
     owner_user_id: int | None
     discord_message_id: int | None
+    app_server_generation: int
     prompt: str
     queued: bool
     ack_sent: bool
@@ -52,6 +59,12 @@ class QueueEnqueueResult:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class QueueGenerationAdoption:
+    jobs: tuple[StoredQueueJob, ...]
+    adopted_count: int
+
+
 class QueueJobNotFoundError(LookupError):
     def __init__(self, job_id: str) -> None:
         super().__init__(f"Durable queue job not found: {job_id}")
@@ -65,23 +78,24 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def _record(row: SQLiteRow) -> StoredQueueJob:
-    baseline = _decode_baseline(str(row[11] or "[]"))
+    baseline = _decode_baseline(str(row[12] or "[]"))
     return StoredQueueJob(
         job_id=str(row[0]),
         target_thread_id=str(row[1]),
         channel_id=int(cast(int, row[2])),
         owner_user_id=int(cast(int, row[3])) if row[3] is not None else None,
         discord_message_id=int(cast(int, row[4])) if row[4] is not None else None,
-        prompt=str(row[5]),
-        queued=bool(row[6]),
-        ack_sent=bool(row[7]),
-        state=QueueJobState(str(row[8])),
-        attempt_count=int(cast(int, row[9])),
-        turn_id=str(row[10]) if row[10] is not None else None,
+        app_server_generation=int(cast(int, row[5])),
+        prompt=str(row[6]),
+        queued=bool(row[7]),
+        ack_sent=bool(row[8]),
+        state=QueueJobState(str(row[9])),
+        attempt_count=int(cast(int, row[10])),
+        turn_id=str(row[11]) if row[11] is not None else None,
         baseline_turn_ids=baseline,
-        last_error=str(row[12] or ""),
-        created_at=float(cast(float, row[13])),
-        updated_at=float(cast(float, row[14])),
+        last_error=str(row[13] or ""),
+        created_at=float(cast(float, row[14])),
+        updated_at=float(cast(float, row[15])),
     )
 
 
@@ -93,7 +107,13 @@ def _decode_baseline(raw: str) -> tuple[str, ...]:
 
 
 def _select_job(conn: sqlite3.Connection, job_id: str) -> StoredQueueJob:
-    row = cast(SQLiteRow | None, conn.execute("SELECT * FROM codex_turn_queue WHERE job_id = ?", (job_id,)).fetchone())
+    row = cast(
+        SQLiteRow | None,
+        conn.execute(
+            f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue WHERE job_id = ?",
+            (job_id,),
+        ).fetchone(),
+    )
     if row is None:
         raise QueueJobNotFoundError(job_id)
     return _record(row)
@@ -107,6 +127,7 @@ def enqueue_queue_job(
     channel_id: int,
     owner_user_id: int | None,
     discord_message_id: int | None,
+    app_server_generation: int,
     prompt: str,
     queued: bool,
     ack_sent: bool,
@@ -116,15 +137,17 @@ def enqueue_queue_job(
     with _connect(db_path) as conn:
         result = conn.execute(
             "INSERT OR IGNORE INTO codex_turn_queue "
-            + "(job_id, target_thread_id, channel_id, owner_user_id, discord_message_id, prompt, "
+            + "(job_id, target_thread_id, channel_id, owner_user_id, discord_message_id, "
+            + "app_server_generation, prompt, "
             + "queued, ack_sent, state, attempt_count, baseline_turn_ids, created_at, updated_at) "
-            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, ?)",
+            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', ?, ?)",
             (
                 job_id,
                 target_thread_id,
                 channel_id,
                 owner_user_id,
                 discord_message_id,
+                app_server_generation,
                 prompt,
                 int(queued),
                 int(ack_sent),
@@ -140,7 +163,7 @@ def enqueue_queue_job(
             row = cast(
                 SQLiteRow | None,
                 conn.execute(
-                    "SELECT * FROM codex_turn_queue WHERE discord_message_id = ?",
+                    f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue WHERE discord_message_id = ?",
                     (discord_message_id,),
                 ).fetchone(),
             )
@@ -152,22 +175,123 @@ def enqueue_queue_job(
     return QueueEnqueueResult(job, created)
 
 
-def list_queue_jobs(db_path: Path, target_thread_id: str | None = None) -> list[StoredQueueJob]:
+def list_queue_jobs(
+    db_path: Path,
+    target_thread_id: str | None = None,
+    *,
+    app_server_generation: int | None = None,
+) -> list[StoredQueueJob]:
     with _connect(db_path) as conn:
-        if target_thread_id is None:
-            rows = cast(
-                list[SQLiteRow],
-                conn.execute("SELECT * FROM codex_turn_queue ORDER BY created_at, job_id").fetchall(),
-            )
-        else:
-            rows = cast(
-                list[SQLiteRow],
-                conn.execute(
-                    "SELECT * FROM codex_turn_queue WHERE target_thread_id = ? ORDER BY created_at, job_id",
-                    (target_thread_id,),
-                ).fetchall(),
-            )
+        clauses: list[str] = []
+        params: list[SQLiteCell] = []
+        if target_thread_id is not None:
+            clauses.append("target_thread_id = ?")
+            params.append(target_thread_id)
+        if app_server_generation is not None:
+            clauses.append("app_server_generation = ?")
+            params.append(app_server_generation)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = cast(
+            list[SQLiteRow],
+            conn.execute(
+                f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue{where} "
+                "ORDER BY created_at, job_id",
+                params,
+            ).fetchall(),
+        )
     return [_record(row) for row in rows]
+
+
+def adopt_queue_jobs_generation(
+    db_path: Path,
+    app_server_generation: int,
+) -> QueueGenerationAdoption:
+    """Atomically bind persisted jobs to the current bot-owned app-server."""
+    with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        adopted = conn.execute(
+            "UPDATE codex_turn_queue SET app_server_generation = ? "
+            "WHERE app_server_generation != ?",
+            (app_server_generation, app_server_generation),
+        ).rowcount
+        rows = cast(
+            list[SQLiteRow],
+            conn.execute(
+                f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue "
+                "ORDER BY created_at, job_id"
+            ).fetchall(),
+        )
+    return QueueGenerationAdoption(
+        jobs=tuple(_record(row) for row in rows),
+        adopted_count=max(0, adopted),
+    )
+
+
+def discard_queue_jobs_for_generation(
+    db_path: Path,
+    app_server_generation: int | None,
+) -> list[StoredQueueJob]:
+    """Atomically remove jobs that cannot run in the supplied server generation.
+
+    ``None`` means that the app server is unhealthy, so every queued job is stale.
+    """
+    with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        if app_server_generation is None:
+            where = ""
+            params: tuple[int, ...] = ()
+        else:
+            where = " WHERE app_server_generation != ?"
+            params = (app_server_generation,)
+        rows = cast(
+            list[SQLiteRow],
+            conn.execute(
+                f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue{where} "
+                "ORDER BY created_at, job_id",
+                params,
+            ).fetchall(),
+        )
+        _ = conn.execute(f"DELETE FROM codex_turn_queue{where}", params)
+    return [_record(row) for row in rows]
+
+
+def discard_observed_queue_jobs(
+    db_path: Path,
+    observed_jobs: list[StoredQueueJob] | tuple[StoredQueueJob, ...],
+) -> list[StoredQueueJob]:
+    """Atomically remove rows only while their observed generation still matches."""
+    ids_by_generation: dict[int, dict[str, None]] = {}
+    for job in observed_jobs:
+        ids_by_generation.setdefault(job.app_server_generation, {})[job.job_id] = None
+    if not ids_by_generation:
+        return []
+    rows: list[SQLiteRow] = []
+    with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        for generation, generation_ids in ids_by_generation.items():
+            unique_ids = tuple(generation_ids)
+            for offset in range(0, len(unique_ids), 499):
+                chunk = unique_ids[offset : offset + 499]
+                placeholders = ",".join("?" for _ in chunk)
+                params: tuple[SQLiteCell, ...] = (*chunk, generation)
+                where = (
+                    f"job_id IN ({placeholders}) AND app_server_generation = ?"
+                )
+                rows.extend(
+                    cast(
+                        list[SQLiteRow],
+                        conn.execute(
+                            f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue WHERE {where}",
+                            params,
+                        ).fetchall(),
+                    )
+                )
+                _ = conn.execute(
+                    f"DELETE FROM codex_turn_queue WHERE {where}",
+                    params,
+                )
+    records = [_record(row) for row in rows]
+    return sorted(records, key=lambda record: (record.created_at, record.job_id))
 
 
 def begin_queue_job_attempt(
@@ -175,24 +299,45 @@ def begin_queue_job_attempt(
     job_id: str,
     *,
     baseline_turn_ids: tuple[str, ...],
+    app_server_generation: int,
 ) -> StoredQueueJob:
     with _connect(db_path) as conn:
         now = time.time()
         result = conn.execute(
             "UPDATE codex_turn_queue SET state = ?, attempt_count = attempt_count + 1, "
-            + "turn_id = NULL, baseline_turn_ids = ?, last_error = '', updated_at = ? WHERE job_id = ?",
-            (QueueJobState.STARTING.value, json.dumps(baseline_turn_ids), now, job_id),
+            + "turn_id = NULL, baseline_turn_ids = ?, last_error = '', updated_at = ? "
+            + "WHERE job_id = ? AND app_server_generation = ?",
+            (
+                QueueJobState.STARTING.value,
+                json.dumps(baseline_turn_ids),
+                now,
+                job_id,
+                app_server_generation,
+            ),
         )
         if result.rowcount != 1:
             raise QueueJobNotFoundError(job_id)
         return _select_job(conn, job_id)
 
 
-def mark_queue_job_running(db_path: Path, job_id: str, turn_id: str) -> StoredQueueJob:
+def mark_queue_job_running(
+    db_path: Path,
+    job_id: str,
+    turn_id: str,
+    *,
+    app_server_generation: int,
+) -> StoredQueueJob:
     with _connect(db_path) as conn:
         result = conn.execute(
-            "UPDATE codex_turn_queue SET state = ?, turn_id = ?, updated_at = ? WHERE job_id = ?",
-            (QueueJobState.RUNNING.value, turn_id, time.time(), job_id),
+            "UPDATE codex_turn_queue SET state = ?, turn_id = ?, updated_at = ? "
+            "WHERE job_id = ? AND app_server_generation = ?",
+            (
+                QueueJobState.RUNNING.value,
+                turn_id,
+                time.time(),
+                job_id,
+                app_server_generation,
+            ),
         )
         if result.rowcount != 1:
             raise QueueJobNotFoundError(job_id)
@@ -205,16 +350,27 @@ def complete_queue_job(db_path: Path, job_id: str) -> bool:
         return result.rowcount == 1
 
 
-def flush_queue_jobs(db_path: Path, target_thread_id: str) -> list[StoredQueueJob]:
+def flush_queue_jobs(
+    db_path: Path,
+    target_thread_id: str,
+    *,
+    app_server_generation: int,
+) -> list[StoredQueueJob]:
     with _connect(db_path) as conn:
         rows = cast(
             list[SQLiteRow],
             conn.execute(
-                "SELECT * FROM codex_turn_queue WHERE target_thread_id = ? ORDER BY created_at, job_id",
-                (target_thread_id,),
+                f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue "
+                "WHERE target_thread_id = ? AND app_server_generation = ? "
+                "ORDER BY created_at, job_id",
+                (target_thread_id, app_server_generation),
             ).fetchall(),
         )
-        _ = conn.execute("DELETE FROM codex_turn_queue WHERE target_thread_id = ?", (target_thread_id,))
+        _ = conn.execute(
+            "DELETE FROM codex_turn_queue "
+            "WHERE target_thread_id = ? AND app_server_generation = ?",
+            (target_thread_id, app_server_generation),
+        )
     return [_record(row) for row in rows]
 
 
@@ -238,7 +394,8 @@ def retract_queue_job(
         row = cast(
             SQLiteRow | None,
             conn.execute(
-                f"SELECT * FROM codex_turn_queue WHERE {where} ORDER BY created_at DESC, job_id DESC LIMIT 1",
+                f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue WHERE {where} "
+                "ORDER BY created_at DESC, job_id DESC LIMIT 1",
                 params,
             ).fetchone(),
         )

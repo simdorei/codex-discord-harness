@@ -13,12 +13,13 @@ import codex_discord_session_mirror as discord_session_mirror
 
 
 class RuntimeStateBridgeTests(unittest.TestCase):
-    def test_exit_bot_process_logs_removes_lock_and_exits(self) -> None:
+    def test_exit_bot_process_continues_after_unexpected_close_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "runtime.lock"
             _ = lock_path.write_text(str(os.getpid()), encoding="ascii")
             logs: list[str] = []
             exit_codes: list[int] = []
+
             bridge = runtime_state_bridge.RuntimeStateBridge(
                 session_mirror_state=discord_session_mirror.SessionMirrorState(),
                 runtime_state=discord_runtime.DiscordRuntimeState(),
@@ -28,12 +29,53 @@ class RuntimeStateBridgeTests(unittest.TestCase):
                 runtime_mutex_name="unit",
                 get_runtime_lock_path=lambda: lock_path,
                 log=logs.append,
+                close_app_server=lambda: (_ for _ in ()).throw(
+                    RuntimeError("unexpected close failure")
+                ),
                 exit_process=exit_codes.append,
+            )
+
+            bridge.exit_bot_process(9, reason="unit-close-failure")
+
+            self.assertEqual(exit_codes, [9])
+            self.assertFalse(lock_path.exists())
+            self.assertTrue(
+                any(
+                    "bot_process_app_server_close_failed" in line
+                    and "unexpected close failure" in line
+                    for line in logs
+                )
+            )
+
+    def test_exit_bot_process_logs_removes_lock_and_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "runtime.lock"
+            _ = lock_path.write_text(str(os.getpid()), encoding="ascii")
+            logs: list[str] = []
+            exit_codes: list[int] = []
+            shutdown_order: list[str] = []
+
+            def exit_process(code: int) -> None:
+                shutdown_order.append("process")
+                exit_codes.append(code)
+
+            bridge = runtime_state_bridge.RuntimeStateBridge(
+                session_mirror_state=discord_session_mirror.SessionMirrorState(),
+                runtime_state=discord_runtime.DiscordRuntimeState(),
+                thread_runners={},
+                thread_runners_lock=asyncio.Lock(),
+                active_output_ttl_seconds=60.0,
+                runtime_mutex_name="unit",
+                get_runtime_lock_path=lambda: lock_path,
+                log=logs.append,
+                close_app_server=lambda: shutdown_order.append("app-server"),
+                exit_process=exit_process,
             )
 
             bridge.exit_bot_process(7, reason="unit")
 
             self.assertEqual(exit_codes, [7])
+            self.assertEqual(shutdown_order, ["app-server", "process"])
             self.assertFalse(lock_path.exists())
             self.assertTrue(
                 any("bot_process_exit_requested reason=unit code=7" in line for line in logs)

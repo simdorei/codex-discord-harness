@@ -8,6 +8,7 @@ from typing import cast
 import codex_discord_bot_plain_ask_busy_view_runtime as discord_bot_plain_ask_busy_view_runtime
 import codex_discord_bot_plain_ask_runtime as discord_bot_plain_ask_runtime
 import codex_discord_bot_plain_ask_types as discord_bot_plain_ask_types
+import codex_discord_app_server_admission_factory as discord_app_server_admission_factory
 from codex_discord_bot_plain_ask_adapter_types import (
     BusyChoiceMessage,
     BusyChoiceViewValue,
@@ -45,6 +46,10 @@ class BotPlainAskAdapterRuntime(BotPlainAskAdapterStateMixin):
                 send_prompt_chunks=self.send_prompt_chunks,
                 enqueue_thread_ask=self.enqueue_thread_ask,
                 run_prompt_and_send=self.run_prompt_and_send,
+                prompt_admission=discord_app_server_admission_factory.make_prompt_admission(
+                    self.module,
+                    self.send_chunks,
+                ),
                 run_plain_prompt_flow=self.run_plain_prompt_flow,
                 build_context_warning=self.build_context_warning,
                 build_ask_start_message=self.build_ask_start_message,

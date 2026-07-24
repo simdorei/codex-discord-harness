@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio  # noqa: ANYIO_OK
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType
@@ -38,7 +38,7 @@ class BotInteractionDeliveryRuntime:
                 cleanup_archive_mirror_after_bridge_command_func=cast(
                     Callable[
                         [discord_session_mirror_archive.ArchiveMirrorCleanupOwner | None, list[str], int, str],
-                        str | None,
+                        Awaitable[str | None],
                     ],
                     getattr(self.module, "cleanup_archive_mirror_after_bridge_command"),
                 ),

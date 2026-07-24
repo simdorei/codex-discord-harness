@@ -121,3 +121,10 @@ def _handled(
         delegate_to_session_mirror=False,
         mapped_result=mapped_result,
     )
+
+
+def discarded_prompt_delivery(
+    target_thread_id: str | None,
+    target_ref: str,
+) -> PromptDeliveryPreparationResult:
+    return _handled(target_thread_id, target_ref)

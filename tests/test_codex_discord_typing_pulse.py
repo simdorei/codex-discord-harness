@@ -16,10 +16,11 @@ class TypingPulseRegistryTests(unittest.IsolatedAsyncioTestCase):
         stopped = asyncio.Event()
         registry = TypingPulseRegistry(pulse_seconds=10.0, interval_seconds=0.1)
 
-        def on_start_error(target_thread_id: str) -> None:
+        async def on_start_error(target_thread_id: str) -> bool:
             stopped_targets.append(target_thread_id)
             registry.stop(target_thread_id)
             stopped.set()
+            return True
 
         registry.start(
             TypingTarget(RecordingTypingManager(fail_enter=True)),

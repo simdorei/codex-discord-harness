@@ -164,6 +164,7 @@ class ArchiveBridgeCleanupTestCase(unittest.IsolatedAsyncioTestCase):
         super().__init__(methodName)
         self._old_mirror_db_path: Path = Path()
         self._old_discord_log_path: str | None = None
+        self._old_app_server_transport: str | None = None
         self._old_active_session_mirror_output_targets: dict[str, float] = {}
         self._old_pending_session_mirror_cursor_targets: set[str] = set()
         self._mirror_db_temp_dir: tempfile.TemporaryDirectory[str] | None = None
@@ -172,6 +173,7 @@ class ArchiveBridgeCleanupTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._old_mirror_db_path = bot.MIRROR_DB_PATH
         self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
+        self._old_app_server_transport = os.environ.get("CODEX_DISCORD_APP_SERVER_TRANSPORT")
         self._old_active_session_mirror_output_targets = dict(
             bot.get_session_mirror_state().active_output_targets
         )
@@ -187,6 +189,7 @@ class ArchiveBridgeCleanupTestCase(unittest.IsolatedAsyncioTestCase):
         os.environ["CODEX_DISCORD_LOG_PATH"] = str(
             Path(self._mirror_db_temp_dir.name) / "test_discord_bot.log"
         )
+        os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = "0"
         bot.init_mirror_db()
 
     @override
@@ -196,6 +199,10 @@ class ArchiveBridgeCleanupTestCase(unittest.IsolatedAsyncioTestCase):
             _ = os.environ.pop("CODEX_DISCORD_LOG_PATH", None)
         else:
             os.environ["CODEX_DISCORD_LOG_PATH"] = self._old_discord_log_path
+        if self._old_app_server_transport is None:
+            _ = os.environ.pop("CODEX_DISCORD_APP_SERVER_TRANSPORT", None)
+        else:
+            os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = self._old_app_server_transport
         bot.get_session_mirror_state().active_output_targets.clear()
         bot.get_session_mirror_state().active_output_targets.update(
             self._old_active_session_mirror_output_targets

@@ -45,12 +45,10 @@ class FakeDoctorBot:
     enable_prefix_commands: bool = True
     intents: FakeIntents = FakeIntents(message_content=True)
     history_poll_seconds: int = 30
-    history_poll_bootstrap_lookback_seconds: int = 60
     startup_channel_id: int | None = 111
     allowed_channel_ids: set[int] = field(default_factory=lambda: {222, 333})
     allowed_user_ids: set[int] = field(default_factory=lambda: {444})
     _history_poll_task: FakeDoneTask | None = FakeDoneTask(done_result=False)
-    _history_poll_bootstrap_after: str = "bootstrap-after"
     _history_poll_last_at: str = "last-at"
     _history_poll_primed_channels: set[int] = field(default_factory=lambda: {222})
     _slash_sync_status: str = "ok"

@@ -72,6 +72,13 @@ def _slash_ask_handler() -> SlashAskHandler:
 
 
 class DiscordSlashAskIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        bot.app_server_transport_enabled = lambda: False
+
+    def tearDown(self) -> None:
+        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+
     async def test_slash_ask_forwards_source_message_to_plain_ask(self) -> None:
         interaction = FakeInteraction(command_name="ask", channel_id=222)
         interaction.channel = FakeTarget(channel_id=222)

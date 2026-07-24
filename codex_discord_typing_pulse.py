@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio  # noqa: ANYIO_OK
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from typing import Protocol
 
 LogFunc = Callable[[str], None]
-StartErrorFunc = Callable[[str], None]
+StartErrorFunc = Callable[[str], Awaitable[bool]]
 
 
 class ChannelTypingFactory(Protocol):
@@ -70,9 +70,9 @@ class TypingPulseRegistry:
         if task is not current_task:
             loop = task.get_loop()
             if loop.is_running():
-                loop.call_soon_threadsafe(task.cancel)
+                _ = loop.call_soon_threadsafe(task.cancel)
             else:
-                task.cancel()
+                _ = task.cancel()
 
     async def _run_pulse(
         self,
@@ -94,7 +94,7 @@ class TypingPulseRegistry:
         except Exception as exc:  # noqa: BROAD_EXCEPT_OK - background typing pulse boundary.
             log(f"typing_pulse_failed target={key} context={context or '-'} error_type={type(exc).__name__}")
             if on_start_error is not None:
-                on_start_error(key)
+                _ = await on_start_error(key)
 
     def _drop_done_task(self, key: str, done_task: asyncio.Task[None]) -> None:
         if self._tasks.get(key) is done_task:

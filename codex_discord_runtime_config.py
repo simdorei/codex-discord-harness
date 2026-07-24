@@ -137,12 +137,3 @@ def get_history_poll_seconds(*, default: float) -> float:
         minimum=0.0,
         maximum=300.0,
     )
-
-
-def get_history_poll_bootstrap_lookback_seconds(*, default: float) -> float:
-    return parse_bounded_float_env(
-        "DISCORD_HISTORY_BOOTSTRAP_LOOKBACK_SECONDS",
-        default=default,
-        minimum=0.0,
-        maximum=600.0,
-    )

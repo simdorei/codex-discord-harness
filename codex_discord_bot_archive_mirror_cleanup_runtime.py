@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import traceback
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +22,7 @@ class BotArchiveMirrorCleanupRuntimeDeps:
     get_session_mirror_state: Callable[
         [], discord_session_mirror_archive.SessionMirrorStateLike
     ]
-    deactivate_session_mirror_output_target: Callable[[str | None], None]
+    release_session_mirror_output_target: Callable[[str | None], Awaitable[bool]]
     format_log_argv: Callable[[list[str]], str]
     log: discord_session_mirror_archive.LogFunc
 
@@ -31,12 +31,12 @@ class BotArchiveMirrorCleanupRuntimeDeps:
 class BotArchiveMirrorCleanupRuntime:
     deps: BotArchiveMirrorCleanupRuntimeDeps
 
-    def cleanup_archived_session_mirror_state(
+    async def cleanup_archived_session_mirror_state(
         self,
         owner: discord_session_mirror_archive.ArchiveMirrorCleanupOwner | None,
         codex_thread_id: str,
     ) -> discord_session_mirror_archive.ArchivedSessionMirrorCleanupCounts:
-        return discord_session_mirror_archive.cleanup_archived_session_mirror_state(
+        return await discord_session_mirror_archive.cleanup_archived_session_mirror_state(
             owner,
             codex_thread_id,
             deps=self.archive_mirror_cleanup_deps(),
@@ -54,8 +54,8 @@ class BotArchiveMirrorCleanupRuntime:
             ),
             get_session_mirror_state=self.deps.get_session_mirror_state,
             normalize_runner_key=discord_runtime.normalize_runner_key,
-            deactivate_session_mirror_output_target=(
-                self.deps.deactivate_session_mirror_output_target
+            release_session_mirror_output_target=(
+                self.deps.release_session_mirror_output_target
             ),
             parse_bridge_output_value=_parse_bridge_output_value,
             format_log_argv=self.deps.format_log_argv,
@@ -70,14 +70,14 @@ class BotArchiveMirrorCleanupRuntime:
             log=self.deps.log,
         )
 
-    def cleanup_archive_mirror_after_bridge_command(
+    async def cleanup_archive_mirror_after_bridge_command(
         self,
         owner: discord_session_mirror_archive.ArchiveMirrorCleanupOwner | None,
         argv: list[str],
         exit_code: int,
         output: str,
     ) -> str | None:
-        return discord_session_mirror_archive.cleanup_archive_mirror_after_bridge_command(
+        return await discord_session_mirror_archive.cleanup_archive_mirror_after_bridge_command(
             owner,
             argv,
             exit_code,

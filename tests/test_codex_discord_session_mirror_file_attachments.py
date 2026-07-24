@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from codex_session_events import JsonEvent
 import codex_discord_delivery_runtime as delivery_runtime
@@ -96,10 +97,9 @@ class SessionMirrorFileAttachmentTests(unittest.TestCase):
         self.assertEqual(items[0]["attachment_filename"], "report.txt")
 
     def test_collect_session_mirror_items_preserves_tool_file_path_outputs(self) -> None:
-        output_root = delivery_runtime.CODEX_SESSION_MIRROR_ATTACHMENT_DIR
-        output_root.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(dir=output_root) as temp_dir:
-            attachment_path = Path(temp_dir) / "report.csv"
+        with TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir)
+            attachment_path = output_root / "report.csv"
             _ = attachment_path.write_bytes(b"hello file")
             events: list[JsonEvent] = [
                 {
@@ -117,7 +117,12 @@ class SessionMirrorFileAttachmentTests(unittest.TestCase):
                 }
             ]
 
-            items = _collect_items(events)
+            with mock.patch.object(
+                delivery_runtime,
+                "CODEX_SESSION_MIRROR_ATTACHMENT_DIR",
+                output_root,
+            ):
+                items = _collect_items(events)
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["kind"], "file")

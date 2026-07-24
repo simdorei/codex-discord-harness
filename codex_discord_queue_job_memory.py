@@ -17,6 +17,7 @@ def to_memory_queue_job(
         "channel_id": record.channel_id,
         "owner_user_id": record.owner_user_id,
         "discord_message_id": record.discord_message_id,
+        "app_server_generation": record.app_server_generation,
         "prompt": record.prompt,
         "target_thread_id": record.target_thread_id,
         "queued": record.queued,
@@ -30,6 +31,7 @@ def to_memory_queue_job(
 
 
 def copy_stored_queue_state(job: QueueJob, record: StoredQueueJob) -> None:
+    job["app_server_generation"] = record.app_server_generation
     job["state"] = record.state.value
     job["attempt_count"] = record.attempt_count
     job["turn_id"] = record.turn_id

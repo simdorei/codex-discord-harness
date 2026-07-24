@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 
 import codex_discord_persistent_busy_choice as persistent_busy_choice
 
@@ -17,6 +18,7 @@ def make_record(
         "allow_steer": allow_steer,
         "prompt": "please queue",
         "channel_id": 222,
+        "created_at": 123.0,
     }
 
 
@@ -24,12 +26,13 @@ class PersistentBusyChoiceResolverTests(unittest.TestCase):
     def test_make_persistent_busy_source_message_builds_owner_and_channel(self) -> None:
         channel = object()
         source = persistent_busy_choice.make_persistent_busy_source_message(
-            {"owner_user_id": "123"},
+            {"owner_user_id": "123", "created_at": 123.0},
             channel,
         )
 
         self.assertEqual(source.author.id, 123)
         self.assertIs(source.channel, channel)
+        self.assertEqual(source.created_at, datetime.fromtimestamp(123.0, tz=timezone.utc))
 
     def test_invalid_custom_id_resolves_unhandled(self) -> None:
         resolution = persistent_busy_choice.resolve_persistent_busy_choice(
