@@ -2,6 +2,7 @@ import unittest
 from dataclasses import dataclass
 
 import codex_discord_prefix_mirror_commands as prefix_mirror
+from codex_discord_session_mirror_detail import SessionMirrorDetailMode
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
         mirror_sync_output: str = "Mirror sync complete.",
         mirror_list_output: str = "Mirror list.",
         mirror_check_output: str = "Mirror check.",
+        mirrored_thread_id: str | None = "thread-1",
     ) -> tuple[
         prefix_mirror.PrefixMirrorCommandDeps,
         list[str],
@@ -35,6 +37,7 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
         sent: list[str] = []
         calls: list[tuple[str, object, int | None, int | None]] = []
         logs: list[str] = []
+        detail_modes = {"thread-1": SessionMirrorDetailMode.SEND}
 
         async def send_chunks(target: object, text: str, *, context: str = "send_chunks") -> object:
             _ = target
@@ -57,12 +60,31 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
             calls.append(("mirror_check", bot, limit, channel_id))
             return mirror_check_output
 
+        def get_detail_mode(thread_id: str) -> SessionMirrorDetailMode:
+            calls.append(("detail_get", thread_id, None, None))
+            return detail_modes[thread_id]
+
+        def set_detail_mode(
+            thread_id: str,
+            mode: SessionMirrorDetailMode,
+        ) -> None:
+            calls.append(("detail_set", thread_id, None, None))
+            detail_modes[thread_id] = mode
+
         deps = prefix_mirror.PrefixMirrorCommandDeps(
             send_chunks=send_chunks,
             refresh_discord_bridge_session=refresh,
             sync_codex_mirror=sync,
             build_mirror_list=mirror_list,
             build_mirror_check=mirror_check,
+            get_mirrored_codex_thread_id=lambda channel_id: (
+                mirrored_thread_id if channel_id == 222 else None
+            ),
+            describe_mirrored_project_channel=lambda channel_id: (
+                f"Select a mirrored Codex thread under channel {channel_id}."
+            ),
+            get_session_mirror_detail_mode=get_detail_mode,
+            set_session_mirror_detail_mode=set_detail_mode,
             log_line=logs.append,
         )
         return deps, sent, calls, logs
@@ -123,6 +145,10 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
             sync_codex_mirror=deps.sync_codex_mirror,
             build_mirror_list=deps.build_mirror_list,
             build_mirror_check=deps.build_mirror_check,
+            get_mirrored_codex_thread_id=deps.get_mirrored_codex_thread_id,
+            describe_mirrored_project_channel=deps.describe_mirrored_project_channel,
+            get_session_mirror_detail_mode=deps.get_session_mirror_detail_mode,
+            set_session_mirror_detail_mode=deps.set_session_mirror_detail_mode,
             log_line=logs.append,
         )
         self.assertTrue(await prefix_mirror.handle_prefix_mirror_command("sync", "", message, fake_bot, deps=deps))
@@ -147,6 +173,10 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
             sync_codex_mirror=failing_sync,
             build_mirror_list=failing_list,
             build_mirror_check=failing_check,
+            get_mirrored_codex_thread_id=deps.get_mirrored_codex_thread_id,
+            describe_mirrored_project_channel=deps.describe_mirrored_project_channel,
+            get_session_mirror_detail_mode=deps.get_session_mirror_detail_mode,
+            set_session_mirror_detail_mode=deps.set_session_mirror_detail_mode,
             log_line=logs.append,
         )
         self.assertTrue(await prefix_mirror.handle_prefix_mirror_command("mirror", "sync", message, fake_bot, deps=deps))
@@ -163,3 +193,60 @@ class PrefixMirrorCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(await prefix_mirror.handle_prefix_mirror_command("where", "", message, fake_bot, deps=deps))
         self.assertEqual(calls, [])
+
+    async def test_detail_shows_and_changes_mode_for_mapped_thread(self) -> None:
+        deps, sent, calls, logs = self.make_deps()
+        message = FakeMessage.make()
+        fake_bot = object()
+
+        self.assertTrue(
+            await prefix_mirror.handle_prefix_mirror_command(
+                "detail", "", message, fake_bot, deps=deps
+            )
+        )
+        self.assertIn("send", sent[-1])
+
+        self.assertTrue(
+            await prefix_mirror.handle_prefix_mirror_command(
+                "detail", "all", message, fake_bot, deps=deps
+            )
+        )
+        self.assertIn("all", sent[-1])
+
+        self.assertTrue(
+            await prefix_mirror.handle_prefix_mirror_command(
+                "detail", "", message, fake_bot, deps=deps
+            )
+        )
+        self.assertIn("all", sent[-1])
+        self.assertEqual(
+            [call[0] for call in calls],
+            ["detail_get", "detail_set", "detail_get"],
+        )
+        self.assertEqual(logs, [])
+
+    async def test_detail_rejects_invalid_mode_and_project_channel(self) -> None:
+        deps, sent, calls, _logs = self.make_deps()
+        message = FakeMessage.make()
+
+        self.assertTrue(
+            await prefix_mirror.handle_prefix_mirror_command(
+                "detail", "verbose", message, object(), deps=deps
+            )
+        )
+        self.assertEqual(
+            sent[-1],
+            "prefix_detail_usage:Usage: !detail | !detail send | !detail all",
+        )
+        self.assertEqual(calls, [])
+
+        unmapped_deps, unmapped_sent, unmapped_calls, _logs = self.make_deps(
+            mirrored_thread_id=None
+        )
+        self.assertTrue(
+            await prefix_mirror.handle_prefix_mirror_command(
+                "detail", "all", message, object(), deps=unmapped_deps
+            )
+        )
+        self.assertIn("Select a mirrored Codex thread", unmapped_sent[-1])
+        self.assertEqual(unmapped_calls, [])

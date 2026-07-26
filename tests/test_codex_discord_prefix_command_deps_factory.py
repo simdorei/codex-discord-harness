@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Protocol
 
 import codex_discord_prefix_command_deps_factory as deps_factory
+from codex_discord_session_mirror_detail import SessionMirrorDetailMode
 from codex_discord_steering import SteeringPromptResult
 
 
@@ -192,6 +193,10 @@ class PrefixCommandDepsFactoryTests(unittest.TestCase):
             sync_codex_mirror=sync_mirror,
             build_mirror_list=build_mirror,
             build_mirror_check=build_mirror,
+            get_session_mirror_detail_mode=lambda thread_id: (
+                SessionMirrorDetailMode.SEND
+            ),
+            set_session_mirror_detail_mode=lambda thread_id, mode: None,
             qa_commands_enabled=lambda: True,
             resolve_selected_target=lambda: ("thread-1", "ref"),
             prepare_mapped_session_mirror_output=prepare_output,

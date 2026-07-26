@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio  # noqa: ANYIO_OK
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import Generic, Protocol, TypeVar, cast, TypeAlias
 
@@ -20,6 +21,7 @@ import codex_discord_prefix_resume_command as discord_prefix_resume_command
 import codex_discord_prefix_status_commands as discord_prefix_status_commands
 import codex_discord_prefix_steer_command as discord_prefix_steer_command
 import codex_discord_resume as discord_resume
+import codex_discord_session_mirror_detail_runtime as discord_session_mirror_detail_runtime
 ModuleValue: TypeAlias = object
 
 
@@ -55,6 +57,9 @@ class BotPrefixCommandRuntime(Generic[BotT]):
     ) -> discord_prefix_command_deps_factory.PrefixCommandDepsFactory[BotT]:
         module = self.deps.module
         send_chunks = cast(PrefixSendChunks, getattr(module, "send_prefix_chunks"))
+        detail_runtime = discord_session_mirror_detail_runtime.SessionMirrorDetailRuntime(
+            get_db_path=lambda: cast(Path, getattr(module, "MIRROR_DB_PATH"))
+        )
         return discord_prefix_command_deps_factory.PrefixCommandDepsFactory(
             prompt_send_chunks=cast(discord_prefix_prompt_commands.SendChunksFunc, send_chunks),
             mirror_send_chunks=cast(discord_prefix_mirror_commands.SendChunksFunc, send_chunks),
@@ -99,6 +104,8 @@ class BotPrefixCommandRuntime(Generic[BotT]):
                 discord_prefix_mirror_commands.BuildMirrorFunc,
                 getattr(module, "build_prefix_mirror_check"),
             ),
+            get_session_mirror_detail_mode=detail_runtime.get_mode,
+            set_session_mirror_detail_mode=detail_runtime.set_mode,
             qa_commands_enabled=self.deps.qa_commands_enabled,
             resolve_selected_target=cast(
                 Callable[[], tuple[str | None, str]],

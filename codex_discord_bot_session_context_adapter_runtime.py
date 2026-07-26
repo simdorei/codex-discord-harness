@@ -10,6 +10,7 @@ import codex_discord_bridge_protocols as discord_bridge_protocols
 import codex_app_server_transport as app_server_transport
 import codex_discord_runtime as discord_runtime
 import codex_discord_session_context_runtime as discord_session_context_runtime
+import codex_discord_session_mirror_detail_runtime as discord_session_mirror_detail_runtime
 from codex_session_events import JsonEvent, JsonValue
 ModuleValue: TypeAlias = object
 
@@ -19,6 +20,9 @@ class BotSessionContextAdapterRuntime:
     module: ModuleType
 
     def make_session_context_runtime(self) -> discord_session_context_runtime.SessionContextRuntime:
+        detail_runtime = discord_session_mirror_detail_runtime.SessionMirrorDetailRuntime(
+            get_db_path=lambda: cast(Path, getattr(self.module, "MIRROR_DB_PATH"))
+        )
         return discord_session_context_runtime.SessionContextRuntime(
             get_runtime_state=self.get_runtime_state,
             get_context_refresh_bridge=self.get_context_refresh_bridge,
@@ -45,6 +49,7 @@ class BotSessionContextAdapterRuntime:
             get_thread_goal_lookup_func=self.get_thread_goal_lookup,
             get_thread_goal_update_func=self.get_thread_goal_update,
             get_thread_turn_completions_func=self.get_thread_turn_completions,
+            get_session_mirror_detail_mode_func=detail_runtime.get_mode,
         )
 
     def get_thread_goal_lookup(self, thread_id: str) -> app_server_transport.ThreadGoalLookup:

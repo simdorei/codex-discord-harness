@@ -13,6 +13,7 @@ import codex_discord_recent_user_prompt as discord_recent_user_prompt
 import codex_discord_runtime as discord_runtime
 import codex_discord_session_mirror as discord_session_mirror
 import codex_discord_session_mirror_item_events as discord_session_mirror_item_events
+from codex_discord_session_mirror_detail import SessionMirrorDetailMode
 import codex_discord_text_digest as discord_text_digest
 from codex_session_events import JsonEvent, JsonValue
 from codex_app_server_transport_goal import (
@@ -33,6 +34,7 @@ NowFunc = Callable[[], float]
 GetThreadGoalLookupFunc = Callable[[str], ThreadGoalLookup]
 GetThreadGoalUpdateFunc = Callable[[str, str], ThreadGoalUpdate | None]
 GetThreadTurnCompletionsFunc = Callable[[str, list[str]], dict[str, TurnCompletion]]
+GetSessionMirrorDetailModeFunc = Callable[[str], SessionMirrorDetailMode]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,7 @@ class SessionContextRuntime:
     get_thread_goal_lookup_func: GetThreadGoalLookupFunc
     get_thread_goal_update_func: GetThreadGoalUpdateFunc
     get_thread_turn_completions_func: GetThreadTurnCompletionsFunc
+    get_session_mirror_detail_mode_func: GetSessionMirrorDetailModeFunc
 
     def cleanup_recent_discord_origin_prompts(self, now: float | None = None) -> None:
         current = self.now() if now is None else now
@@ -222,4 +225,5 @@ class SessionContextRuntime:
             turn_completion_error=turn_completion_error,
             goal_updates=goal_updates,
             goal_lookup_error=goal_lookup_error,
+            detail_mode=self.get_session_mirror_detail_mode_func(codex_thread_id),
         )

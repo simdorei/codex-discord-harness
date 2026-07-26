@@ -54,6 +54,12 @@ class StoreSchemaTests(unittest.TestCase):
                 session_event_columns = {
                     row[1] for row in session_event_rows
                 }
+                detail_columns = {
+                    row[1]
+                    for row in conn.execute(
+                        "PRAGMA table_info(session_mirror_details)"
+                    ).fetchall()
+                }
 
         self.assertEqual(
             project_columns,
@@ -76,6 +82,13 @@ class StoreSchemaTests(unittest.TestCase):
         self.assertEqual(
             session_event_columns,
             {"event_digest", "codex_thread_id", "created_at"},
+        )
+        self.assertEqual(
+            detail_columns,
+            {
+                "codex_thread_id",
+                "detail_mode",
+            },
         )
 
 

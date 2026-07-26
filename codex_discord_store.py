@@ -37,6 +37,10 @@ from codex_discord_store_mirror_threads import (
     update_mirror_thread_discord_thread_id as update_mirror_thread_discord_thread_id,
     upsert_mirror_thread as upsert_mirror_thread,
 )
+from codex_discord_store_mirror_detail import (
+    get_session_mirror_detail_mode as get_session_mirror_detail_mode,
+    set_session_mirror_detail_mode as set_session_mirror_detail_mode,
+)
 from codex_discord_store_processed_messages import (
     claim_persistent_discord_message_id as claim_persistent_discord_message_id,
     cleanup_processed_discord_messages as cleanup_processed_discord_messages,

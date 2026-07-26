@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import cast
 
 STORE_SCHEMA_TABLES: tuple[str, ...] = (
     "mirror_projects",
     "mirror_threads",
+    "session_mirror_details",
     "busy_choices",
     "persistent_component_claims",
     "discord_processed_messages",
@@ -29,6 +31,12 @@ STORE_SCHEMA_STATEMENTS: tuple[str, ...] = (
         "discord_channel_id INTEGER NOT NULL, "
         "discord_thread_id INTEGER NOT NULL, "
         "updated_at REAL NOT NULL)"
+    ),
+    (
+        "CREATE TABLE IF NOT EXISTS session_mirror_details ("
+        "codex_thread_id TEXT PRIMARY KEY, "
+        "detail_mode TEXT NOT NULL "
+        "CHECK(detail_mode IN ('send', 'all')))"
     ),
     (
         "CREATE TABLE IF NOT EXISTS busy_choices ("
@@ -103,12 +111,16 @@ def init_store_schema(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_codex_turn_queue(conn: sqlite3.Connection) -> None:
+    rows = cast(
+        list[tuple[int, str, str, int, object, int]],
+        conn.execute("PRAGMA table_info(codex_turn_queue)").fetchall(),
+    )
     columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(codex_turn_queue)").fetchall()
+        row[1]
+        for row in rows
     }
     if "app_server_generation" not in columns:
         _ = conn.execute(
             "ALTER TABLE codex_turn_queue "
-            "ADD COLUMN app_server_generation INTEGER NOT NULL DEFAULT 0"
+            + "ADD COLUMN app_server_generation INTEGER NOT NULL DEFAULT 0"
         )

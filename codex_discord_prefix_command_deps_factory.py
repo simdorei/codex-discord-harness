@@ -14,6 +14,7 @@ import codex_discord_prefix_qa_command as qa_command
 import codex_discord_prefix_queue_commands as queue_commands
 import codex_discord_prefix_status_commands as status_commands
 import codex_discord_prefix_steer_command as steer_command
+from codex_discord_session_mirror_detail import SessionMirrorDetailMode
 
 
 BotT = TypeVar("BotT")
@@ -41,6 +42,11 @@ class PrefixCommandDepsFactory(Generic[BotT]):
     sync_codex_mirror: mirror_commands.SyncMirrorFunc
     build_mirror_list: mirror_commands.BuildMirrorFunc
     build_mirror_check: mirror_commands.BuildMirrorFunc
+    get_session_mirror_detail_mode: Callable[[str], SessionMirrorDetailMode]
+    set_session_mirror_detail_mode: Callable[
+        [str, SessionMirrorDetailMode],
+        None,
+    ]
     qa_commands_enabled: Callable[[], bool]
     resolve_selected_target: Callable[[], tuple[str | None, str]]
     prepare_mapped_session_mirror_output: PrepareSessionMirrorOutputFunc
@@ -86,6 +92,10 @@ class PrefixCommandDepsFactory(Generic[BotT]):
             sync_codex_mirror=self.sync_codex_mirror,
             build_mirror_list=self.build_mirror_list,
             build_mirror_check=self.build_mirror_check,
+            get_mirrored_codex_thread_id=self.get_mirrored_codex_thread_id,
+            describe_mirrored_project_channel=self.describe_mirrored_project_channel,
+            get_session_mirror_detail_mode=self.get_session_mirror_detail_mode,
+            set_session_mirror_detail_mode=self.set_session_mirror_detail_mode,
             log_line=self.log_line,
         )
 
