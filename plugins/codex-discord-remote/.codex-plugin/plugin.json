@@ -1,6 +1,6 @@
 {
   "name": "codex-discord-remote",
-  "version": "0.1.0+codex.20260612042001",
+  "version": "0.1.0+codex.20260722123525",
   "description": "Operate, QA, and recover a local Codex Discord Remote runtime.",
   "author": {
     "name": "simdorei"
