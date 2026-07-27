@@ -31,6 +31,16 @@ class CodexAppServerTransportReplyTests(unittest.TestCase):
         with self.assertRaises(transport.CodexAppServerTransportError):
             _ = transport.build_approval_response("unknown/requestApproval", {}, "1")
 
+    def test_mcp_elicitation_approval_builds_protocol_response(self) -> None:
+        payload, decision = transport.build_approval_response(
+            "mcpServer/elicitation/request",
+            {"mode": "url"},
+            "1",
+        )
+
+        self.assertEqual(payload, {"action": "accept", "content": {}, "_meta": None})
+        self.assertEqual(decision, "accept")
+
     def test_single_question_numeric_input_resolves_option_label(self) -> None:
         payload, answers = transport.build_input_response(
             {

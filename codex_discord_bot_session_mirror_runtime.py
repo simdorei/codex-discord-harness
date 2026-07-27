@@ -16,7 +16,6 @@ from codex_thread_models import ThreadContextUsage, ThreadInfo
 from codex_app_server_transport_goal import GoalAbsent, ThreadGoalLookup
 ModuleValue: TypeAlias = object
 
-
 ChannelT = TypeVar("ChannelT")
 SessionMirrorTargetMapping: TypeAlias = discord_session_mirror.SessionMirrorTargetMapping
 LoadTargetsInThread = Callable[[Path, int], Awaitable[Sequence[SessionMirrorTargetMapping]]]
@@ -28,6 +27,12 @@ async def noop_send_typing_pulse(channel: object, target_thread_id: str, context
     _ = channel
     _ = target_thread_id
     _ = context
+
+
+async def noop_deliver_pending_approval(owner: object, target: SessionMirrorTargetMapping) -> bool:
+    _ = owner
+    _ = target
+    return False
 
 
 class SessionMirrorOwner(Protocol[ChannelT]):
@@ -103,6 +108,10 @@ class SessionMirrorRuntimeDeps(Generic[ChannelT]):
     is_thread_busy: Callable[[Path], bool] = lambda session_path: True
     get_active_turn_id: Callable[[str], str | None] = lambda thread_id: None
     get_thread_goal_lookup: Callable[[str], ThreadGoalLookup] = lambda thread_id: GoalAbsent()
+    deliver_pending_approval: Callable[
+        [SessionMirrorOwner[ChannelT], SessionMirrorTargetMapping],
+        Awaitable[bool],
+    ] = noop_deliver_pending_approval
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +197,8 @@ class SessionMirrorRuntime(Generic[ChannelT]):
         owner: SessionMirrorOwner[ChannelT],
         target: SessionMirrorTargetMapping,
     ) -> None:
+        if await self.deps.deliver_pending_approval(owner, target):
+            return
         deps: discord_session_mirror_target.SessionMirrorTargetDeps[
             ThreadInfo,
             ThreadContextUsage,
@@ -227,7 +238,6 @@ class SessionMirrorRuntime(Generic[ChannelT]):
             log=self.deps.log,
         )
         await discord_session_mirror_target.mirror_session_target(target, deps=deps)
-
 
 def _session_mirror_task(owner: SessionMirrorOwner[ChannelT]) -> asyncio.Task[ModuleValue] | None:
     value = getattr(owner, "_session_mirror_task", None)

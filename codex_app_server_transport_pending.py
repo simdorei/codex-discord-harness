@@ -25,6 +25,7 @@ APPROVAL_REQUEST_METHODS: Final = frozenset(
     }
 )
 INPUT_REQUEST_METHOD: Final = "item/tool/requestUserInput"
+MCP_ELICITATION_REQUEST_METHOD: Final = "mcpServer/elicitation/request"
 REMOTE_INTERRUPT_INTENT_TTL_SEC: Final = 60.0
 REMOTE_INTERRUPT_INTENT_MAX: Final = 500
 
@@ -32,6 +33,14 @@ REMOTE_INTERRUPT_INTENT_MAX: Final = 500
 def _params(message: JsonObject) -> JsonMapping | None:
     params = message.get("params")
     return params if isinstance(params, dict) else None
+
+
+def _is_approval_request(request: JsonObject) -> bool:
+    method = str(request.get("method") or "")
+    if method in APPROVAL_REQUEST_METHODS:
+        return True
+    params = _params(request)
+    return method == MCP_ELICITATION_REQUEST_METHOD and params is not None and params.get("mode") == "url"
 
 
 @final
@@ -142,7 +151,7 @@ class PendingRequestState:
 
     def latest_approval_request(self, thread_id: str) -> JsonObject | None:
         for request in reversed(self.pending_requests(thread_id)):
-            if str(request.get("method") or "") in APPROVAL_REQUEST_METHODS:
+            if _is_approval_request(request):
                 return request
         return None
 

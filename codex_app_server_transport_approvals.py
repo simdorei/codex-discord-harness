@@ -27,6 +27,10 @@ def parse_approval_answer(answer_text: str) -> tuple[str, str, str]:
 
 def build_approval_response(method: str, params: JsonMapping, answer_text: str) -> tuple[Payload, str]:
     decision, legacy_decision, scope = parse_approval_answer(answer_text)
+    if method == "mcpServer/elicitation/request":
+        action = "accept" if decision == "acceptForSession" else decision
+        content: JsonValue = {} if action == "accept" else None
+        return {"action": action, "content": content, "_meta": None}, action
     if method == "item/commandExecution/requestApproval":
         return {"decision": decision}, decision
     if method == "item/fileChange/requestApproval":

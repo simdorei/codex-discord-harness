@@ -8,9 +8,11 @@ from typing import cast, final
 from unittest import mock
 
 import codex_discord_bot_session_mirror_runtime as bot_session_mirror_runtime
+import codex_discord_pending_approval_delivery as pending_approval_delivery
 import codex_discord_session_mirror as session_mirror
 import codex_discord_session_mirror_item_sender as item_sender
 import codex_discord_session_mirror_target as session_mirror_target
+from codex_app_server_transport_replies import JsonObject
 from codex_session_events import JsonEvent
 
 
@@ -30,6 +32,81 @@ async def release_output_target(_thread_id: str) -> bool:
 
 
 class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_mcp_elicitation_is_sent_instead_of_only_typing(self) -> None:
+        sent_items: list[dict[str, str]] = []
+        claimed: list[tuple[str, str]] = []
+        runtime_deps = mock.Mock()
+        pending_request: JsonObject = {
+            "id": "elicitation-1",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "threadId": "thread-1",
+                "mode": "url",
+                "message": "Install Google Drive and continue.",
+                "url": "codex://plugins/install/?marketplace=openai-curated",
+            },
+        }
+        def get_pending_request(thread_id: str) -> JsonObject | None:
+            _ = thread_id
+            return pending_request
+
+        def claim_delivery(digest: str, thread_id: str) -> bool:
+            claimed.append((digest, thread_id))
+            return True
+
+        delivery_deps: pending_approval_delivery.PendingApprovalDeliveryDeps[FakeChannel] = (
+            pending_approval_delivery.PendingApprovalDeliveryDeps(
+            parse_target=session_mirror.parse_session_mirror_target,
+            get_pending_request=get_pending_request,
+            has_delivered=lambda digest, thread_id: False,
+            claim_delivery=claim_delivery,
+            resolve_target_ref=lambda thread_id: (thread_id, thread_id),
+            log=lambda message: None,
+            )
+        )
+
+        async def deliver_pending_approval(
+            owner: pending_approval_delivery.PendingApprovalDeliveryOwner[FakeChannel],
+            target: session_mirror.SessionMirrorTargetMapping,
+        ) -> bool:
+            return await pending_approval_delivery.deliver_pending_approval(
+                owner,
+                target,
+                deps=delivery_deps,
+            )
+
+        runtime_deps.deliver_pending_approval = deliver_pending_approval
+        runtime = bot_session_mirror_runtime.SessionMirrorRuntime(
+            cast(bot_session_mirror_runtime.SessionMirrorRuntimeDeps[FakeChannel], runtime_deps)
+        )
+        owner = mock.Mock()
+        owner.resolve_session_mirror_channel = mock.AsyncMock(return_value=FakeChannel())
+
+        async def send_item(channel: FakeChannel, item: dict[str, str], **kwargs: object) -> None:
+            _ = channel
+            _ = kwargs
+            sent_items.append(item)
+
+        owner.send_session_mirror_item = send_item
+
+        with mock.patch.object(
+            session_mirror_target,
+            "mirror_session_target",
+            new_callable=mock.AsyncMock,
+        ) as mirror_target:
+            await runtime.mirror_session_target(
+                cast(bot_session_mirror_runtime.SessionMirrorOwner[FakeChannel], owner),
+                {"codex_thread_id": "thread-1", "discord_thread_id": 222},
+            )
+
+        self.assertEqual(len(sent_items), 1, "Pending MCP approval must be visible in Discord.")
+        self.assertEqual(sent_items[0]["kind"], "interactive")
+        self.assertIn("[approval_required]", sent_items[0]["text"])
+        self.assertIn("Install Google Drive and continue.", sent_items[0]["text"])
+        self.assertIn("codex://plugins/install/", sent_items[0]["text"])
+        self.assertEqual(claimed, [("app_server_request:elicitation-1", "thread-1")])
+        mirror_target.assert_not_awaited()
+
     async def test_runtime_forwards_target_id_to_typing_pulse(self) -> None:
         typing_pulses: list[tuple[int, str, str]] = []
         runtime_deps_mock = mock.Mock()
@@ -38,6 +115,7 @@ class SessionMirrorTypingTests(unittest.IsolatedAsyncioTestCase):
             typing_pulses.append((channel.id, target_thread_id, context))
 
         runtime_deps_mock.configure_mock(
+            deliver_pending_approval=mock.AsyncMock(return_value=False),
             get_archive_skip_logged=mock.Mock(return_value=set()),
             send_typing_pulse=send_typing_pulse,
         )

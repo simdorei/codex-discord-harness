@@ -57,6 +57,27 @@ class PendingRequestStateTests(unittest.TestCase):
         self.assertIs(state.latest_input_request("thread-1"), input_request)
         self.assertIsNone(state.latest_approval_request("thread-2"))
 
+    def test_url_mcp_elicitation_is_exposed_as_pending_approval(self) -> None:
+        state = PendingRequestState()
+        request: JsonObject = {
+            "id": "elicitation-1",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "threadId": "thread-1",
+                "mode": "url",
+                "message": "Install Google Drive and continue.",
+                "url": "codex://plugins/install/?marketplace=openai-curated",
+            },
+        }
+
+        state.record_server_request("elicitation-1", request, self.logs.append)
+
+        self.assertIs(
+            state.latest_approval_request("thread-1"),
+            request,
+            "URL MCP elicitation must reach the Discord approval path.",
+        )
+
     def test_notifications_track_active_turn_until_matching_completion(self) -> None:
         state = PendingRequestState()
 

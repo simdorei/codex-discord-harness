@@ -8,6 +8,7 @@ from typing import Protocol, TypeVar
 
 import codex_app_server_transport as app_server_transport
 import codex_discord_bot_session_mirror_runtime as session_mirror_runtime
+import codex_discord_pending_approval_delivery as pending_approval_delivery
 import codex_discord_session_mirror as discord_session_mirror
 import codex_discord_session_mirror_item_delivery as discord_session_mirror_item_delivery
 import codex_discord_session_mirror_target as discord_session_mirror_target
@@ -150,6 +151,22 @@ def make_session_mirror_runtime(
             is_thread_busy=lambda session_path: events_bridge.is_thread_busy(session_path),
             get_active_turn_id=get_active_turn_id,
             get_thread_goal_lookup=get_thread_goal_lookup,
+            deliver_pending_approval=lambda owner, target: pending_approval_delivery.deliver_pending_approval(
+                owner,
+                target,
+                deps=pending_approval_delivery.PendingApprovalDeliveryDeps(
+                    parse_target=discord_session_mirror.parse_session_mirror_target,
+                    get_pending_request=lambda thread_id: (
+                        app_server_transport.DEFAULT_CLIENT.get_latest_pending_approval_request(thread_id)
+                        if app_server_enabled()
+                        else None
+                    ),
+                    has_delivered=has_session_mirror_event,
+                    claim_delivery=claim_session_mirror_event,
+                    resolve_target_ref=resolve_target_ref,
+                    log=log,
+                ),
+            ),
         )
     )
 
