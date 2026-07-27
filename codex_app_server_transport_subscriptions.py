@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Protocol, final
 
-from codex_app_server_transport_goal import GoalPresent, GoalTransportError, ThreadGoalLookup, ThreadGoalStatus
+from codex_app_server_transport_goal import (
+    GoalPresent,
+    GoalTransportError,
+    ThreadGoalLookup,
+    is_terminal_goal_status,
+)
 from codex_app_server_transport_replies import (
     CodexAppServerTransportError,
     JsonMapping,
@@ -176,7 +181,7 @@ class ThreadSubscriptionCoordinator:
                 )
             if isinstance(goal, GoalTransportError):
                 return self._record_failure(thread_id, goal.message, "GoalTransportError", log)
-            if isinstance(goal, GoalPresent) and goal.status is not ThreadGoalStatus.COMPLETE:
+            if isinstance(goal, GoalPresent) and not is_terminal_goal_status(goal.status):
                 return ThreadReleaseOutcome(ThreadReleaseStatus.ACTIVE_GOAL)
             if expected_generation is None:
                 _ = client.request(

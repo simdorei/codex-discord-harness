@@ -90,6 +90,16 @@ class ThreadSubscriptionCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(outcome.status, ThreadReleaseStatus.RELEASED)
 
+    def test_blocked_goal_without_active_turn_allows_release(self) -> None:
+        coordinator = ThreadSubscriptionCoordinator()
+        client = _ReleaseClient(goal_lookup=GoalPresent(ThreadGoalStatus.BLOCKED))
+        coordinator.mark_subscribed("thread-1")
+
+        outcome = coordinator.release_if_terminal(client, "thread-1", log=lambda _line: None)
+
+        self.assertEqual(outcome.status, ThreadReleaseStatus.RELEASED)
+        self.assertFalse(coordinator.is_subscribed("thread-1"))
+
     def test_transport_failure_is_logged_and_retried_after_backoff(self) -> None:
         clock = _Clock()
         coordinator = ThreadSubscriptionCoordinator(monotonic_func=clock)

@@ -37,6 +37,15 @@ class SessionMirrorIdleDeactivationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(deactivated, [])
 
+    async def test_blocked_goal_without_active_turn_deactivates_output_target(self) -> None:
+        deactivated, logs = await self._run_idle_cycle(
+            get_active_turn_id=lambda thread_id: None,
+            get_goal_lookup=lambda thread_id: GoalPresent(ThreadGoalStatus.BLOCKED),
+        )
+
+        self.assertEqual(deactivated, ["thread-1"])
+        self.assertIn("session_mirror_output_deactivated_idle target=thread-1", logs)
+
     async def test_goal_lookup_error_keeps_output_target_alive(self) -> None:
         deactivated, logs = await self._run_idle_cycle(
             get_active_turn_id=lambda thread_id: None,
