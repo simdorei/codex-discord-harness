@@ -151,7 +151,6 @@ async def handle_mapped_prompt_delivery(
         await deps.send_chunks(channel, deps.format_pending_ask_delivery_output(output))
         return MappedPromptDeliveryResult(
             handled=True,
-            accepted=exit_code == 0 and turn_id is not None,
             turn_id=turn_id,
             error_message="" if exit_code == 0 else output,
         )
