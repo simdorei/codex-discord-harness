@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import cast
 import unittest
 
+from codex_app_server_transport_goal import ThreadGoalStatus
 from codex_session_events import JsonEvent, JsonValue
 import codex_discord_session_mirror as session_mirror
 import codex_discord_session_mirror_item_append as item_append
@@ -18,6 +19,34 @@ class SessionMirrorTextFormattingTests(unittest.TestCase):
             ),
             "Final\n\ndone",
         )
+
+    def test_blocked_goal_turn_completion_is_final(self) -> None:
+        events: list[JsonEvent] = [
+            {
+                "timestamp": "1",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "turn-1",
+                    "last_agent_message": "blocked goal report",
+                },
+            }
+        ]
+
+        items = session_mirror.collect_session_mirror_items(
+            "thread-1",
+            events,
+            seen_agent_messages={},
+            seen_user_messages={},
+            should_skip_discord_origin_prompt_func=lambda _thread_id, _text: False,
+            build_interactive_notice_func=_build_interactive_notice,
+            extract_message_text_func=_extract_message_text,
+            recent_text_ttl_seconds=600.0,
+            goal_status=ThreadGoalStatus.BLOCKED,
+        )
+
+        self.assertEqual([item["kind"] for item in items], ["final"])
+        self.assertEqual(items[0]["phase"], "final_answer")
 
 
 def _extract_message_text(payload: Mapping[str, JsonValue]) -> str:

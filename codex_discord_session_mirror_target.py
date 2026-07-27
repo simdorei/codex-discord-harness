@@ -11,7 +11,8 @@ import codex_discord_session_mirror_delivery_flow as delivery_flow
 import codex_discord_session_mirror_event_flow as event_flow
 import codex_discord_session_mirror_item_sender as item_sender
 import codex_discord_session_mirror_cursor as session_mirror_cursor
-from codex_app_server_transport_goal import GoalAbsent, GoalPresent, GoalTransportError, ThreadGoalLookup, ThreadGoalStatus
+from codex_app_server_transport_goal import GoalAbsent, GoalPresent, GoalTransportError, ThreadGoalLookup
+from codex_app_server_transport_goal import is_terminal_goal_status
 
 ThreadT = TypeVar("ThreadT")
 ThreadT_co = TypeVar("ThreadT_co", covariant=True)
@@ -176,7 +177,7 @@ async def _deactivate_output_target_if_idle(
     if isinstance(goal_lookup, GoalTransportError):
         deps.log(f"session_mirror_goal_lookup_failed target={codex_thread_id}")
         return False
-    if isinstance(goal_lookup, GoalPresent) and goal_lookup.status is not ThreadGoalStatus.COMPLETE:
+    if isinstance(goal_lookup, GoalPresent) and not is_terminal_goal_status(goal_lookup.status):
         return False
     if not await deps.release_session_mirror_output_target(codex_thread_id):
         return False

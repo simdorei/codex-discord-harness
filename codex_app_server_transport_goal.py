@@ -18,6 +18,13 @@ class ThreadGoalStatus(StrEnum):
     COMPLETE = "complete"
 
 
+def is_terminal_goal_status(status: ThreadGoalStatus) -> bool:
+    return status in {
+        ThreadGoalStatus.BLOCKED,
+        ThreadGoalStatus.COMPLETE,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class GoalAbsent:
     pass

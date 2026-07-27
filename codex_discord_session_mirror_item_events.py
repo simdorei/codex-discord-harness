@@ -13,7 +13,7 @@ from codex_discord_session_mirror_item_append import (
     remember,
 )
 from codex_discord_session_mirror_item_builders import SessionEvent, SessionMirrorItem
-from codex_app_server_transport_goal import ThreadGoalStatus
+from codex_app_server_transport_goal import is_terminal_goal_status
 from codex_app_server_transport_turn_outcomes import InterruptOrigin, TurnCompletion, TurnStatus
 
 ABORTED_PAYLOAD_TYPES = {"turn_aborted", "task_aborted", "task_cancelled"}
@@ -26,10 +26,10 @@ def payload_turn_id(payload: SessionPayload) -> str:
 def is_final_goal_turn(ctx: CollectionContext, turn_id: str) -> bool:
     goal_update = ctx.goal_updates.get(turn_id)
     if goal_update is not None:
-        return goal_update.status is ThreadGoalStatus.COMPLETE
+        return is_terminal_goal_status(goal_update.status)
     if ctx.goal_status is None:
         return True
-    if ctx.goal_status is not ThreadGoalStatus.COMPLETE:
+    if not is_terminal_goal_status(ctx.goal_status):
         return False
     return bool(turn_id and turn_id == ctx.latest_terminal_turn_id)
 
