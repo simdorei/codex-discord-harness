@@ -6,12 +6,18 @@ import time
 import uuid
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager
+from pathlib import Path
 from typing import Callable, IO
 
+from codex_app_server_stderr_log import (
+    APP_SERVER_STDERR_LOG_NAME,
+    AppServerStderrRecorder,
+)
 from codex_app_server_transport_children import ChildLifecycleSnapshot, ChildLifecycleTracker
 from codex_app_server_transport_messages import classify_app_server_transport_line
 from codex_app_server_transport_lifecycle import (
     AppServerGenerationMismatch,
+    AppServerGenerationQuarantinedError,
     AppServerLifecycleSnapshot,
     ChildCleanupRecycleOutcome,
     ChildCleanupRecycleStatus,
@@ -33,7 +39,10 @@ from codex_app_server_transport_replies import (
     JsonValue,
     extract_response_result,
 )
-from codex_app_server_transport_retry import ChildCleanupRetryCoordinator
+from codex_app_server_transport_retry import (
+    ChildCleanupRetryCoordinator,
+    RestartPendingRetryCoordinator,
+)
 from codex_app_server_transport_turn_outcomes import (
     TurnCompletion,
     TurnCompletionFound,
@@ -49,6 +58,8 @@ WallTimeFunc = Callable[[], float]
 ExternalWorkGuard = Callable[[], bool]
 GenerationSeedFunc = Callable[[], int]
 _decode_json_value: Callable[[str], JsonValue] = json.loads
+_MAX_FRESH_READ_RETRY_SECONDS = 25.0
+_AMBIGUOUS_TURN_START_GRACE_SECONDS = 25.0
 
 
 def _new_generation_seed() -> int:
@@ -64,6 +75,7 @@ class ResidentCodexAppServerTransport:
         monotonic_func: MonotonicFunc = time.monotonic,
         wall_time_func: WallTimeFunc = time.time,
         generation_seed_func: GenerationSeedFunc = _new_generation_seed,
+        stderr_log_path: Path | None = None,
     ) -> None:
         self.executable_resolver: Callable[[], str] = executable_resolver
         self.log_func: LogFunc | None = log_func
@@ -71,6 +83,12 @@ class ResidentCodexAppServerTransport:
         self.wall_time_func: WallTimeFunc = wall_time_func
         self.process: ResidentProcess | None = None
         self._stdout_thread: threading.Thread | None = None
+        self._stderr_recorder: AppServerStderrRecorder | None = None
+        self._stderr_log_path = (
+            stderr_log_path
+            if stderr_log_path is not None
+            else Path(__file__).resolve().parent / APP_SERVER_STDERR_LOG_NAME
+        )
         self._lock: threading.RLock = threading.RLock()
         self._write_lock: threading.Lock = threading.Lock()
         self._request_lock: threading.Lock = threading.Lock()
@@ -85,7 +103,14 @@ class ResidentCodexAppServerTransport:
         self._recycle_lock: threading.Lock = threading.Lock()
         self._external_work_guard: ExternalWorkGuard | None = None
         self._active_deliveries: int = 0
+        self._delivery_local = threading.local()
         self._draining: bool = False
+        self._closing: bool = False
+        self._quarantined_generation: int | None = None
+        self._restart_pending: bool = False
+        self._ambiguous_turn_start_thread_id: str | None = None
+        self._ambiguous_turn_start_request_id: str | None = None
+        self._ambiguous_turn_start_deadline: float | None = None
         self._closed_error: str | None = None
         self._initialized: bool = False
         self._started_at: float = 0.0
@@ -96,6 +121,10 @@ class ResidentCodexAppServerTransport:
             retry=self._retry_child_cleanup_once,
             log=self._log,
         )
+        self._restart_retry = RestartPendingRetryCoordinator(
+            retry=self._retry_restart_pending_once,
+            log=self._log,
+        )
 
     def _log(self, text: str) -> None:
         if self.log_func is not None:
@@ -104,53 +133,71 @@ class ResidentCodexAppServerTransport:
     def start(self) -> None:
         _ = self._request_lock.acquire()
         try:
-            with self._lock:
-                if self._is_running() and self._initialized:
-                    if self._draining:
-                        raise CodexAppServerTransportError("Resident Codex app-server is draining.")
-                    return
-                self.close_locked()
-                executable = self.executable_resolver()
-                self.process = start_resident_app_server_process(executable)
-                if not has_resident_app_server_stdio(self.process):
-                    self.close_locked()
-                    raise CodexAppServerTransportError("Resident Codex app-server stdio is unavailable.")
-
-                self._responses.clear()
-                self._active_request_id = None
-                self._pending.clear()
-                self._closed_error = None
-                self._initialized = False
-                self._started_at = time.time()
-                process = self.process
-                self._stdout_thread = threading.Thread(target=lambda: self._drain_stdout(process), daemon=True)
-                self._stdout_thread.start()
-
-            _ = self._request_started(
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "codex-discord-remote",
-                        "title": "Codex Discord Remote",
-                        "version": "1.0",
-                    },
-                    "capabilities": {"experimentalApi": True},
-                },
-                timeout_sec=8.0,
-                _request_slot_acquired=True,
-            )
-            self.notify("initialized", {})
-            with self._lock:
-                self._initialized = True
-                self._generation = (
-                    self._generation_seed if self._generation == 0 else self._generation + 1
-                )
-                self._accepting_since = self.wall_time_func()
-                self._children.reset(self._generation)
-                self._draining = False
-            self._log(f"app_server_transport_started executable={executable}")
+            self._start_with_request_slot_acquired()
         finally:
             self._request_lock.release()
+
+    def _start_with_request_slot_acquired(self) -> None:
+        with self._lock:
+            self._closing = False
+            if self._is_running() and self._initialized:
+                if self._draining or self._restart_pending:
+                    raise CodexAppServerTransportError("Resident Codex app-server is draining.")
+                return
+            self.close_locked()
+            executable = self.executable_resolver()
+            self.process = start_resident_app_server_process(executable)
+            if not has_resident_app_server_stdio(self.process):
+                self.close_locked()
+                raise CodexAppServerTransportError("Resident Codex app-server stdio is unavailable.")
+
+            self._stderr_recorder = AppServerStderrRecorder(
+                self.process,
+                self._stderr_log_path,
+                log=self._log,
+            )
+            self._stderr_recorder.start()
+            self._responses.clear()
+            self._active_request_id = None
+            self._pending.clear()
+            self._closed_error = None
+            self._initialized = False
+            self._started_at = time.time()
+            process = self.process
+            self._stdout_thread = threading.Thread(
+                target=lambda: self._drain_stdout(process),
+                daemon=True,
+            )
+            self._stdout_thread.start()
+
+        _ = self._request_started(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "codex-discord-remote",
+                    "title": "Codex Discord Remote",
+                    "version": "1.0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+            timeout_sec=8.0,
+            _request_slot_acquired=True,
+        )
+        self.notify("initialized", {})
+        with self._lock:
+            self._initialized = True
+            self._generation = (
+                self._generation_seed if self._generation == 0 else self._generation + 1
+            )
+            self._accepting_since = self.wall_time_func()
+            self._children.reset(self._generation)
+            self._draining = False
+            self._quarantined_generation = None
+            self._restart_pending = False
+            self._ambiguous_turn_start_thread_id = None
+            self._ambiguous_turn_start_request_id = None
+            self._ambiguous_turn_start_deadline = None
+        self._log(f"app_server_transport_started executable={executable}")
 
     def _is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -161,11 +208,20 @@ class ResidentCodexAppServerTransport:
 
     def lifecycle_snapshot(self) -> AppServerLifecycleSnapshot:
         with self._lock:
-            healthy = self._initialized and self._is_running() and not self._draining
+            quarantined = self._quarantined_generation == self._generation
+            healthy = (
+                self._initialized
+                and self._is_running()
+                and not self._draining
+                and not quarantined
+                and not self._restart_pending
+            )
             return AppServerLifecycleSnapshot(
                 generation=self._generation,
                 healthy=healthy,
                 accepting_since=self._accepting_since if healthy else None,
+                quarantined=quarantined,
+                restart_pending=self._restart_pending,
             )
 
     def _raise_for_generation_mismatch(self, expected_generation: int) -> None:
@@ -229,6 +285,10 @@ class ResidentCodexAppServerTransport:
                 self._condition.notify_all()
             elif classified.kind == "response" and message_id is not None:
                 if message_id != self._active_request_id:
+                    self._resolve_ambiguous_turn_start_from_late_response(
+                        message_id,
+                        message,
+                    )
                     self._log(f"app_server_transport_late_response_discarded id={message_id}")
                 else:
                     self._responses[message_id] = message
@@ -240,8 +300,68 @@ class ResidentCodexAppServerTransport:
                     log=self._log,
                 )
                 self._pending.record_notification(message, self._log, now=self.monotonic_func())
+                self._resolve_ambiguous_turn_start_from_notification(message)
                 self._condition.notify_all()
         self._cleanup_retry.wake()
+        self._restart_retry.wake()
+
+    def _resolve_ambiguous_turn_start_from_notification(
+        self,
+        message: JsonObject,
+    ) -> None:
+        ambiguous_thread_id = self._ambiguous_turn_start_thread_id
+        if ambiguous_thread_id is None:
+            return
+        method = str(message.get("method") or "")
+        if method not in ("turn/started", "turn/completed"):
+            return
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return
+        thread_id = str(params.get("threadId") or "")
+        if thread_id == ambiguous_thread_id:
+            self._clear_ambiguous_turn_start()
+            self._log(
+                "app_server_ambiguous_turn_start_resolved "
+                + f"thread={thread_id} notification={method}"
+            )
+
+    def _resolve_ambiguous_turn_start_from_late_response(
+        self,
+        request_id: str,
+        message: JsonObject,
+    ) -> None:
+        if request_id != self._ambiguous_turn_start_request_id:
+            return
+        thread_id = self._ambiguous_turn_start_thread_id
+        result = message.get("result")
+        if thread_id is not None and isinstance(result, dict):
+            turn = result.get("turn")
+            if isinstance(turn, dict):
+                turn_id = str(turn.get("id") or "").strip()
+                if turn_id:
+                    self._pending.record_notification(
+                        {
+                            "method": "turn/started",
+                            "params": {
+                                "threadId": thread_id,
+                                "turnId": turn_id,
+                            },
+                        },
+                        self._log,
+                        now=self.monotonic_func(),
+                    )
+        self._clear_ambiguous_turn_start()
+        outcome = "error" if "error" in message else "result"
+        self._log(
+            "app_server_ambiguous_turn_start_late_response "
+            + f"thread={thread_id or '-'} outcome={outcome}"
+        )
+
+    def _clear_ambiguous_turn_start(self) -> None:
+        self._ambiguous_turn_start_thread_id = None
+        self._ambiguous_turn_start_request_id = None
+        self._ambiguous_turn_start_deadline = None
 
     def close_locked(self) -> None:
         process = self.process
@@ -253,14 +373,21 @@ class ResidentCodexAppServerTransport:
             self._cleanup_retry.stop()
             return
         close_resident_app_server_process(process, self._log)
+        stderr_recorder = self._stderr_recorder
+        if stderr_recorder is not None:
+            stderr_recorder.close()
         self.process = None
         self._stdout_thread = None
+        self._stderr_recorder = None
         self._children.reset(self._generation)
         self._subscriptions.clear()
         self._cleanup_retry.stop()
 
     def close(self) -> None:
         with self._recycle_lock:
+            with self._condition:
+                self._closing = True
+            self._restart_retry.stop()
             with self._request_lock:
                 with self._condition:
                     self.close_locked()
@@ -276,7 +403,7 @@ class ResidentCodexAppServerTransport:
                     self.close_locked()
                     self._closed_error = "app-server restarting"
                     self._condition.notify_all()
-            self.start()
+                self._start_with_request_slot_acquired()
         except Exception:
             with self._condition:
                 self._draining = False
@@ -291,6 +418,16 @@ class ResidentCodexAppServerTransport:
         leased = False
         with self._condition:
             snapshot = self.lifecycle_snapshot()
+            if snapshot.quarantined or snapshot.restart_pending:
+                if expected_generation is None:
+                    raise AppServerGenerationQuarantinedError(
+                        generation=snapshot.generation
+                    )
+                raise AppServerGenerationMismatch(
+                    expected_generation=expected_generation,
+                    actual_generation=snapshot.generation,
+                    healthy=False,
+                )
             if expected_generation is not None and (
                 not snapshot.healthy or snapshot.generation != expected_generation
             ):
@@ -302,10 +439,14 @@ class ResidentCodexAppServerTransport:
             if snapshot.healthy:
                 self._active_deliveries += 1
                 leased = True
+                self._delivery_local.lease_count = (
+                    getattr(self._delivery_local, "lease_count", 0) + 1
+                )
         try:
             yield snapshot
         finally:
             if leased:
+                self._delivery_local.lease_count -= 1
                 with self._condition:
                     self._active_deliveries -= 1
                     self._condition.notify_all()
@@ -322,6 +463,11 @@ class ResidentCodexAppServerTransport:
             self._cleanup_retry.schedule(snapshot.generation)
         else:
             self._cleanup_retry.wake()
+        lifecycle = self.lifecycle_snapshot()
+        if lifecycle.restart_pending:
+            self._restart_retry.schedule(lifecycle.generation)
+        else:
+            self._restart_retry.wake()
 
     def child_lifecycle_snapshot(self) -> ChildLifecycleSnapshot:
         with self._lock:
@@ -425,6 +571,9 @@ class ResidentCodexAppServerTransport:
             self._recycle_lock.release()
 
     def try_restart_if_quiescent(self) -> bool:
+        snapshot = self.lifecycle_snapshot()
+        if snapshot.restart_pending:
+            return self._try_restart_pending_generation(snapshot.generation)
         if not self._recycle_lock.acquire(blocking=False):
             self._log("app_server_refresh_deferred reason=recycle_busy")
             return False
@@ -469,6 +618,81 @@ class ResidentCodexAppServerTransport:
             )
             return True
 
+    def _retry_restart_pending_once(self, generation: int) -> bool:
+        return self._try_restart_pending_generation(generation)
+
+    def _try_restart_pending_generation(
+        self,
+        generation: int,
+        *,
+        active_delivery_allowance: int = 0,
+    ) -> bool:
+        if not self._recycle_lock.acquire(blocking=False):
+            return False
+        try:
+            snapshot = self.lifecycle_snapshot()
+            if snapshot.generation != generation:
+                return True
+            if not snapshot.restart_pending:
+                return True
+            if self._closing:
+                return True
+            if self._external_work_blocks_restart():
+                return False
+            if not self._request_lock.acquire(blocking=False):
+                return False
+            try:
+                with self._condition:
+                    if self._generation != generation:
+                        return True
+                    blocker = self._pending_restart_blocker_locked(
+                        active_delivery_allowance=active_delivery_allowance
+                    )
+                    if blocker is not None:
+                        self._log(
+                            "app_server_restart_pending_deferred "
+                            + f"generation={generation} reason={blocker.value}"
+                        )
+                        return False
+                    self._draining = True
+                    self.close_locked()
+                    self._closed_error = "app-server restarting"
+                    self._condition.notify_all()
+                self._log(f"app_server_restart_pending_started generation={generation}")
+                self._start_with_request_slot_acquired()
+            finally:
+                self._request_lock.release()
+            self._log(
+                "app_server_restart_pending_completed "
+                + f"old_generation={generation} new_generation={self._generation}"
+            )
+            return True
+        finally:
+            self._recycle_lock.release()
+
+    def _pending_restart_blocker_locked(
+        self,
+        *,
+        active_delivery_allowance: int = 0,
+    ) -> ChildCleanupRecycleStatus | None:
+        if self._active_deliveries > active_delivery_allowance:
+            return ChildCleanupRecycleStatus.ACTIVE_DELIVERY
+        if self._pending.has_active_turns():
+            return ChildCleanupRecycleStatus.ACTIVE_TURN
+        if self._ambiguous_turn_start_thread_id is not None:
+            deadline = self._ambiguous_turn_start_deadline
+            if deadline is None or self.monotonic_func() < deadline:
+                return ChildCleanupRecycleStatus.PENDING_REQUEST
+            thread_id = self._ambiguous_turn_start_thread_id
+            self._clear_ambiguous_turn_start()
+            self._log(
+                "app_server_ambiguous_turn_start_grace_expired "
+                + f"thread={thread_id}"
+            )
+        if self._pending.has_pending_server_requests() or self._active_request_id is not None:
+            return ChildCleanupRecycleStatus.PENDING_REQUEST
+        return None
+
     def _child_recycle_blocker_locked(self) -> ChildCleanupRecycleStatus | None:
         if self._active_deliveries:
             return ChildCleanupRecycleStatus.ACTIVE_DELIVERY
@@ -504,15 +728,112 @@ class ResidentCodexAppServerTransport:
         *,
         timeout_sec: float = 10.0,
         expected_generation: int | None = None,
+        recovery_timeout_sec: float | None = None,
     ) -> JsonObject:
-        if expected_generation is None:
+        initial_snapshot = self.lifecycle_snapshot()
+        request_generation = initial_snapshot.generation
+        if expected_generation is None and not initial_snapshot.restart_pending:
             self.start()
-        return self._request_started(
-            method,
-            params or {},
-            timeout_sec=timeout_sec,
-            expected_generation=expected_generation,
+        request_params = params or {}
+        fresh_read_timeout = min(
+            _MAX_FRESH_READ_RETRY_SECONDS,
+            max(
+                0.0,
+                _MAX_FRESH_READ_RETRY_SECONDS
+                if recovery_timeout_sec is None
+                else recovery_timeout_sec,
+            ),
         )
+        pending_snapshot = self.lifecycle_snapshot()
+        if pending_snapshot.restart_pending:
+            if expected_generation is not None or fresh_read_timeout <= 0:
+                raise AppServerGenerationQuarantinedError(
+                    generation=pending_snapshot.generation
+                )
+            fresh_generation = self._prepare_fresh_read_generation(
+                method,
+                pending_snapshot.generation,
+            )
+            if fresh_generation is None:
+                raise AppServerGenerationQuarantinedError(
+                    generation=pending_snapshot.generation
+                )
+            return self._request_started(
+                method,
+                request_params,
+                timeout_sec=fresh_read_timeout,
+                expected_generation=fresh_generation,
+            )
+        try:
+            return self._request_started(
+                method,
+                request_params,
+                timeout_sec=timeout_sec,
+                expected_generation=expected_generation,
+            )
+        except TimeoutError:
+            if expected_generation is not None or fresh_read_timeout <= 0:
+                raise
+            fresh_generation = self._prepare_fresh_read_generation(
+                method,
+                request_generation,
+            )
+            if fresh_generation is None:
+                raise
+            return self._request_started(
+                method,
+                request_params,
+                timeout_sec=fresh_read_timeout,
+                expected_generation=fresh_generation,
+            )
+
+    def _prepare_fresh_read_generation(
+        self,
+        method: str,
+        timed_out_generation: int,
+    ) -> int | None:
+        if method != "thread/read":
+            return None
+        snapshot = self.lifecycle_snapshot()
+        if snapshot.generation == timed_out_generation and not self._try_restart_pending_generation(
+            timed_out_generation,
+            active_delivery_allowance=(
+                1 if getattr(self._delivery_local, "lease_count", 0) > 0 else 0
+            ),
+        ):
+            return None
+        fresh = self.lifecycle_snapshot()
+        if not fresh.healthy or fresh.generation == timed_out_generation:
+            return None
+        self._log(
+            "app_server_thread_read_retry_fresh_generation "
+            + f"old_generation={timed_out_generation} new_generation={fresh.generation}"
+        )
+        return fresh.generation
+
+    def _quarantine_after_response_timeout(
+        self,
+        method: str,
+        params: JsonMapping,
+        request_id: str,
+    ) -> None:
+        with self._condition:
+            generation = self._generation
+            self._quarantined_generation = generation
+            self._restart_pending = True
+            if method == "turn/start":
+                thread_id = str(params.get("threadId") or "").strip()
+                self._ambiguous_turn_start_thread_id = thread_id or "unknown"
+                self._ambiguous_turn_start_request_id = request_id
+                self._ambiguous_turn_start_deadline = (
+                    self.monotonic_func() + _AMBIGUOUS_TURN_START_GRACE_SECONDS
+                )
+            self._condition.notify_all()
+        self._log(
+            "app_server_response_timeout_quarantined "
+            + f"method={method} generation={generation}"
+        )
+        self._restart_retry.schedule(generation)
 
     def _request_started(
         self,
@@ -556,6 +877,11 @@ class ResidentCodexAppServerTransport:
                         )
                     remaining = deadline - self.monotonic_func()
                     if remaining <= 0:
+                        self._quarantine_after_response_timeout(
+                            method,
+                            params,
+                            request_id,
+                        )
                         raise TimeoutError(f"Timed out waiting for app-server response to {method}.")
                     _ = self._condition.wait(timeout=min(remaining, 0.5))
         finally:
@@ -567,6 +893,7 @@ class ResidentCodexAppServerTransport:
             if not _request_slot_acquired:
                 self._request_lock.release()
             self._cleanup_retry.wake()
+            self._restart_retry.wake()
 
     def notify(self, method: str, params: JsonMapping | None = None) -> None:
         self._write_message({"method": method, "params": dict(params or {})})

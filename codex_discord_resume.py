@@ -12,8 +12,10 @@ from codex_app_server_transport_replies import (
 )
 from codex_app_server_transport_threads import get_thread_status_type
 
-MANUAL_RESUME_TIMEOUT_SEC: Final = 30.0
+MANUAL_RESUME_TIMEOUT_SEC: Final = 60.0
 THREAD_READ_TIMEOUT_SEC: Final = 8.0
+THREAD_READ_RECOVERY_TIMEOUT_SEC: Final = 25.0
+THREAD_READ_RESTART_OVERHEAD_SEC: Final = 15.0
 
 
 class ResidentThreadClient(Protocol):
@@ -23,6 +25,7 @@ class ResidentThreadClient(Protocol):
         *,
         include_turns: bool = False,
         timeout_sec: float = THREAD_READ_TIMEOUT_SEC,
+        recovery_timeout_sec: float | None = None,
     ) -> JsonObject: ...
 
     def resume_thread(self, thread_id: str, *, timeout_sec: float = 10.0) -> JsonObject: ...
@@ -124,10 +127,18 @@ def _read_thread_with_deadline(
     monotonic_func: Callable[[], float],
 ) -> JsonObject:
     remaining = _remaining_or_raise(thread_id, deadline, monotonic_func)
+    first_timeout = min(THREAD_READ_TIMEOUT_SEC, remaining)
     response = client.read_thread(
         thread_id,
         include_turns=False,
-        timeout_sec=min(THREAD_READ_TIMEOUT_SEC, remaining),
+        timeout_sec=first_timeout,
+        recovery_timeout_sec=min(
+            THREAD_READ_RECOVERY_TIMEOUT_SEC,
+            max(
+                0.0,
+                remaining - first_timeout - THREAD_READ_RESTART_OVERHEAD_SEC,
+            ),
+        ),
     )
     thread = response.get("thread")
     if not isinstance(thread, dict):

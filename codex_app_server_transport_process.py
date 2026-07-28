@@ -97,7 +97,7 @@ def start_owned_app_server_command(command: Sequence[str]) -> OwnedResidentProce
         list(command),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",

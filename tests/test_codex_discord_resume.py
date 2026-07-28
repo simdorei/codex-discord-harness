@@ -69,34 +69,46 @@ class ResidentThreadRecoveryTests(unittest.TestCase):
         self.assertEqual(client.resume_calls, [])
         self.assertEqual(client.read_count, 1)
 
-    def test_not_loaded_thread_resumes_for_thirty_seconds_and_is_confirmed(self) -> None:
+    def test_not_loaded_thread_uses_default_sixty_second_budget_and_is_confirmed(self) -> None:
         client = _RecoveryClient(("notLoaded", "idle"))
 
         result = resume.recover_resident_thread(
             client,
             "thread-1",
-            timeout_sec=30.0,
             monotonic_func=lambda: 100.0,
         )
 
         self.assertEqual(result.state, resume.ResumeRecoveryState.RECOVERED)
-        self.assertEqual(client.resume_calls, [("thread-1", 30.0)])
+        self.assertEqual(client.resume_calls, [("thread-1", 60.0)])
         self.assertEqual(client.read_count, 2)
 
-    def test_read_resume_and_confirmation_share_one_thirty_second_budget(self) -> None:
+    def test_read_resume_and_confirmation_share_one_sixty_second_budget(self) -> None:
         client = _RecoveryClient(("notLoaded", "idle"))
-        clock_values = iter((100.0, 100.0, 108.0, 128.0))
+        clock_values = iter((100.0, 100.0, 108.0, 153.0))
 
         result = resume.recover_resident_thread(
             client,
             "thread-1",
-            timeout_sec=30.0,
             monotonic_func=lambda: next(clock_values),
         )
 
         self.assertEqual(result.state, resume.ResumeRecoveryState.RECOVERED)
-        self.assertEqual(client.resume_calls, [("thread-1", 22.0)])
-        self.assertEqual(client.read_timeouts, [8.0, 2.0])
+        self.assertEqual(client.resume_calls, [("thread-1", 52.0)])
+        self.assertEqual(client.read_timeouts, [8.0, 7.0])
+        self.assertEqual(client.read_recovery_timeouts, [25.0, 0.0])
+
+    def test_recovery_budget_reserves_restart_and_initialize_overhead(self) -> None:
+        client = _RecoveryClient(("idle",))
+
+        _ = resume.recover_resident_thread(
+            client,
+            "thread-1",
+            timeout_sec=40.0,
+            monotonic_func=lambda: 100.0,
+        )
+
+        self.assertEqual(client.read_timeouts, [8.0])
+        self.assertEqual(client.read_recovery_timeouts, [17.0])
 
     def test_still_not_loaded_thread_surfaces_confirmation_failure(self) -> None:
         client = _RecoveryClient(("notLoaded", "notLoaded"))
@@ -115,6 +127,7 @@ class _RecoveryClient:
         self.statuses: list[str] = list(statuses)
         self.read_count: int = 0
         self.read_timeouts: list[float] = []
+        self.read_recovery_timeouts: list[float | None] = []
         self.resume_calls: list[tuple[str, float]] = []
 
     def read_thread(
@@ -123,10 +136,12 @@ class _RecoveryClient:
         *,
         include_turns: bool = False,
         timeout_sec: float = 8.0,
+        recovery_timeout_sec: float | None = None,
     ) -> JsonObject:
         _ = include_turns
         self.read_count += 1
         self.read_timeouts.append(timeout_sec)
+        self.read_recovery_timeouts.append(recovery_timeout_sec)
         status = self.statuses.pop(0)
         return {"thread": {"id": thread_id, "status": {"type": status}}}
 

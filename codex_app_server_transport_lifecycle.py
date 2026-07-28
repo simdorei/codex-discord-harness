@@ -11,10 +11,22 @@ class AppServerLifecycleSnapshot:
     generation: int
     healthy: bool
     accepting_since: float | None
+    quarantined: bool = False
+    restart_pending: bool = False
 
 
 class AppServerGenerationExpiredError(CodexAppServerTransportError):
     pass
+
+
+class AppServerGenerationQuarantinedError(AppServerGenerationExpiredError):
+    generation: int
+
+    def __init__(self, *, generation: int) -> None:
+        super().__init__(
+            f"Codex app-server generation {generation} is quarantined pending a safe restart."
+        )
+        self.generation = generation
 
 
 class AppServerGenerationMismatch(AppServerGenerationExpiredError):

@@ -47,7 +47,7 @@ class ResidentAppServerProcessHelperTests(unittest.TestCase):
         self.assertEqual(args, ["codex.exe", "app-server"])
         self.assertEqual(kwargs["stdin"], subprocess.PIPE)
         self.assertEqual(kwargs["stdout"], subprocess.PIPE)
-        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], subprocess.PIPE)
         self.assertTrue(kwargs["text"])
         self.assertEqual(kwargs["encoding"], "utf-8")
         self.assertEqual(kwargs["errors"], "replace")
@@ -304,6 +304,295 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             transport.release_request_slot()
 
         self.assertEqual(transport.written_messages, [])
+
+    def test_response_timeout_quarantines_generation_and_rejects_new_delivery(self) -> None:
+        transport = _RequestBoundaryProbe()
+        process = _process()
+        restarted = threading.Event()
+        transport.install_lifecycle(process, generation=1)
+        transport.seed_active_turn()
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to turn/start"):
+                _ = transport.request(
+                    "turn/start",
+                    {"threadId": "thread-1"},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+
+            snapshot = transport.lifecycle_snapshot()
+            self.assertFalse(snapshot.healthy)
+            self.assertTrue(snapshot.quarantined)
+            self.assertTrue(snapshot.restart_pending)
+            self.assertIs(transport.process, process)
+            self.assertIsNone(process.poll())
+            self.assertFalse(restarted.wait(timeout=0.05))
+            with self.assertRaises(transport_mod.AppServerGenerationExpiredError):
+                with transport.delivery_admission(1):
+                    self.fail("quarantined generation admitted a new delivery")
+            self.assertEqual(
+                [message["method"] for message in transport.written_messages],
+                ["turn/start"],
+            )
+
+            transport.clear_active_turn()
+            transport.notify_child_cleanup_blocker_changed()
+            self.assertFalse(restarted.wait(timeout=0.05))
+            transport.resolve_ambiguous_turn_start("thread-1")
+            self.assertTrue(restarted.wait(timeout=2.0))
+
+    def test_thread_read_retries_once_on_fresh_generation_with_capped_budget(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+
+        result = transport.request(
+            "thread/read",
+            {"threadId": "thread-1"},
+            timeout_sec=8.0,
+        )
+
+        self.assertEqual(result, {"thread": {"id": "thread-1"}})
+        self.assertEqual(transport.restart_calls, 1)
+        self.assertEqual(
+            transport.requests,
+            [
+                ("thread/read", 8.0, None),
+                ("thread/read", 25.0, 2),
+            ],
+        )
+
+    def test_thread_read_can_replace_its_generation_inside_sole_delivery_lease(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+
+        with transport.delivery_admission(1):
+            result = transport.request(
+                "thread/read",
+                {"threadId": "thread-1"},
+                timeout_sec=8.0,
+            )
+
+        self.assertEqual(result, {"thread": {"id": "thread-1"}})
+        self.assertEqual(transport.restart_calls, 1)
+        self.assertEqual(
+            transport.requests,
+            [
+                ("thread/read", 8.0, None),
+                ("thread/read", 25.0, 2),
+            ],
+        )
+
+    def test_thread_read_does_not_claim_an_unrelated_delivery_lease(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        lease_entered = threading.Event()
+        release_lease = threading.Event()
+
+        def hold_unrelated_lease() -> None:
+            with transport.delivery_admission(1):
+                lease_entered.set()
+                self.assertTrue(release_lease.wait(timeout=2.0))
+
+        lease_thread = threading.Thread(target=hold_unrelated_lease)
+        lease_thread.start()
+        self.assertTrue(lease_entered.wait(timeout=2.0))
+        try:
+            with self.assertRaisesRegex(TimeoutError, "thread/read timed out"):
+                _ = transport.request(
+                    "thread/read",
+                    {"threadId": "thread-1"},
+                    timeout_sec=8.0,
+                )
+            self.assertEqual(transport.restart_calls, 0)
+            self.assertEqual(transport.requests, [("thread/read", 8.0, None)])
+        finally:
+            release_lease.set()
+            lease_thread.join(timeout=2.0)
+            transport.stop_restart_retry()
+
+    def test_thread_read_with_expected_generation_never_crosses_generation(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.seed_active_turn()
+
+        with self.assertRaisesRegex(TimeoutError, "thread/read timed out"):
+            _ = transport.request(
+                "thread/read",
+                {"threadId": "thread-1"},
+                timeout_sec=8.0,
+                expected_generation=1,
+            )
+
+        self.assertEqual(transport.requests, [("thread/read", 8.0, 1)])
+        transport.stop_restart_retry()
+
+    def test_turn_start_timeout_never_replays_non_idempotent_request(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.seed_active_turn()
+
+        with self.assertRaisesRegex(TimeoutError, "turn/start timed out"):
+            _ = transport.request(
+                "turn/start",
+                {"threadId": "thread-1"},
+                timeout_sec=12.0,
+                expected_generation=1,
+            )
+
+        self.assertEqual(transport.restart_calls, 0)
+        self.assertEqual(transport.requests, [("turn/start", 12.0, 1)])
+        transport.stop_restart_retry()
+
+    def test_ambiguous_turn_start_restarts_after_signal_grace_expires(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to turn/start"):
+                _ = transport.request(
+                    "turn/start",
+                    {"threadId": "thread-1"},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+            self.assertFalse(restarted.wait(timeout=0.05))
+
+            transport.expire_ambiguous_turn_start()
+            self.assertTrue(restarted.wait(timeout=2.0))
+
+    def test_late_turn_start_error_response_releases_pending_restart(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to turn/start"):
+                _ = transport.request(
+                    "turn/start",
+                    {"threadId": "thread-1"},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+            request_id = str(transport.written_messages[0]["id"])
+            transport.handle_raw_line(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "error": {"code": -32000, "message": "not accepted"},
+                    }
+                )
+            )
+
+            self.assertTrue(restarted.wait(timeout=2.0))
+            self.assertEqual(
+                [message["method"] for message in transport.written_messages],
+                ["turn/start"],
+            )
+
+    def test_pending_restart_waits_for_delivery_exit_then_retries_automatically(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with transport.delivery_admission(1):
+                with self.assertRaisesRegex(TimeoutError, "response to thread/goal/get"):
+                    _ = transport.request(
+                        "thread/goal/get",
+                        {"threadId": "thread-1"},
+                        timeout_sec=0.01,
+                        expected_generation=1,
+                    )
+                self.assertFalse(restarted.wait(timeout=0.05))
+
+            self.assertTrue(restarted.wait(timeout=2.0))
+
+    def test_pending_restart_waits_for_server_request_and_external_work(self) -> None:
+        for blocker in ("server_request", "external_work"):
+            with self.subTest(blocker=blocker):
+                transport = _RequestBoundaryProbe()
+                restarted = threading.Event()
+                external_work = [blocker == "external_work"]
+                transport.install_lifecycle(_process(), generation=1)
+                if blocker == "server_request":
+                    transport.seed_pending_server_request()
+                else:
+                    transport.set_external_work_guard(lambda: external_work[0])
+
+                with mock.patch.object(
+                    transport,
+                    "_start_with_request_slot_acquired",
+                    side_effect=restarted.set,
+                ):
+                    with self.assertRaisesRegex(TimeoutError, "response to thread/goal/get"):
+                        _ = transport.request(
+                            "thread/goal/get",
+                            {"threadId": "thread-1"},
+                            timeout_sec=0.01,
+                            expected_generation=1,
+                        )
+                    self.assertFalse(restarted.wait(timeout=0.05))
+
+                    if blocker == "server_request":
+                        transport.resolve_pending_server_request()
+                    else:
+                        external_work[0] = False
+                        transport.notify_child_cleanup_blocker_changed()
+                    self.assertTrue(restarted.wait(timeout=2.0))
+
+    def test_pending_restart_ignores_subscriptions_when_other_work_is_quiescent(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.mark_thread_subscribed("thread-1")
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to thread/goal/get"):
+                _ = transport.request(
+                    "thread/goal/get",
+                    {"threadId": "thread-1"},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+
+            self.assertTrue(restarted.wait(timeout=2.0))
+            self.assertFalse(transport.is_thread_subscribed("thread-1"))
+
+    def test_explicit_close_prevents_pending_retry_from_restarting_server(self) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        with transport._condition:
+            transport._quarantined_generation = 1
+            transport._restart_pending = True
+
+        transport.close()
+        settled = transport._retry_restart_pending_once(1)
+
+        self.assertTrue(settled)
+        self.assertIsNone(transport.process)
+        self.assertFalse(transport.is_running())
 
     def test_expected_generation_does_not_auto_start_an_unhealthy_server(self) -> None:
         resolver_calls: list[bool] = []
@@ -576,6 +865,54 @@ class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
     def seed_active_request(self, request_id: str) -> None:
         self._active_request_id = request_id
 
+    def seed_active_turn(self) -> None:
+        self._pending.record_notification(
+            {
+                "method": "turn/started",
+                "params": {"threadId": "thread-1", "turnId": "turn-1"},
+            },
+            lambda _line: None,
+            now=self.monotonic_func(),
+        )
+
+    def clear_active_turn(self) -> None:
+        self._pending.active_turns.clear()
+
+    def resolve_ambiguous_turn_start(self, thread_id: str) -> None:
+        with self._condition:
+            self._resolve_ambiguous_turn_start_from_notification(
+                {
+                    "method": "turn/completed",
+                    "params": {"threadId": thread_id},
+                }
+            )
+            self._condition.notify_all()
+        self._restart_retry.wake()
+
+    def expire_ambiguous_turn_start(self) -> None:
+        with self._condition:
+            self._ambiguous_turn_start_deadline = self.monotonic_func() - 1.0
+            self._condition.notify_all()
+        self._restart_retry.wake()
+
+    def seed_pending_server_request(self) -> None:
+        self._pending.record_server_request(
+            "approval-1",
+            {
+                "id": "approval-1",
+                "method": "item/tool/requestUserInput",
+                "params": {"threadId": "thread-1"},
+            },
+            lambda _line: None,
+        )
+
+    def resolve_pending_server_request(self) -> None:
+        self._pending.resolve_request("approval-1")
+        self.notify_child_cleanup_blocker_changed()
+
+    def stop_restart_retry(self) -> None:
+        self._restart_retry.stop()
+
     def handle_raw_line(self, raw_line: str) -> None:
         self._handle_raw_line(raw_line)
 
@@ -587,6 +924,45 @@ class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
         self.written_messages.append(dict(payload))
 
 
+@final
+class _ReadRecoveryProbe(_RequestBoundaryProbe):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[tuple[str, float, int | None]] = []
+        self.restart_calls = 0
+
+    @override
+    def _request_started(
+        self,
+        method: str,
+        params: JsonMapping,
+        *,
+        timeout_sec: float,
+        expected_generation: int | None = None,
+        _request_slot_acquired: bool = False,
+    ) -> JsonObject:
+        _ = (params, _request_slot_acquired)
+        self.requests.append((method, timeout_sec, expected_generation))
+        if len(self.requests) == 1:
+            self._quarantine_after_response_timeout(method, params, "request-1")
+            raise TimeoutError(f"{method} timed out")
+        return {"thread": {"id": "thread-1"}}
+
+    @override
+    def _start_with_request_slot_acquired(self) -> None:
+        if self._is_running() and self._initialized and not self._restart_pending:
+            return
+        self.restart_calls += 1
+        with self._condition:
+            self.process = _process()
+            self._generation += 1
+            self._initialized = True
+            self._draining = False
+            self._quarantined_generation = None
+            self._restart_pending = False
+            self._condition.notify_all()
+
+
 class _FakeThread:
     def __init__(self, *, target: Callable[[], None], daemon: bool) -> None:
         self.target: Callable[[], None] = target
@@ -595,6 +971,12 @@ class _FakeThread:
 
     def start(self) -> None:
         self.started = True
+
+    def join(self, timeout: float | None = None) -> None:
+        _ = timeout
+
+    def is_alive(self) -> bool:
+        return False
 
 
 _DEFAULT_PIPE: Final = object()

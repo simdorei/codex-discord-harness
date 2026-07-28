@@ -130,15 +130,22 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         include_turns: bool = False,
         timeout_sec: float = 8.0,
         expected_generation: int | None = None,
+        recovery_timeout_sec: float | None = None,
     ) -> JsonObject:
         params = {"threadId": thread_id, "includeTurns": include_turns}
         if expected_generation is None:
-            return self.request("thread/read", params, timeout_sec=timeout_sec)
+            return self.request(
+                "thread/read",
+                params,
+                timeout_sec=timeout_sec,
+                recovery_timeout_sec=recovery_timeout_sec,
+            )
         return self.request(
             "thread/read",
             params,
             timeout_sec=timeout_sec,
             expected_generation=expected_generation,
+            recovery_timeout_sec=recovery_timeout_sec,
         )
 
     def get_thread_goal_status(
