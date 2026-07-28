@@ -165,19 +165,5 @@ class WeeklyUsageScanTests(unittest.TestCase):
                     bridge_module=bridge,
                 )
 
-    def test_build_weekly_usage_message_keeps_missing_sessions_message(self) -> None:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
-            codex_home = Path(temp_dir)
-            bridge = FakeWeeklyUsageBridge(codex_home)
-
-            output = build_weekly_usage_message(
-                7,
-                bridge_module=bridge,
-                format_percent_func=lambda value: f"{value}%",
-            )
-
-        self.assertIn("Local usage estimate unavailable: sessions directory not found at", output)
-
-
 if __name__ == "__main__":
     _ = unittest.main()

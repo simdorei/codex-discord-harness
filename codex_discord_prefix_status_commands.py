@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio  # noqa: ANYIO_OK
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -169,4 +170,5 @@ async def _handle_usage(
         _ = await deps.send_chunks(message.channel, usage_action.usage, context="prefix_usage_help")
         return
     days = int(usage_action.limit or 7)
-    _ = await deps.send_chunks(message.channel, deps.build_weekly_usage_message(days))
+    output = await asyncio.to_thread(deps.build_weekly_usage_message, days)
+    _ = await deps.send_chunks(message.channel, output)

@@ -183,11 +183,14 @@ def register_basic_slash_commands(bot: SlashCommandBot, deps: BasicSlashCommandD
             output = deps.build_context(interaction.channel_id, all_threads=all_threads, limit=20)
         await deps.send_chunks(interaction, output, title="Context")
 
-    @bot.tree.command(name="usage", description="Show local Codex usage estimate.")
+    @bot.tree.command(name="usage", description="Show live Codex usage and rate limits.")
     async def slash_usage(interaction: SlashInteraction, days: int = 7) -> None:
         if not await _prepare_basic_slash_interaction(interaction, deps):
             return
-        output = deps.build_weekly_usage(days=max(1, min(30, days)))
+        output = await asyncio.to_thread(
+            deps.build_weekly_usage,
+            days=max(1, min(30, days)),
+        )
         await deps.send_chunks(interaction, output, title="Usage")
 
     _ = (
