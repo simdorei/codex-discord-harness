@@ -9,7 +9,14 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
 
 ## Prepare the chat
 
-1. Load the applicable Chrome or built-in Browser control skill before browser actions. Respect any user or repository rule that selects a browser.
+1. Load the applicable Chrome or built-in Browser control skill before browser
+   actions. Respect any user or repository rule that selects a browser. When the
+   invocation includes `[@Browser](plugin://browser@openai-bundled)`, acquire the
+   in-app Browser and open `https://chatgpt.com/` yourself when no usable tab
+   exists. Do not ask the user to pre-open it or silently substitute Chrome.
+   Request user action only for login, OTP, CAPTCHA, or when the Browser runtime
+   still explicitly reports the in-app Browser unavailable after its prescribed
+   troubleshooting.
 2. Route the browser conversation before sending anything:
    - When `<local-project-mcp>` supplies `conversation_scope`, keep a persistent
      browser-runtime map keyed by that value. Store the tab binding and canonical
