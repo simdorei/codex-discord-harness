@@ -61,6 +61,8 @@ GenerationSeedFunc = Callable[[], int]
 _decode_json_value: Callable[[str], JsonValue] = json.loads
 _MAX_FRESH_READ_RETRY_SECONDS = 25.0
 _AMBIGUOUS_TURN_START_GRACE_SECONDS = 25.0
+_READ_TIMEOUT_DEGRADED_THRESHOLD = 2
+_MAX_TIMED_OUT_THREAD_READS = 64
 
 
 def _new_generation_seed() -> int:
@@ -112,9 +114,8 @@ class ResidentCodexAppServerTransport:
         self._ambiguous_turn_start_thread_id: str | None = None
         self._ambiguous_turn_start_request_id: str | None = None
         self._ambiguous_turn_start_deadline: float | None = None
-        self._timed_out_thread_read_request_id: str | None = None
-        self._timed_out_thread_read_thread_id: str | None = None
-        self._timed_out_thread_read_turn_id: str | None = None
+        self._timed_out_thread_reads: dict[str, tuple[str, str]] = {}
+        self._consecutive_read_timeouts: int = 0
         self._closed_error: str | None = None
         self._initialized: bool = False
         self._started_at: float = 0.0
@@ -201,7 +202,7 @@ class ResidentCodexAppServerTransport:
             self._ambiguous_turn_start_thread_id = None
             self._ambiguous_turn_start_request_id = None
             self._ambiguous_turn_start_deadline = None
-            self._clear_timed_out_thread_read()
+            self._clear_timed_out_thread_reads()
         self._log(f"app_server_transport_started executable={executable}")
 
     def _is_running(self) -> bool:
@@ -227,6 +228,10 @@ class ResidentCodexAppServerTransport:
                 accepting_since=self._accepting_since if healthy else None,
                 quarantined=quarantined,
                 restart_pending=self._restart_pending,
+                read_degraded=(
+                    self._consecutive_read_timeouts >= _READ_TIMEOUT_DEGRADED_THRESHOLD
+                ),
+                consecutive_read_timeouts=self._consecutive_read_timeouts,
             )
 
     def _raise_for_generation_mismatch(self, expected_generation: int) -> None:
@@ -377,13 +382,13 @@ class ResidentCodexAppServerTransport:
         request_id: str,
         message: JsonObject,
     ) -> None:
-        if request_id != self._timed_out_thread_read_request_id:
+        timed_out_read = self._timed_out_thread_reads.pop(request_id, None)
+        if timed_out_read is None:
             return
-        thread_id = self._timed_out_thread_read_thread_id
-        turn_id = self._timed_out_thread_read_turn_id
-        self._clear_timed_out_thread_read()
+        thread_id, turn_id = timed_out_read
+        self._record_thread_read_response()
         result = message.get("result")
-        if not thread_id or not turn_id or not isinstance(result, dict):
+        if not isinstance(result, dict):
             return
         thread = result.get("thread")
         if not isinstance(thread, dict) or str(thread.get("id") or "").strip() != thread_id:
@@ -392,10 +397,12 @@ class ResidentCodexAppServerTransport:
             return
         _ = self._pending.reconcile_inactive_thread(thread_id, turn_id, self._log)
 
-    def _clear_timed_out_thread_read(self) -> None:
-        self._timed_out_thread_read_request_id = None
-        self._timed_out_thread_read_thread_id = None
-        self._timed_out_thread_read_turn_id = None
+    def _record_thread_read_response(self) -> None:
+        self._consecutive_read_timeouts = 0
+
+    def _clear_timed_out_thread_reads(self) -> None:
+        self._timed_out_thread_reads.clear()
+        self._record_thread_read_response()
 
     def close_locked(self) -> None:
         process = self.process
@@ -803,6 +810,8 @@ class ResidentCodexAppServerTransport:
                 expected_generation=expected_generation,
             )
         except TimeoutError:
+            if method == "thread/read":
+                raise
             if expected_generation is not None or fresh_read_timeout <= 0:
                 raise
             fresh_generation = self._prepare_fresh_read_generation(
@@ -850,6 +859,21 @@ class ResidentCodexAppServerTransport:
     ) -> None:
         with self._condition:
             generation = self._generation
+            if method == "thread/read":
+                self._consecutive_read_timeouts += 1
+                thread_id = str(params.get("threadId") or "").strip()
+                turn_id = self._pending.active_turn_id(thread_id)
+                if thread_id and turn_id:
+                    if len(self._timed_out_thread_reads) >= _MAX_TIMED_OUT_THREAD_READS:
+                        oldest_request_id = next(iter(self._timed_out_thread_reads))
+                        del self._timed_out_thread_reads[oldest_request_id]
+                    self._timed_out_thread_reads[request_id] = (thread_id, turn_id)
+                self._condition.notify_all()
+                self._log(
+                    "app_server_thread_read_timeout_isolated "
+                    + f"generation={generation} consecutive={self._consecutive_read_timeouts}"
+                )
+                return
             self._quarantined_generation = generation
             self._restart_pending = True
             if method == "turn/start":
@@ -859,13 +883,6 @@ class ResidentCodexAppServerTransport:
                 self._ambiguous_turn_start_deadline = (
                     self.monotonic_func() + _AMBIGUOUS_TURN_START_GRACE_SECONDS
                 )
-            elif method == "thread/read":
-                thread_id = str(params.get("threadId") or "").strip()
-                turn_id = self._pending.active_turn_id(thread_id)
-                if thread_id and turn_id:
-                    self._timed_out_thread_read_request_id = request_id
-                    self._timed_out_thread_read_thread_id = thread_id
-                    self._timed_out_thread_read_turn_id = turn_id
             self._condition.notify_all()
         self._log(
             "app_server_response_timeout_quarantined "
@@ -908,6 +925,8 @@ class ResidentCodexAppServerTransport:
                 while True:
                     response = self._responses.pop(request_id, None)
                     if response is not None:
+                        if method == "thread/read":
+                            self._record_thread_read_response()
                         return extract_response_result(method, response)
                     if self._closed_error and not self._is_running():
                         raise CodexAppServerTransportError(

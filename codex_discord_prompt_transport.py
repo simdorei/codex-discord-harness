@@ -88,6 +88,15 @@ def _transport_error_output(exc: Exception) -> str:
                 "The failed prompt was not resent automatically.",
             ]
         )
+    if isinstance(exc, TimeoutError) and "thread/read" in message:
+        lines.extend(
+            [
+                "",
+                "Only this thread status check timed out. This timeout did not stop or restart other Codex threads.",
+                "Run `!resume` to check this thread again, then resend the original message.",
+                "The failed prompt was not sent.",
+            ]
+        )
     return "\n".join(lines)
 
 

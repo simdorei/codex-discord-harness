@@ -346,7 +346,7 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             transport.resolve_ambiguous_turn_start("thread-1")
             self.assertTrue(restarted.wait(timeout=2.0))
 
-    def test_quarantined_generation_without_expected_generation_yields_unhealthy_snapshot(
+    def test_thread_read_timeout_keeps_generation_healthy_for_other_deliveries(
         self,
     ) -> None:
         transport = _RequestBoundaryProbe()
@@ -358,52 +358,76 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             "request-1",
         )
 
-        with transport.delivery_admission() as snapshot:
-            self.assertFalse(snapshot.healthy)
-            self.assertTrue(snapshot.quarantined)
+        with transport.delivery_admission(1) as snapshot:
+            self.assertTrue(snapshot.healthy)
+            self.assertFalse(snapshot.quarantined)
+            self.assertFalse(snapshot.restart_pending)
+            self.assertEqual(snapshot.consecutive_read_timeouts, 1)
+            self.assertFalse(snapshot.read_degraded)
 
         transport.stop_restart_retry()
 
-    def test_thread_read_retries_once_on_fresh_generation_with_capped_budget(self) -> None:
+    def test_thread_read_timeout_does_not_restart_or_retry_the_generation(self) -> None:
         transport = _ReadRecoveryProbe()
         transport.install_lifecycle(_process(), generation=1)
+
+        with self.assertRaisesRegex(TimeoutError, "thread/read timed out"):
+            _ = transport.request(
+                "thread/read",
+                {"threadId": "thread-1"},
+                timeout_sec=8.0,
+            )
+
+        self.assertEqual(transport.restart_calls, 0)
+        self.assertEqual(transport.requests, [("thread/read", 8.0, None)])
+        self.assertTrue(transport.lifecycle_snapshot().healthy)
+
+    def test_successful_thread_read_clears_degraded_read_state(self) -> None:
+        transport = _ReadRecoveryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+
+        with self.assertRaisesRegex(TimeoutError, "thread/read timed out"):
+            _ = transport.request(
+                "thread/read",
+                {"threadId": "thread-1"},
+                timeout_sec=8.0,
+            )
+        transport._quarantine_after_response_timeout(
+            "thread/read",
+            {"threadId": "thread-2"},
+            "request-2",
+        )
+        self.assertTrue(transport.lifecycle_snapshot().read_degraded)
 
         result = transport.request(
             "thread/read",
             {"threadId": "thread-1"},
             timeout_sec=8.0,
         )
-
         self.assertEqual(result, {"thread": {"id": "thread-1"}})
-        self.assertEqual(transport.restart_calls, 1)
-        self.assertEqual(
-            transport.requests,
-            [
-                ("thread/read", 8.0, None),
-                ("thread/read", 25.0, 2),
-            ],
-        )
+        snapshot = transport.lifecycle_snapshot()
+        self.assertEqual(snapshot.consecutive_read_timeouts, 0)
+        self.assertFalse(snapshot.read_degraded)
 
-    def test_thread_read_can_replace_its_generation_inside_sole_delivery_lease(self) -> None:
-        transport = _ReadRecoveryProbe()
+    def test_repeated_thread_read_timeouts_mark_only_read_channel_degraded(self) -> None:
+        transport = _RequestBoundaryProbe()
         transport.install_lifecycle(_process(), generation=1)
 
-        with transport.delivery_admission(1):
-            result = transport.request(
-                "thread/read",
-                {"threadId": "thread-1"},
-                timeout_sec=8.0,
-            )
-
-        self.assertEqual(result, {"thread": {"id": "thread-1"}})
-        self.assertEqual(transport.restart_calls, 1)
-        self.assertEqual(
-            transport.requests,
-            [
-                ("thread/read", 8.0, None),
-                ("thread/read", 25.0, 2),
-            ],
+        transport._quarantine_after_response_timeout(
+            "thread/read",
+            {"threadId": "thread-1"},
+            "request-1",
         )
+        transport._quarantine_after_response_timeout(
+            "thread/read",
+            {"threadId": "thread-2"},
+            "request-2",
+        )
+
+        snapshot = transport.lifecycle_snapshot()
+        self.assertTrue(snapshot.healthy)
+        self.assertTrue(snapshot.read_degraded)
+        self.assertEqual(snapshot.consecutive_read_timeouts, 2)
 
     def test_thread_read_does_not_claim_an_unrelated_delivery_lease(self) -> None:
         transport = _ReadRecoveryProbe()
@@ -521,7 +545,7 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
                 ["turn/start"],
             )
 
-    def test_late_idle_thread_read_reconciles_stale_active_turn_and_restarts(self) -> None:
+    def test_late_idle_thread_read_reconciles_stale_active_turn_without_restart(self) -> None:
         transport = _RequestBoundaryProbe()
         restarted = threading.Event()
         transport.install_lifecycle(_process(), generation=1)
@@ -555,7 +579,8 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
                 )
             )
 
-            self.assertTrue(restarted.wait(timeout=2.0))
+            self.assertFalse(restarted.wait(timeout=0.05))
+            self.assertIsNone(transport._pending.active_turn_id("thread-1"))
 
     def test_late_in_progress_thread_read_keeps_active_turn_and_defers_restart(self) -> None:
         transport = _RequestBoundaryProbe()
@@ -1038,6 +1063,8 @@ class _ReadRecoveryProbe(_RequestBoundaryProbe):
         if len(self.requests) == 1:
             self._quarantine_after_response_timeout(method, params, "request-1")
             raise TimeoutError(f"{method} timed out")
+        if method == "thread/read":
+            self._record_thread_read_response()
         return {"thread": {"id": "thread-1"}}
 
     @override

@@ -13,6 +13,8 @@ class AppServerLifecycleSnapshot:
     accepting_since: float | None
     quarantined: bool = False
     restart_pending: bool = False
+    read_degraded: bool = False
+    consecutive_read_timeouts: int = 0
 
 
 class AppServerGenerationExpiredError(CodexAppServerTransportError):

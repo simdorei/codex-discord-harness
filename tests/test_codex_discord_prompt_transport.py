@@ -220,6 +220,21 @@ class PromptTransportTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("`!resume`", output)
 
+    def test_thread_read_timeout_explains_request_local_failure_and_recovery(self) -> None:
+        def resident(_prompt: str, _target_thread_id: str | None) -> tuple[int, str]:
+            raise TimeoutError("Timed out waiting for app-server response to thread/read.")
+
+        exit_code, output = prompt_transport.run_transport_prompt_no_wait(
+            "please run",
+            "thread-1",
+            build_deps(run_resident_prompt_no_wait=resident),
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("did not stop or restart other Codex threads", output)
+        self.assertIn("Run `!resume`", output)
+        self.assertIn("The failed prompt was not sent", output)
+
     def test_run_ask_stream_watches_app_server_session_when_waiting(self) -> None:
         relay = FakeRelay()
         watched: list[FakeSteeringResult] = []
