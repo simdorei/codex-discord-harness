@@ -5,7 +5,6 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
-
 ChannelContraT = TypeVar("ChannelContraT", contravariant=True)
 ChannelT = TypeVar("ChannelT")
 LogFunc = Callable[[str], None]
@@ -24,10 +23,14 @@ class PromptPreprocessResult:
     visible_line: str = ""
 
 
-PromptPreprocessor = Callable[[str], PromptPreprocessResult]
+PromptPreprocessor = Callable[[str, str | None], PromptPreprocessResult]
 
 
-def keep_prompt(prompt: str) -> PromptPreprocessResult:
+def keep_prompt(
+    prompt: str,
+    target_thread_id: str | None = None,
+) -> PromptPreprocessResult:
+    _ = target_thread_id
     return PromptPreprocessResult(prompt=prompt)
 
 
@@ -135,7 +138,7 @@ async def handle_mapped_prompt_delivery(
         deps.set_selected_thread_id(target_thread_id)
         deps.log(f"mapped_prompt_selected_thread_synced target={target_thread_id}")
 
-    preprocessed = deps.preprocess_prompt(prompt)
+    preprocessed = deps.preprocess_prompt(prompt, target_thread_id)
     if preprocessed.visible_line:
         await deps.send_chunks(channel, preprocessed.visible_line, context="prompt_preprocess_visible_line")
         deps.mark_recent_discord_origin_prompt(target_thread_id, preprocessed.prompt)

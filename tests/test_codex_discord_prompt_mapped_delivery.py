@@ -57,7 +57,12 @@ class DepsFixture:
         self.logs.append(f"typing_context={context}")
         return FakeTypingContext(channel)
 
-    def preprocess(self, prompt: str) -> mapped_delivery.PromptPreprocessResult:
+    def preprocess(
+        self,
+        prompt: str,
+        target_thread_id: str | None,
+    ) -> mapped_delivery.PromptPreprocessResult:
+        _ = target_thread_id
         if self.preprocess_result is None:
             return mapped_delivery.keep_prompt(prompt)
         self.logs.append(f"preprocess_prompt={prompt}")

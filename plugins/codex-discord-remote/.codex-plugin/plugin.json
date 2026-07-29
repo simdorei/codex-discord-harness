@@ -1,7 +1,7 @@
 {
   "name": "codex-discord-remote",
-  "version": "0.1.0+codex.20260722123525",
-  "description": "Operate, QA, and recover a local Codex Discord Remote runtime.",
+  "version": "0.1.0+codex.20260730050500",
+  "description": "Operate, QA, recover, and connect ChatGPT Pro to a local Codex Discord Remote runtime.",
   "author": {
     "name": "simdorei"
   },
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Codex Discord Remote",
     "shortDescription": "Operate and QA the local Discord bridge for Codex.",
-    "longDescription": "Codex Discord Remote bundles reusable workflows for checking bot health, restarting the watchdog, running smoke QA, running deep interview clarification, and debugging Discord mirror, archive, and steering issues.",
+    "longDescription": "Codex Discord Remote bundles reusable workflows for ChatGPT Pro project consultation, checking bot health, restarting the watchdog, running smoke QA, running deep interview clarification, and debugging Discord mirror, archive, and steering issues.",
     "developerName": "simdorei",
     "category": "Productivity",
     "capabilities": [

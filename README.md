@@ -268,6 +268,7 @@ Common slash commands:
 Common prefix commands:
 
 - `!help`
+- `!pro <question>` (optional ChatGPT Pro consultation; local-project MCP setup is documented below)
 - `!list`
 - `!archived_list`
 - `!use`
@@ -397,5 +398,6 @@ The macOS smoke workflow checks Python compilation, selected unit tests, `instal
 ## More Documentation
 
 - [Bundled skills and attribution](docs/plugin-skills.md)
+- [ChatGPT Pro local-project MCP](docs/remote-mcp.md)
 - [Daily workflow and Discord commands](docs/operations.md)
 - [Steering, transport, validation, and project position](docs/policies-validation.md)

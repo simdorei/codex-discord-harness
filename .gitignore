@@ -1,4 +1,5 @@
 .env
+remote_mcp_server/.env
 .omo/
 .ruff_cache/
 .python-portable/

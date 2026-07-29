@@ -1,0 +1,20 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: remote_mcp_server/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8030:8030"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8030/healthz', timeout=3)"
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

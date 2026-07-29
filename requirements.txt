@@ -1,2 +1,4 @@
 # Runtime target: Windows and macOS local Codex Desktop control.
 discord.py>=2.7,<3
+pydantic>=2.11,<3
+websockets>=16,<17

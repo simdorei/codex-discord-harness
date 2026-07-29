@@ -11,6 +11,7 @@ import codex_discord_cli as discord_cli
 import codex_discord_message_gate as discord_message_gate
 import codex_discord_runtime_config as discord_runtime_config
 from codex_discord_logging import log_line
+from codex_remote_mcp_binding import close_remote_mcp_bridge
 
 
 class BotRunner(Protocol):
@@ -85,5 +86,6 @@ def main(deps: BotMainDeps) -> int:
         try:
             bot.run(token, log_handler=None)
         finally:
+            close_remote_mcp_bridge()
             app_server_transport.DEFAULT_CLIENT.close()
     return 0

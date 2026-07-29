@@ -1,0 +1,10 @@
+.git
+.env
+.python-portable
+.pytest_cache
+.venv
+__pycache__
+*.pyc
+*.sqlite
+*.log
+discord_attachments

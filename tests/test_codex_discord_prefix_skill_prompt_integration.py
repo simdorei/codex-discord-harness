@@ -20,6 +20,38 @@ def _discord_message(message: FakeMessage) -> bot.discord.Message:
 
 
 class PrefixSkillPromptBotIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prefix_pro_routes_to_plain_ask_when_project_is_mirrored(self) -> None:
+        # Given
+        original_get_mirrored = bot.get_mirrored_codex_thread_id
+        original_handle_plain_ask = bot.handle_plain_ask
+        calls: list[tuple[bot.discord.Message, str, str | None]] = []
+
+        async def fake_handle_plain_ask(
+            message: bot.discord.Message,
+            prompt: str,
+            *,
+            target_thread_id: str | None = None,
+        ) -> None:
+            calls.append((message, prompt, target_thread_id))
+
+        try:
+            bot.get_mirrored_codex_thread_id = lambda channel_id: "thread-1"
+            bot.handle_plain_ask = fake_handle_plain_ask
+            message = FakeMessage(content="!pro read README", channel_id=222)
+
+            # When
+            await bot.handle_prefix_command(
+                _prefix_bot(),
+                _discord_message(message),
+                "pro read README",
+            )
+
+            # Then
+            self.assertEqual(calls, [(message, "!pro read README", "thread-1")])
+        finally:
+            bot.get_mirrored_codex_thread_id = original_get_mirrored
+            bot.handle_plain_ask = original_handle_plain_ask
+
     async def test_prefix_interview_wraps_request_for_deep_interview(self) -> None:
         original_get_mirrored = bot.get_mirrored_codex_thread_id
         original_handle_plain_ask = bot.handle_plain_ask

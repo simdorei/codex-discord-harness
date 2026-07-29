@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Final
 
 from codex_discord_prefix_skill_prompts import (
     build_archive_used_prompt,
@@ -25,6 +26,7 @@ __all__ = [
     "INTERVIEW_COMMANDS",
     "MessageLike",
     "PrefixPromptCommandDeps",
+    "PRO_COMMANDS",
     "SendChunksFunc",
     "build_archive_used_prompt",
     "build_deep_interview_prompt",
@@ -33,6 +35,7 @@ __all__ = [
 
 INTERVIEW_COMMANDS = {"interview", "deep_interview", "deep-interview"}
 ARCHIVE_USED_COMMANDS = {"archive-used"}
+PRO_COMMANDS: Final = frozenset({"pro"})
 
 
 async def handle_prefix_prompt_command(
@@ -42,6 +45,17 @@ async def handle_prefix_prompt_command(
     *,
     deps: PrefixPromptCommandDeps,
 ) -> bool:
+    if command in PRO_COMMANDS:
+        return await _handle_skill_prompt_command(
+            command,
+            arg,
+            message,
+            deps=deps,
+            usage_context="prefix_pro_usage",
+            log_context="prefix_pro",
+            requires_request=True,
+            build_prompt=lambda request: f"!pro {request}",
+        )
     if command in INTERVIEW_COMMANDS:
         return await _handle_skill_prompt_command(
             command,
