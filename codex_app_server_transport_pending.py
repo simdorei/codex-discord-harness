@@ -167,6 +167,22 @@ class PendingRequestState:
     def has_active_turns(self) -> bool:
         return bool(self.active_turns)
 
+    def reconcile_inactive_thread(
+        self,
+        thread_id: str,
+        expected_turn_id: str,
+        log: LogFunc,
+    ) -> bool:
+        if self.active_turns.get(thread_id) != expected_turn_id:
+            return False
+        _ = self.active_turns.pop(thread_id, None)
+        _ = self.remote_interrupt_intents.pop((thread_id, expected_turn_id), None)
+        log(
+            "app_server_active_turn_reconciled_from_thread_read "
+            + f"target={thread_id} turn={expected_turn_id}"
+        )
+        return True
+
     def has_pending_server_requests(self) -> bool:
         return bool(self.server_requests)
 

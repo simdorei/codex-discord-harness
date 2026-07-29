@@ -346,6 +346,24 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             transport.resolve_ambiguous_turn_start("thread-1")
             self.assertTrue(restarted.wait(timeout=2.0))
 
+    def test_quarantined_generation_without_expected_generation_yields_unhealthy_snapshot(
+        self,
+    ) -> None:
+        transport = _RequestBoundaryProbe()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.seed_active_turn()
+        transport._quarantine_after_response_timeout(
+            "thread/read",
+            {"threadId": "thread-1"},
+            "request-1",
+        )
+
+        with transport.delivery_admission() as snapshot:
+            self.assertFalse(snapshot.healthy)
+            self.assertTrue(snapshot.quarantined)
+
+        transport.stop_restart_retry()
+
     def test_thread_read_retries_once_on_fresh_generation_with_capped_budget(self) -> None:
         transport = _ReadRecoveryProbe()
         transport.install_lifecycle(_process(), generation=1)
@@ -502,6 +520,80 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
                 [message["method"] for message in transport.written_messages],
                 ["turn/start"],
             )
+
+    def test_late_idle_thread_read_reconciles_stale_active_turn_and_restarts(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.seed_active_turn()
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to thread/read"):
+                _ = transport.request(
+                    "thread/read",
+                    {"threadId": "thread-1", "includeTurns": False},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+            request_id = str(transport.written_messages[0]["id"])
+
+            transport.handle_raw_line(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "result": {
+                            "thread": {
+                                "id": "thread-1",
+                                "status": {"type": "idle"},
+                            }
+                        },
+                    }
+                )
+            )
+
+            self.assertTrue(restarted.wait(timeout=2.0))
+
+    def test_late_in_progress_thread_read_keeps_active_turn_and_defers_restart(self) -> None:
+        transport = _RequestBoundaryProbe()
+        restarted = threading.Event()
+        transport.install_lifecycle(_process(), generation=1)
+        transport.seed_active_turn()
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            with self.assertRaisesRegex(TimeoutError, "response to thread/read"):
+                _ = transport.request(
+                    "thread/read",
+                    {"threadId": "thread-1", "includeTurns": False},
+                    timeout_sec=0.01,
+                    expected_generation=1,
+                )
+            request_id = str(transport.written_messages[0]["id"])
+
+            transport.handle_raw_line(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "result": {
+                            "thread": {
+                                "id": "thread-1",
+                                "status": {"type": "active"},
+                            }
+                        },
+                    }
+                )
+            )
+
+            self.assertFalse(restarted.wait(timeout=0.05))
+
+        transport.stop_restart_retry()
 
     def test_pending_restart_waits_for_delivery_exit_then_retries_automatically(self) -> None:
         transport = _RequestBoundaryProbe()

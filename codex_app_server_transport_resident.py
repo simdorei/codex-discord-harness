@@ -43,6 +43,7 @@ from codex_app_server_transport_retry import (
     ChildCleanupRetryCoordinator,
     RestartPendingRetryCoordinator,
 )
+from codex_app_server_transport_threads import get_thread_status_type
 from codex_app_server_transport_turn_outcomes import (
     TurnCompletion,
     TurnCompletionFound,
@@ -111,6 +112,9 @@ class ResidentCodexAppServerTransport:
         self._ambiguous_turn_start_thread_id: str | None = None
         self._ambiguous_turn_start_request_id: str | None = None
         self._ambiguous_turn_start_deadline: float | None = None
+        self._timed_out_thread_read_request_id: str | None = None
+        self._timed_out_thread_read_thread_id: str | None = None
+        self._timed_out_thread_read_turn_id: str | None = None
         self._closed_error: str | None = None
         self._initialized: bool = False
         self._started_at: float = 0.0
@@ -197,6 +201,7 @@ class ResidentCodexAppServerTransport:
             self._ambiguous_turn_start_thread_id = None
             self._ambiguous_turn_start_request_id = None
             self._ambiguous_turn_start_deadline = None
+            self._clear_timed_out_thread_read()
         self._log(f"app_server_transport_started executable={executable}")
 
     def _is_running(self) -> bool:
@@ -289,6 +294,10 @@ class ResidentCodexAppServerTransport:
                         message_id,
                         message,
                     )
+                    self._reconcile_timed_out_thread_read_from_late_response(
+                        message_id,
+                        message,
+                    )
                     self._log(f"app_server_transport_late_response_discarded id={message_id}")
                 else:
                     self._responses[message_id] = message
@@ -363,6 +372,31 @@ class ResidentCodexAppServerTransport:
         self._ambiguous_turn_start_request_id = None
         self._ambiguous_turn_start_deadline = None
 
+    def _reconcile_timed_out_thread_read_from_late_response(
+        self,
+        request_id: str,
+        message: JsonObject,
+    ) -> None:
+        if request_id != self._timed_out_thread_read_request_id:
+            return
+        thread_id = self._timed_out_thread_read_thread_id
+        turn_id = self._timed_out_thread_read_turn_id
+        self._clear_timed_out_thread_read()
+        result = message.get("result")
+        if not thread_id or not turn_id or not isinstance(result, dict):
+            return
+        thread = result.get("thread")
+        if not isinstance(thread, dict) or str(thread.get("id") or "").strip() != thread_id:
+            return
+        if get_thread_status_type(thread) not in {"idle", "notLoaded"}:
+            return
+        _ = self._pending.reconcile_inactive_thread(thread_id, turn_id, self._log)
+
+    def _clear_timed_out_thread_read(self) -> None:
+        self._timed_out_thread_read_request_id = None
+        self._timed_out_thread_read_thread_id = None
+        self._timed_out_thread_read_turn_id = None
+
     def close_locked(self) -> None:
         process = self.process
         self._initialized = False
@@ -419,16 +453,13 @@ class ResidentCodexAppServerTransport:
         with self._condition:
             snapshot = self.lifecycle_snapshot()
             if snapshot.quarantined or snapshot.restart_pending:
-                if expected_generation is None:
-                    raise AppServerGenerationQuarantinedError(
-                        generation=snapshot.generation
+                if expected_generation is not None:
+                    raise AppServerGenerationMismatch(
+                        expected_generation=expected_generation,
+                        actual_generation=snapshot.generation,
+                        healthy=False,
                     )
-                raise AppServerGenerationMismatch(
-                    expected_generation=expected_generation,
-                    actual_generation=snapshot.generation,
-                    healthy=False,
-                )
-            if expected_generation is not None and (
+            elif expected_generation is not None and (
                 not snapshot.healthy or snapshot.generation != expected_generation
             ):
                 raise AppServerGenerationMismatch(
@@ -436,7 +467,7 @@ class ResidentCodexAppServerTransport:
                     actual_generation=snapshot.generation,
                     healthy=snapshot.healthy,
                 )
-            if snapshot.healthy:
+            elif snapshot.healthy:
                 self._active_deliveries += 1
                 leased = True
                 self._delivery_local.lease_count = (
@@ -828,6 +859,13 @@ class ResidentCodexAppServerTransport:
                 self._ambiguous_turn_start_deadline = (
                     self.monotonic_func() + _AMBIGUOUS_TURN_START_GRACE_SECONDS
                 )
+            elif method == "thread/read":
+                thread_id = str(params.get("threadId") or "").strip()
+                turn_id = self._pending.active_turn_id(thread_id)
+                if thread_id and turn_id:
+                    self._timed_out_thread_read_request_id = request_id
+                    self._timed_out_thread_read_thread_id = thread_id
+                    self._timed_out_thread_read_turn_id = turn_id
             self._condition.notify_all()
         self._log(
             "app_server_response_timeout_quarantined "
