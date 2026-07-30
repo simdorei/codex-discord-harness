@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import assert_never
 
 import pytest
+from pydantic import HttpUrl
 
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
@@ -31,6 +34,51 @@ from simdorei_mcp_common.operation_requests import (
 )
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nremote-image"
+
+
+def test_non_url_features_load_when_http_dependencies_are_missing() -> None:
+    # Given
+    repository = Path(__file__).resolve().parents[1]
+    script = """
+import builtins
+from pathlib import Path
+
+real_import = builtins.__import__
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name.split(".", 1)[0] in {"httpcore2", "httpx2"}:
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = guarded_import
+import codex_remote_mcp_dispatch
+import codex_remote_mcp_images
+
+try:
+    codex_remote_mcp_images.save_image_from_url(
+        Path.cwd(),
+        "assets/test.png",
+        "https://example.com/test.png",
+        overwrite=False,
+    )
+except codex_remote_mcp_images.ProjectImageError as exc:
+    assert "run install.ps1" in str(exc)
+else:
+    raise AssertionError("URL image support unexpectedly loaded")
+"""
+
+    # When
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repository,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    # Then
+    assert result.returncode == 0, result.stderr
 
 
 def test_image_save_writes_validated_image(tmp_path: Path) -> None:
@@ -103,7 +151,7 @@ def test_image_url_rejects_loopback_destination(tmp_path: Path) -> None:
             "url",
             SaveImageFromUrlRequest(
                 path="assets/test.png",
-                url="https://127.0.0.1/test.png",
+                url=HttpUrl("https://127.0.0.1/test.png"),
             ),
         )
     )

@@ -7,8 +7,6 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
-import httpx2
-
 from codex_remote_mcp_checkpoints import (
     CheckpointTarget,
     begin_checkpoint,
@@ -16,11 +14,6 @@ from codex_remote_mcp_checkpoints import (
     finish_checkpoint,
 )
 from codex_remote_mcp_files import ProjectFileAccess, ProjectFileError
-from codex_remote_mcp_http import (
-    PublicNetworkError,
-    public_http_client,
-    validate_public_url_shape,
-)
 from simdorei_mcp_common.operation_outputs import (
     ImageEntry,
     ImageListOutput,
@@ -66,6 +59,22 @@ def save_image_from_url(
     overwrite: bool,
 ) -> ImageSaveOutput:
     """Fetch one public HTTPS image and store it inside the project."""
+    try:
+        import httpx2
+
+        from codex_remote_mcp_http import (
+            PublicNetworkError,
+            public_http_client,
+            validate_public_url_shape,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"httpcore2", "httpx2"}:
+            raise
+        raise ProjectImageError(
+            "<image-url>",
+            "public URL image support requires optional dependencies; run install.ps1",
+        ) from exc
+
     content = bytearray()
     try:
         validate_public_url_shape(url)
