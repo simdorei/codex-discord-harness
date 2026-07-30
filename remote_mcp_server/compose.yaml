@@ -5,6 +5,8 @@ services:
       dockerfile: remote_mcp_server/Dockerfile
     env_file:
       - .env
+    volumes:
+      - simdorei_mcp_oauth:/data
     ports:
       - "127.0.0.1:8030:8030"
     restart: unless-stopped
@@ -18,3 +20,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  simdorei_mcp_oauth:

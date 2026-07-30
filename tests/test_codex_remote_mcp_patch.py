@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import assert_never
+
+import pytest
+
+from codex_remote_mcp_checkpoints import CheckpointDraft
+from codex_remote_mcp_dispatch import LocalProjectDispatcher
+from codex_remote_mcp_files import ProjectFileAccess
+from simdorei_mcp_common.messages import (
+    ListFilesResult,
+    OperationErrorResult,
+    ProjectInfoResult,
+    ProjectOperationCommand,
+    ProjectOperationResult,
+    ReadFileResult,
+    RequestId,
+    WriteFileResult,
+)
+from simdorei_mcp_common.operation_outputs import FileApplyPatchOutput
+from simdorei_mcp_common.operation_requests import FileApplyPatchRequest
+
+
+def test_patch_updates_file_with_matching_hash(tmp_path: Path) -> None:
+    # Given
+    root, dispatcher = _bound_project(tmp_path)
+    target = root / "notes.txt"
+    target.write_text("first\nsecond\n", encoding="utf-8")
+    current_hash = _hash(root, "notes.txt")
+
+    # When
+    result = dispatcher.execute(
+        _command(
+            "update",
+            "*** Begin Patch\n"
+            "*** Update File: notes.txt\n"
+            "@@\n"
+            " first\n"
+            "-second\n"
+            "+changed\n"
+            "*** End Patch",
+            {"notes.txt": current_hash},
+        )
+    )
+
+    # Then
+    _assert_action(result, "update")
+    assert target.read_text(encoding="utf-8") == "first\nchanged\n"
+
+
+def test_patch_deletes_file_with_matching_hash(tmp_path: Path) -> None:
+    # Given
+    root, dispatcher = _bound_project(tmp_path)
+    target = root / "gone.txt"
+    target.write_text("delete me", encoding="utf-8")
+    current_hash = _hash(root, "gone.txt")
+
+    # When
+    result = dispatcher.execute(
+        _command(
+            "delete",
+            "*** Begin Patch\n"
+            "*** Delete File: gone.txt\n"
+            "*** End Patch",
+            {"gone.txt": current_hash},
+        )
+    )
+
+    # Then
+    _assert_action(result, "delete")
+    assert not target.exists()
+
+
+def test_patch_moves_file_with_matching_hash(tmp_path: Path) -> None:
+    # Given
+    root, dispatcher = _bound_project(tmp_path)
+    source = root / "old.txt"
+    source.write_text("move me\n", encoding="utf-8")
+    current_hash = _hash(root, "old.txt")
+
+    # When
+    result = dispatcher.execute(
+        _command(
+            "move",
+            "*** Begin Patch\n"
+            "*** Update File: old.txt\n"
+            "*** Move to: new.txt\n"
+            "*** End Patch",
+            {"old.txt": current_hash},
+        )
+    )
+
+    # Then
+    _assert_action(result, "move")
+    assert not source.exists()
+    assert (root / "new.txt").read_text(encoding="utf-8") == "move me\n"
+
+
+def test_patch_rolls_back_when_checkpoint_persist_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    root, dispatcher = _bound_project(tmp_path)
+
+    def fail_checkpoint(_draft: CheckpointDraft) -> str:
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(
+        "codex_remote_mcp_patch.finish_checkpoint",
+        fail_checkpoint,
+    )
+
+    # When
+    with pytest.raises(OSError, match="disk failure"):
+        dispatcher.execute(
+            _command(
+                "rollback",
+                "*** Begin Patch\n"
+                "*** Add File: first.txt\n"
+                "+first\n"
+                "*** Add File: second.txt\n"
+                "+second\n"
+                "*** End Patch",
+                {},
+            )
+        )
+
+    # Then
+    assert not (root / "first.txt").exists()
+    assert not (root / "second.txt").exists()
+
+
+def _bound_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    return root, dispatcher
+
+
+def _hash(root: Path, path: str) -> str:
+    return ProjectFileAccess(root).read_file(
+        path,
+        start_line=1,
+        max_lines=20,
+    ).sha256
+
+
+def _command(
+    suffix: str,
+    patch: str,
+    precondition_hashes: dict[str, str],
+) -> ProjectOperationCommand:
+    return ProjectOperationCommand(
+        request_id=RequestId(f"request-{suffix}"),
+        thread_id="thread-a",
+        operation=FileApplyPatchRequest(
+            patch=patch,
+            precondition_hashes=precondition_hashes,
+        ),
+    )
+
+
+def _assert_action(
+    result: (
+        ProjectInfoResult
+        | ListFilesResult
+        | ReadFileResult
+        | WriteFileResult
+        | ProjectOperationResult
+        | OperationErrorResult
+    ),
+    expected: str,
+) -> None:
+    match result:
+        case ProjectOperationResult(output=FileApplyPatchOutput(applied=applied)):
+            assert applied[0].action == expected
+        case (
+            ProjectInfoResult()
+            | ListFilesResult()
+            | ReadFileResult()
+            | WriteFileResult()
+            | OperationErrorResult()
+        ):
+            raise AssertionError(f"unexpected result: {result.type}")
+        case unreachable:
+            assert_never(unreachable)

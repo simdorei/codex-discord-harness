@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, HttpUrl, SecretStr
@@ -19,6 +20,14 @@ class GatewaySettings(BaseSettings):
     device_id: DeviceId = Field(min_length=1, max_length=200)
     device_token: SecretStr
     public_base_url: HttpUrl
+    owner_token: SecretStr = Field(min_length=24)
+    oauth_database_path: Path = Path("/data/oauth.sqlite3")
+    oauth_access_token_seconds: int = Field(default=3600, ge=300, le=86400)
+    oauth_refresh_token_seconds: int = Field(
+        default=60 * 60 * 24 * 30,
+        ge=3600,
+        le=60 * 60 * 24 * 365,
+    )
     request_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
@@ -28,8 +37,12 @@ def load_gateway_settings() -> GatewaySettings:
         "device_id": _required_environment("SIMDOREI_MCP_DEVICE_ID"),
         "device_token": _required_environment("SIMDOREI_MCP_DEVICE_TOKEN"),
         "public_base_url": _required_environment("SIMDOREI_MCP_PUBLIC_BASE_URL"),
+        "owner_token": _required_environment("SIMDOREI_MCP_OWNER_TOKEN"),
     }
     optional = {
+        "oauth_database_path": "SIMDOREI_MCP_OAUTH_DATABASE_PATH",
+        "oauth_access_token_seconds": "SIMDOREI_MCP_OAUTH_ACCESS_TOKEN_SECONDS",
+        "oauth_refresh_token_seconds": "SIMDOREI_MCP_OAUTH_REFRESH_TOKEN_SECONDS",
         "request_timeout_seconds": "SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS",
         "log_level": "SIMDOREI_MCP_LOG_LEVEL",
     }

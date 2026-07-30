@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import queue
-import secrets
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -14,17 +13,18 @@ from pydantic import ValidationError
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
-from codex_remote_mcp_bridge_config import BindingTicket, RemoteMcpBridgeConfig
+from codex_remote_mcp_bridge_config import ProjectTicket, RemoteMcpBridgeConfig
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
-    BindingAck,
-    BindingUpsert,
     BridgeHello,
     DeviceId,
     GatewayCommand,
     GatewayHello,
     ListFilesCommand,
+    ProjectAck,
     ProjectInfoCommand,
+    ProjectOperationCommand,
+    ProjectUpsert,
     ReadFileCommand,
     WriteFileCommand,
     parse_gateway_message,
@@ -68,35 +68,41 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         self._log = log
         self._dispatcher = LocalProjectDispatcher()
         self._condition = threading.Condition()
-        self._outbound: queue.Queue[BindingUpsert] = queue.Queue()
-        self._active: dict[str, BindingUpsert] = {}
+        self._outbound: queue.Queue[ProjectUpsert] = queue.Queue()
+        self._active: dict[str, ProjectUpsert] = {}
         self._acked: set[str] = set()
         self._last_error = ""
         self._connected = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def issue_binding(self, thread_id: str, root: Path) -> BindingTicket:
+    def register_project(
+        self,
+        thread_id: str,
+        project_scope: str,
+        root: Path,
+    ) -> ProjectTicket:
         if not thread_id:
-            raise RemoteMcpBridgeError("A Codex thread is required for local project binding.")
+            raise RemoteMcpBridgeError("A Codex thread is required for project registration.")
+        if not project_scope:
+            raise RemoteMcpBridgeError("A project scope is required for project registration.")
         expires_at = datetime.now(UTC) + timedelta(
             seconds=self._config.binding_ttl_seconds
         )
-        code = secrets.token_urlsafe(32)
-        binding = BindingUpsert(
-            binding_code=code,
+        project = ProjectUpsert(
+            project_scope=project_scope,
             thread_id=thread_id,
             project_name=root.resolve().name or "local-project",
             expires_at=expires_at,
         )
         self._dispatcher.upsert(thread_id, root, expires_at)
         with self._condition:
-            self._active[code] = binding
+            self._active[project_scope] = project
             if self._connected:
-                self._outbound.put(binding)
+                self._outbound.put(project)
             self._ensure_started()
             acknowledged = self._condition.wait_for(
-                lambda: code in self._acked,
+                lambda: project_scope in self._acked,
                 timeout=self._config.binding_ack_timeout_seconds,
             )
             if not acknowledged:
@@ -105,7 +111,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                     "The local project bridge did not acknowledge the binding in time."
                     + detail
                 )
-        return BindingTicket(binding_code=code, expires_at=expires_at)
+        return ProjectTicket(project_scope=project_scope, expires_at=expires_at)
 
     def close(self) -> None:
         self._stop.set()
@@ -139,7 +145,10 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
 
     def _serve_connection(self, socket: BridgeSocket) -> None:
         socket.send(
-            BridgeHello(device_id=DeviceId(self._config.device_id)).model_dump_json()
+            BridgeHello(
+                protocol_version=2,
+                device_id=DeviceId(self._config.device_id),
+            ).model_dump_json()
         )
         first = _receive(socket)
         if not isinstance(first, GatewayHello):
@@ -147,27 +156,28 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         with self._condition:
             self._connected = True
             self._last_error = ""
-            bindings = tuple(self._active.values())
+            projects = tuple(self._active.values())
             self._condition.notify_all()
-        for binding in bindings:
-            socket.send(binding.model_dump_json())
+        for project in projects:
+            socket.send(project.model_dump_json())
         self._log("remote_mcp_bridge_connected")
         while not self._stop.is_set():
-            self._send_queued_bindings(socket)
+            self._send_queued_projects(socket)
             try:
                 message = _receive(socket, timeout=0.25)
             except TimeoutError:
                 continue
             match message:
-                case BindingAck(binding_code=code):
+                case ProjectAck(project_scope=project_scope):
                     with self._condition:
-                        self._acked.add(code)
+                        self._acked.add(project_scope)
                         self._condition.notify_all()
                 case (
                     ProjectInfoCommand()
                     | ListFilesCommand()
                     | ReadFileCommand()
                     | WriteFileCommand()
+                    | ProjectOperationCommand()
                 ):
                     socket.send(self._dispatcher.execute(message).model_dump_json())
                 case GatewayHello():
@@ -175,13 +185,13 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                 case unreachable:
                     assert_never(unreachable)
 
-    def _send_queued_bindings(self, socket: BridgeSocket) -> None:
+    def _send_queued_projects(self, socket: BridgeSocket) -> None:
         while True:
             try:
-                binding = self._outbound.get_nowait()
+                project = self._outbound.get_nowait()
             except queue.Empty:
                 return
-            socket.send(binding.model_dump_json())
+            socket.send(project.model_dump_json())
 
 
 @contextmanager
@@ -192,7 +202,7 @@ def _connect(config: RemoteMcpBridgeConfig) -> Iterator[BridgeSocket]:
         open_timeout=10,
         ping_interval=20,
         ping_timeout=20,
-        max_size=1_200_000,
+        max_size=12_000_000,
     ) as socket:
         yield socket
 
@@ -201,7 +211,7 @@ def _receive(
     socket: BridgeSocket,
     *,
     timeout: float | None = None,
-) -> GatewayHello | BindingAck | GatewayCommand:
+) -> GatewayHello | ProjectAck | GatewayCommand:
     raw = socket.recv(timeout=timeout)
     if not isinstance(raw, str):
         raise RemoteMcpBridgeError("The gateway sent an unsupported binary message.")

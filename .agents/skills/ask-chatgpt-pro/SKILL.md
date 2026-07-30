@@ -1,6 +1,6 @@
 ---
 name: ask-chatgpt-pro
-description: Consult and reuse a ChatGPT Pro conversation from one Codex thread, optionally bind it to that thread's local project through MCP, evaluate the response independently, and ask focused follow-ups. Use when the user invokes $ask-chatgpt-pro or asks Codex to ask Pro, get a Pro second opinion, collaborate with ChatGPT Pro, ping-pong with an open ChatGPT chat, or let that chat inspect or edit the originating project.
+description: Consult and reuse a ChatGPT Pro conversation from one Codex thread, optionally select that thread's local project through an OAuth-protected MCP, evaluate the response independently, and ask focused follow-ups. Use when the user invokes $ask-chatgpt-pro or asks Codex to ask Pro, get a Pro second opinion, collaborate with ChatGPT Pro, ping-pong with an open ChatGPT chat, or let that chat inspect or edit the originating project.
 ---
 
 # Ask ChatGPT Pro
@@ -32,15 +32,25 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
      conversation or tab while an existing create/open attempt is in progress.
    - Without `conversation_scope`, reuse an open `chatgpt.com` tab only when it is
      clearly the user's intended consultation chat; otherwise open a new chat.
-3. Confirm that the user is signed in and that Pro is selected. If login, OTP, CAPTCHA, account access, or manual model selection is required, leave the tab open for handoff and ask the user to complete only that step.
+3. Confirm that the user is signed in and that Pro is selected. If login, OAuth
+   owner approval, OTP, CAPTCHA, account access, or manual model selection is
+   required, leave the tab open for handoff and ask the user to complete only
+   that step. An OAuth owner token belongs only in the MCP approval page, never
+   in ChatGPT conversation text.
 4. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
 5. Do not silently fall back to a non-Pro model.
 6. When the request includes a `<local-project-mcp>` block, send that block with
    the consultation request. In ChatGPT, use the configured local-project MCP
-   connector and call `bind_project` with the supplied one-time code before asking
-   ChatGPT to inspect or edit project files. Call it once for every newly supplied
-   code, including when reusing a conversation, so access is renewed for the
-   originating Codex thread. Never repeat the code in the report.
+   connector and call `select_project` with the supplied non-secret
+   `project_scope` before asking ChatGPT to inspect or edit project files. Call it
+   once for every newly supplied scope instruction, including when reusing a
+   conversation, so access is renewed for the originating Codex thread.
+   After selection, prefer the dedicated project tools: search/read before
+   editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
+   for visual inspection, commands returned by `command_list` for verification,
+   and `repo_status` plus `show_changes` before `git_commit` or `git_push`.
+   Checkpoints can inspect or undo MCP file mutations. The connector does not
+   provide desktop input or arbitrary shell access.
 7. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
    agent mode, deep research, or a different model to gain local tools. If the
    connector is unavailable in Pro, stop with the exact limitation instead of

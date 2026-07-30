@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Final
 
 import codex_discord_prompt_mapped_delivery as mapped_delivery
-from codex_remote_mcp_binding import issue_remote_mcp_binding
-from codex_remote_mcp_bridge_config import BindingTicket
+from codex_remote_mcp_binding import register_remote_mcp_project
+from codex_remote_mcp_bridge_config import ProjectTicket
 
 LogFunc = Callable[[str], None]
-BindingIssuer = Callable[[str, Path, LogFunc], BindingTicket | None]
+ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
 PRO_SKILL_CALL: Final = (
     "$ask-chatgpt-pro "
     "[@Browser](plugin://browser@openai-bundled)"
@@ -50,27 +50,28 @@ def rewrite_prompt(
     *,
     cwd: Path,
     log: LogFunc,
-    binding_issuer: BindingIssuer = issue_remote_mcp_binding,
+    project_registrar: ProjectRegistrar = register_remote_mcp_project,
 ) -> mapped_delivery.PromptPreprocessResult:
     rewritten = _rewrite_pro_command(prompt)
     if rewritten is None:
         return mapped_delivery.keep_prompt(prompt)
     if not target_thread_id:
         return mapped_delivery.keep_prompt(rewritten)
-    ticket = binding_issuer(target_thread_id, cwd, log)
+    project_scope = pro_conversation_scope(target_thread_id)
+    ticket = project_registrar(target_thread_id, project_scope, cwd, log)
     if ticket is None:
         return mapped_delivery.keep_prompt(rewritten)
-    binding_instruction = "\n".join(
+    project_instruction = "\n".join(
         (
             "",
             "<local-project-mcp>",
             "A local Codex project is available through the configured MCP connector.",
-            f"conversation_scope: {pro_conversation_scope(target_thread_id or '')}",
-            "Before inspecting or changing local files, call bind_project exactly once",
-            f"with binding_code: {ticket.binding_code}",
-            "Do not repeat or reveal the binding code. Read a file before updating it,",
+            f"conversation_scope: {project_scope}",
+            f"project_scope: {ticket.project_scope}",
+            "Before inspecting or changing local files, call select_project exactly once",
+            "with the project_scope above. Read a file before updating it,",
             "and pass its SHA-256 when writing an existing file.",
             "</local-project-mcp>",
         )
     )
-    return mapped_delivery.keep_prompt(rewritten + binding_instruction)
+    return mapped_delivery.keep_prompt(rewritten + project_instruction)

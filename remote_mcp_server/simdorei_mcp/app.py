@@ -8,23 +8,36 @@ from typing import assert_never
 import anyio
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, ValidationError
 
-from remote_mcp_server.simdorei_mcp.broker import BindingBroker, BridgeSender
+from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
+from remote_mcp_server.simdorei_mcp.broker_models import BridgeSender
+from remote_mcp_server.simdorei_mcp.oauth_approval import create_approval_router
+from remote_mcp_server.simdorei_mcp.oauth_provider import (
+    OAUTH_SCOPES,
+    SingleUserOAuthProvider,
+)
+from remote_mcp_server.simdorei_mcp.oauth_store import OAuthStore
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 from remote_mcp_server.simdorei_mcp.tools import register_tools
 from simdorei_mcp_common.messages import (
-    BindingAck,
-    BindingUpsert,
     BridgeHello,
     GatewayCommand,
     GatewayHello,
     ListFilesResult,
     OperationErrorResult,
+    ProjectAck,
     ProjectInfoResult,
+    ProjectOperationResult,
+    ProjectUpsert,
     ReadFileResult,
     WriteFileResult,
     parse_bridge_message,
@@ -57,12 +70,37 @@ def create_app(settings: GatewaySettings) -> FastAPI:
     broker = BindingBroker(
         request_timeout_seconds=settings.request_timeout_seconds,
     )
+    public_base_url = str(settings.public_base_url).rstrip("/")
+    resource_url = f"{public_base_url}/mcp"
+    oauth_provider = SingleUserOAuthProvider(
+        store=OAuthStore(settings.oauth_database_path),
+        owner_token=settings.owner_token,
+        public_base_url=public_base_url,
+        resource_url=resource_url,
+        access_token_seconds=settings.oauth_access_token_seconds,
+        refresh_token_seconds=settings.oauth_refresh_token_seconds,
+    )
     mcp = FastMCP(
         "simdorei-local-project",
         instructions=(
-            "Bind with the one-time code supplied by Codex, then inspect or edit only "
-            "the bound local project. Read before writing and pass the returned SHA-256 "
-            "when updating an existing file."
+            "Call select_project once with the project scope supplied by Codex. "
+            "Then inspect or edit only that local project. Read existing files "
+            "before changing them and pass their SHA-256 values to file_apply_patch. "
+            "Use retrieve_image when visual inspection is needed. Run only commands "
+            "returned by command_list. Review repo_status and show_changes before "
+            "git_commit or git_push."
+        ),
+        auth_server_provider=oauth_provider,
+        auth=AuthSettings(
+            issuer_url=AnyHttpUrl(str(settings.public_base_url)),
+            resource_server_url=AnyHttpUrl(resource_url),
+            required_scopes=OAUTH_SCOPES,
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=OAUTH_SCOPES,
+                default_scopes=OAUTH_SCOPES,
+            ),
+            revocation_options=RevocationOptions(enabled=True),
         ),
         json_response=True,
         stateless_http=True,
@@ -82,13 +120,17 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        async with mcp.session_manager.run():
-            yield
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            await oauth_provider.close()
 
     app = FastAPI(
         title="Simdorei Local Project MCP",
         lifespan=lifespan,
     )
+    app.include_router(create_approval_router(oauth_provider))
 
     @app.get("/healthz")
     async def health() -> HealthResponse:
@@ -119,11 +161,12 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                     await socket.close(code=1008, reason="device mismatch")
                     return
                 case (
-                    BindingUpsert()
+                    ProjectUpsert()
                     | ProjectInfoResult()
                     | ListFilesResult()
                     | ReadFileResult()
                     | WriteFileResult()
+                    | ProjectOperationResult()
                     | OperationErrorResult()
                 ):
                     await socket.close(code=1002, reason="hello required")
@@ -133,16 +176,17 @@ def create_app(settings: GatewaySettings) -> FastAPI:
             while True:
                 message = parse_bridge_message(await socket.receive_text())
                 match message:
-                    case BindingUpsert(binding_code=code):
+                    case ProjectUpsert(project_scope=project_scope):
                         await broker.upsert(expected_device_id, message)
                         await socket.send_text(
-                            BindingAck(binding_code=code).model_dump_json()
+                            ProjectAck(project_scope=project_scope).model_dump_json()
                         )
                     case (
                         ProjectInfoResult()
                         | ListFilesResult()
                         | ReadFileResult()
                         | WriteFileResult()
+                        | ProjectOperationResult()
                         | OperationErrorResult()
                     ):
                         await broker.complete(expected_device_id, message)

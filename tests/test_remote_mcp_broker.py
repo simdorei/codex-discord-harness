@@ -12,13 +12,13 @@ from remote_mcp_server.simdorei_mcp.broker_errors import (
     BrokerError,
 )
 from simdorei_mcp_common.messages import (
-    BindingUpsert,
     DeviceId,
     GatewayCommand,
     ListFilesCommand,
     ProjectInfoCommand,
     ProjectInfoOutput,
     ProjectInfoResult,
+    ProjectUpsert,
     ReadFileCommand,
     WriteFileCommand,
 )
@@ -54,9 +54,9 @@ class ProjectInfoSender(BridgeSender):
         )
 
 
-def _binding(code: str, thread_id: str = "thread-a") -> BindingUpsert:
-    return BindingUpsert(
-        binding_code=code,
+def _project(scope: str, thread_id: str = "thread-a") -> ProjectUpsert:
+    return ProjectUpsert(
+        project_scope=scope,
         thread_id=thread_id,
         project_name="project-a",
         expires_at=datetime.now(UTC) + timedelta(minutes=10),
@@ -69,14 +69,12 @@ def test_new_chat_session_revokes_previous_session_for_thread() -> None:
         broker = BindingBroker()
         sender = ProjectInfoSender(broker)
         await broker.attach(DeviceId("device-a"), sender)
-        first_code = "first-binding-code-123456"
-        second_code = "second-binding-code-12345"
-        await broker.upsert(DeviceId("device-a"), _binding(first_code))
-        await broker.bind("session-a", "subject-a", first_code)
-        await broker.upsert(DeviceId("device-a"), _binding(second_code))
+        project_scope = "codex-pro-project-a"
+        await broker.upsert(DeviceId("device-a"), _project(project_scope))
+        await broker.select("session-a", "subject-a", project_scope)
 
         # When
-        await broker.bind("session-b", "subject-a", second_code)
+        await broker.select("session-b", "subject-a", project_scope)
 
         # Then
         with pytest.raises(ActiveBindingMissingError):
@@ -93,18 +91,18 @@ def test_existing_chat_session_cannot_switch_to_another_codex_thread() -> None:
         broker = BindingBroker()
         sender = ProjectInfoSender(broker)
         await broker.attach(DeviceId("device-a"), sender)
-        first_code = "first-binding-code-123456"
-        second_code = "second-binding-code-12345"
-        await broker.upsert(DeviceId("device-a"), _binding(first_code, "thread-a"))
-        await broker.bind("session-a", "subject-a", first_code)
-        await broker.upsert(DeviceId("device-a"), _binding(second_code, "thread-b"))
+        first_scope = "codex-pro-project-a"
+        second_scope = "codex-pro-project-b"
+        await broker.upsert(DeviceId("device-a"), _project(first_scope, "thread-a"))
+        await broker.select("session-a", "subject-a", first_scope)
+        await broker.upsert(DeviceId("device-a"), _project(second_scope, "thread-b"))
 
         # When / Then
         with pytest.raises(BrokerError, match="different Codex thread"):
-            await broker.bind("session-a", "subject-a", second_code)
+            await broker.select("session-a", "subject-a", second_scope)
         output = await broker.project_info("session-a", "subject-a")
         assert output.thread_id == "thread-a"
-        rebound = await broker.bind("session-b", "subject-a", second_code)
+        rebound = await broker.select("session-b", "subject-a", second_scope)
         assert rebound.thread_id == "thread-b"
 
     anyio.run(scenario)
@@ -116,9 +114,9 @@ def test_device_disconnect_revokes_bound_sessions() -> None:
         broker = BindingBroker()
         sender = ProjectInfoSender(broker)
         await broker.attach(DeviceId("device-a"), sender)
-        binding_code = "binding-code-123456789012"
-        await broker.upsert(DeviceId("device-a"), _binding(binding_code))
-        await broker.bind("session-a", "subject-a", binding_code)
+        project_scope = "codex-pro-project-a"
+        await broker.upsert(DeviceId("device-a"), _project(project_scope))
+        await broker.select("session-a", "subject-a", project_scope)
 
         # When
         await broker.detach(DeviceId("device-a"), sender)
@@ -136,9 +134,9 @@ def test_project_info_is_forwarded_to_bound_device() -> None:
         broker = BindingBroker()
         sender = ProjectInfoSender(broker)
         await broker.attach(DeviceId("device-a"), sender)
-        binding_code = "binding-code-123456789012"
-        await broker.upsert(DeviceId("device-a"), _binding(binding_code))
-        await broker.bind("session-a", "subject-a", binding_code)
+        project_scope = "codex-pro-project-a"
+        await broker.upsert(DeviceId("device-a"), _project(project_scope))
+        await broker.select("session-a", "subject-a", project_scope)
 
         # When
         output = await broker.project_info("session-a", "subject-a")

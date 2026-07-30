@@ -5,15 +5,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import codex_discord_prompt_rewrite as prompt_rewrite
-from codex_remote_mcp_bridge_config import BindingTicket
+from codex_remote_mcp_bridge_config import ProjectTicket
 
 
 def _skip_binding(
     thread_id: str,
+    project_scope: str,
     root: Path,
     log: prompt_rewrite.LogFunc,
 ) -> None:
-    _ = thread_id, root, log
+    _ = thread_id, project_scope, root, log
 
 
 class PromptRewriteTests(unittest.TestCase):
@@ -31,14 +32,19 @@ class PromptRewriteTests(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertNotEqual(first, second)
 
-    def test_rewrite_prompt_adds_one_time_project_binding(self) -> None:
+    def test_rewrite_prompt_adds_non_secret_project_selection(self) -> None:
         issued: list[tuple[str, Path]] = []
 
-        def issue(thread_id: str, root: Path, log: prompt_rewrite.LogFunc) -> BindingTicket:
+        def register(
+            thread_id: str,
+            project_scope: str,
+            root: Path,
+            log: prompt_rewrite.LogFunc,
+        ) -> ProjectTicket:
             _ = log
             issued.append((thread_id, root))
-            return BindingTicket(
-                binding_code="binding-code-12345678901234567890",
+            return ProjectTicket(
+                project_scope=project_scope,
                 expires_at=datetime.now(UTC) + timedelta(minutes=10),
             )
 
@@ -47,12 +53,13 @@ class PromptRewriteTests(unittest.TestCase):
             target_thread_id="thread-1",
             cwd=Path.cwd(),
             log=lambda _: None,
-            binding_issuer=issue,
+            project_registrar=register,
         )
 
         self.assertEqual(issued, [("thread-1", Path.cwd())])
-        self.assertIn("bind_project", result.prompt)
-        self.assertIn("binding-code-12345678901234567890", result.prompt)
+        self.assertIn("select_project", result.prompt)
+        self.assertNotIn("binding_code", result.prompt)
+        self.assertNotIn("binding-code-12345678901234567890", result.prompt)
         self.assertIn(
             f"conversation_scope: {prompt_rewrite.pro_conversation_scope('thread-1')}",
             result.prompt,
@@ -65,7 +72,7 @@ class PromptRewriteTests(unittest.TestCase):
             "!pro 이 설계를 검토해줘",
             cwd=Path.cwd(),
             log=logs.append,
-            binding_issuer=_skip_binding,
+            project_registrar=_skip_binding,
         )
 
         self.assertEqual(
@@ -86,7 +93,7 @@ class PromptRewriteTests(unittest.TestCase):
             "!pro review 인증 흐름",
             cwd=Path.cwd(),
             log=logs.append,
-            binding_issuer=_skip_binding,
+            project_registrar=_skip_binding,
         )
 
         self.assertEqual(

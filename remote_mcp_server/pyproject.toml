@@ -5,6 +5,7 @@ description = "Ephemeral ChatGPT-to-local-Codex project MCP gateway"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1",
+    "httpx2[http2,brotli,zstd]>=2,<3",
     "mcp==1.28.1",
     "pydantic-settings>=2.10,<3",
     "structlog>=25,<26",

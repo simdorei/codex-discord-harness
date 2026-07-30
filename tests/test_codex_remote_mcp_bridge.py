@@ -11,12 +11,12 @@ from typing import Self
 from codex_remote_mcp_bridge import RemoteMcpBridge
 from codex_remote_mcp_bridge_config import RemoteMcpBridgeConfig
 from simdorei_mcp_common.messages import (
-    BindingAck,
-    BindingUpsert,
     BridgeHello,
     GatewayHello,
+    ProjectAck,
     ProjectInfoCommand,
     ProjectInfoResult,
+    ProjectUpsert,
     RequestId,
 )
 
@@ -42,10 +42,10 @@ class FakeSocket:
         if '"type":"hello"' in message:
             BridgeHello.model_validate_json(message)
             self.inbound.put(GatewayHello().model_dump_json())
-        if '"type":"binding_upsert"' in message:
-            binding = BindingUpsert.model_validate_json(message)
+        if '"type":"project_upsert"' in message:
+            project = ProjectUpsert.model_validate_json(message)
             self.inbound.put(
-                BindingAck(binding_code=binding.binding_code).model_dump_json()
+                ProjectAck(project_scope=project.project_scope).model_dump_json()
             )
 
     def recv(self, timeout: float | None = None) -> str:
@@ -78,7 +78,7 @@ def _config() -> RemoteMcpBridgeConfig:
     )
 
 
-def test_bridge_registers_binding_and_dispatches_project_info(tmp_path: Path) -> None:
+def test_bridge_registers_project_and_dispatches_project_info(tmp_path: Path) -> None:
     # Given
     socket = FakeSocket()
     bridge = RemoteMcpBridge(
@@ -88,7 +88,7 @@ def test_bridge_registers_binding_and_dispatches_project_info(tmp_path: Path) ->
     )
 
     # When
-    ticket = bridge.issue_binding("thread-1", tmp_path)
+    ticket = bridge.register_project("thread-1", "codex-pro-project-1", tmp_path)
     socket.inbound.put(
         ProjectInfoCommand(
             request_id=RequestId("request-1"),
@@ -102,13 +102,13 @@ def test_bridge_registers_binding_and_dispatches_project_info(tmp_path: Path) ->
     bridge.close()
 
     # Then
-    assert len(ticket.binding_code) >= 24
-    binding = next(
-        BindingUpsert.model_validate_json(raw)
+    assert ticket.project_scope == "codex-pro-project-1"
+    project = next(
+        ProjectUpsert.model_validate_json(raw)
         for raw in socket.sent
-        if '"type":"binding_upsert"' in raw
+        if '"type":"project_upsert"' in raw
     )
-    assert binding.thread_id == "thread-1"
+    assert project.thread_id == "thread-1"
     result = ProjectInfoResult.model_validate_json(result_json)
     assert Path(result.output.root) == tmp_path.resolve()
 

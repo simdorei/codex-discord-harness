@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 from uuid import uuid4
@@ -24,63 +25,38 @@ def main() -> int:
         raise RuntimeError("Remote MCP is disabled in .env.")
     bridge = RemoteMcpBridge(config, log=lambda _: None)
     try:
-        ticket = bridge.issue_binding("remote-mcp-smoke", REPO_ROOT)
-        session = f"smoke-{uuid4().hex}"
-        subject = f"local-{uuid4().hex}"
-        tools = _rpc("tools/list", {})
-        raw_tools = tools.get("tools")
-        if not isinstance(raw_tools, list):
-            raise TypeError("MCP tools/list did not return a tool list.")
-        names: set[str] = set()
-        for tool in raw_tools:
-            if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
-                raise TypeError("MCP tools/list returned an invalid tool.")
-            names.add(tool["name"])
-        expected = {
-            "bind_project",
-            "list_project_files",
-            "project_info",
-            "read_project_file",
-            "write_project_file",
-        }
-        if names != expected:
-            raise RuntimeError(f"Unexpected MCP tool set: {sorted(names)}")
-        meta = {"openai/session": session, "openai/subject": subject}
-        _rpc(
-            "tools/call",
-            {
-                "name": "bind_project",
-                "arguments": {"binding_code": ticket.binding_code},
-                "_meta": meta,
-            },
+        scope = f"codex-pro-smoke-{uuid4().hex}"
+        ticket = bridge.register_project(
+            "remote-mcp-smoke",
+            scope,
+            REPO_ROOT,
         )
-        project = _rpc(
-            "tools/call",
-            {
-                "name": "project_info",
-                "arguments": {},
-                "_meta": meta,
-            },
+        if ticket.project_scope != scope:
+            raise RuntimeError("The gateway acknowledged a different project scope.")
+        resource_metadata = _json_get(
+            "https://simdorei.duckdns.org/.well-known/oauth-protected-resource/mcp"
         )
-        structured = project.get("structuredContent")
-        if not isinstance(structured, dict) or not isinstance(structured.get("root"), str):
-            raise TypeError("MCP project_info returned invalid structured content.")
-        root = Path(structured["root"])
-        if root != REPO_ROOT.resolve():
-            raise RuntimeError("MCP project root did not match the local repository.")
+        if resource_metadata.get("resource") != MCP_URL:
+            raise RuntimeError("OAuth protected-resource metadata is invalid.")
+        authorization_metadata = _json_get(
+            "https://simdorei.duckdns.org/.well-known/oauth-authorization-server"
+        )
+        if not isinstance(authorization_metadata.get("authorization_endpoint"), str):
+            raise RuntimeError("OAuth authorization metadata is invalid.")
+        _expect_oauth_required()
     finally:
         bridge.close()
-    print("Remote MCP smoke passed: HTTPS tools and local project round trip are ready.")
+    print("Remote MCP smoke passed: bridge registration and OAuth discovery are ready.")
     return 0
 
 
-def _rpc(method: str, params: dict[str, object]) -> dict[str, object]:
+def _expect_oauth_required() -> None:
     payload = json.dumps(
         {
             "jsonrpc": "2.0",
             "id": uuid4().hex,
-            "method": method,
-            "params": params,
+            "method": "tools/list",
+            "params": {},
         }
     ).encode("utf-8")
     request = urllib.request.Request(
@@ -92,14 +68,23 @@ def _rpc(method: str, params: dict[str, object]) -> dict[str, object]:
         },
         method="POST",
     )
+    try:
+        with urllib.request.urlopen(request, timeout=20):
+            pass
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return
+        raise
+    raise RuntimeError("The MCP endpoint accepted an unauthenticated request.")
+
+
+def _json_get(url: str) -> dict[str, object]:
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=20) as response:
         body = json.loads(response.read().decode("utf-8"))
-    if "error" in body:
-        raise RuntimeError(f"MCP JSON-RPC error: {body['error']}")
-    result = body.get("result")
-    if not isinstance(result, dict):
-        raise TypeError("MCP response did not contain an object result.")
-    return result
+    if not isinstance(body, dict):
+        raise TypeError("OAuth metadata response was not an object.")
+    return body
 
 
 if __name__ == "__main__":

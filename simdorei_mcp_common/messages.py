@@ -5,6 +5,9 @@ from typing import Annotated, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
+from simdorei_mcp_common.operation_requests import ProjectOperation
+
 DeviceId = NewType("DeviceId", str)
 RequestId = NewType("RequestId", str)
 
@@ -15,15 +18,15 @@ class ProtocolModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class BindingUpsert(ProtocolModel):
-    type: Literal["binding_upsert"] = "binding_upsert"
-    binding_code: str = Field(min_length=24, max_length=128)
+class ProjectUpsert(ProtocolModel):
+    type: Literal["project_upsert"] = "project_upsert"
+    project_scope: str = Field(min_length=12, max_length=200)
     thread_id: str = Field(min_length=1, max_length=200)
     project_name: str = Field(min_length=1, max_length=200)
     expires_at: datetime
 
 
-class BindProjectOutput(ProtocolModel):
+class ProjectSelectionOutput(ProtocolModel):
     project_name: str
     thread_id: str
     expires_at: datetime
@@ -52,6 +55,7 @@ class ReadFileOutput(ProtocolModel):
     end_line: int = Field(ge=0)
     total_lines: int = Field(ge=0)
     truncated: bool
+    redacted: bool
 
 
 class WriteFileOutput(ProtocolModel):
@@ -61,36 +65,40 @@ class WriteFileOutput(ProtocolModel):
     created: bool
 
 
-class ProjectInfoCommand(ProtocolModel):
+class ProjectCommand(ProtocolModel):
+    """Base class for commands routed to one bound Codex thread."""
+
+    request_id: RequestId
+    thread_id: str
+
+
+class ProjectInfoCommand(ProjectCommand):
     type: Literal["project_info"] = "project_info"
-    request_id: RequestId
-    thread_id: str
 
 
-class ListFilesCommand(ProtocolModel):
+class ListFilesCommand(ProjectCommand):
     type: Literal["list_files"] = "list_files"
-    request_id: RequestId
-    thread_id: str
     pattern: str = Field(min_length=1, max_length=500)
     limit: int = Field(ge=1, le=500)
 
 
-class ReadFileCommand(ProtocolModel):
+class ReadFileCommand(ProjectCommand):
     type: Literal["read_file"] = "read_file"
-    request_id: RequestId
-    thread_id: str
     path: str = Field(min_length=1, max_length=1_000)
     start_line: int = Field(ge=1)
     max_lines: int = Field(ge=1, le=500)
 
 
-class WriteFileCommand(ProtocolModel):
+class WriteFileCommand(ProjectCommand):
     type: Literal["write_file"] = "write_file"
-    request_id: RequestId
-    thread_id: str
     path: str = Field(min_length=1, max_length=1_000)
     content: str = Field(max_length=1_048_576)
     expected_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class ProjectOperationCommand(ProjectCommand):
+    type: Literal["project_operation"] = "project_operation"
+    operation: ProjectOperation
 
 
 class ProjectInfoResult(ProtocolModel):
@@ -117,6 +125,12 @@ class WriteFileResult(ProtocolModel):
     output: WriteFileOutput
 
 
+class ProjectOperationResult(ProtocolModel):
+    type: Literal["project_operation_result"] = "project_operation_result"
+    request_id: RequestId
+    output: ProjectOperationOutput
+
+
 class OperationErrorResult(ProtocolModel):
     type: Literal["operation_error"] = "operation_error"
     request_id: RequestId
@@ -126,21 +140,26 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
+    protocol_version: Literal[2]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[1] = 1
+    protocol_version: Literal[2] = 2
 
 
-class BindingAck(ProtocolModel):
-    type: Literal["binding_ack"] = "binding_ack"
-    binding_code: str
+class ProjectAck(ProtocolModel):
+    type: Literal["project_ack"] = "project_ack"
+    project_scope: str
 
 
 GatewayCommand = Annotated[
-    ProjectInfoCommand | ListFilesCommand | ReadFileCommand | WriteFileCommand,
+    ProjectInfoCommand
+    | ListFilesCommand
+    | ReadFileCommand
+    | WriteFileCommand
+    | ProjectOperationCommand,
     Field(discriminator="type"),
 ]
 BridgeResult = Annotated[
@@ -148,26 +167,29 @@ BridgeResult = Annotated[
     | ListFilesResult
     | ReadFileResult
     | WriteFileResult
+    | ProjectOperationResult
     | OperationErrorResult,
     Field(discriminator="type"),
 ]
 BridgeInboundMessage = Annotated[
     BridgeHello
-    | BindingUpsert
+    | ProjectUpsert
     | ProjectInfoResult
     | ListFilesResult
     | ReadFileResult
     | WriteFileResult
+    | ProjectOperationResult
     | OperationErrorResult,
     Field(discriminator="type"),
 ]
 GatewayInboundMessage = Annotated[
     GatewayHello
-    | BindingAck
+    | ProjectAck
     | ProjectInfoCommand
     | ListFilesCommand
     | ReadFileCommand
-    | WriteFileCommand,
+    | WriteFileCommand
+    | ProjectOperationCommand,
     Field(discriminator="type"),
 ]
 

@@ -9,11 +9,16 @@ from simdorei_mcp_common.messages import (
     ListFilesResult,
     OperationErrorResult,
     ProjectInfoResult,
+    ProjectOperationCommand,
+    ProjectOperationResult,
     ReadFileCommand,
     ReadFileResult,
     RequestId,
+    WriteFileCommand,
     WriteFileResult,
 )
+from simdorei_mcp_common.operation_outputs import FileCreateOutput
+from simdorei_mcp_common.operation_requests import FileCreateRequest
 
 
 def test_dispatch_reads_from_bound_project(tmp_path: Path) -> None:
@@ -43,11 +48,16 @@ def test_dispatch_reads_from_bound_project(tmp_path: Path) -> None:
     match result:
         case ReadFileResult(output=output):
             assert output.content == "second"
-        case ProjectInfoResult() | ListFilesResult() | WriteFileResult() | OperationErrorResult():
+        case (
+            ProjectInfoResult()
+            | ListFilesResult()
+            | WriteFileResult()
+            | ProjectOperationResult()
+            | OperationErrorResult()
+        ):
             raise AssertionError(f"unexpected result: {result.type}")
         case unreachable:
             assert_never(unreachable)
-
 
 def test_dispatch_reports_expired_binding(tmp_path: Path) -> None:
     # Given
@@ -75,7 +85,78 @@ def test_dispatch_reports_expired_binding(tmp_path: Path) -> None:
     match result:
         case OperationErrorResult(error_code=error_code):
             assert error_code == "binding_expired"
-        case ProjectInfoResult() | ListFilesResult() | ReadFileResult() | WriteFileResult():
+        case (
+            ProjectInfoResult()
+            | ListFilesResult()
+            | ReadFileResult()
+            | WriteFileResult()
+            | ProjectOperationResult()
+        ):
             raise AssertionError(f"unexpected result: {result.type}")
         case unreachable:
             assert_never(unreachable)
+
+
+def test_dispatch_creates_project_file_operation(tmp_path: Path) -> None:
+    # Given
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+
+    # When
+    result = dispatcher.execute(
+        ProjectOperationCommand(
+            request_id=RequestId("request-create"),
+            thread_id="thread-a",
+            operation=FileCreateRequest(
+                path="notes/new.txt",
+                content="created",
+            ),
+        )
+    )
+
+    # Then
+    match result:
+        case ProjectOperationResult(output=FileCreateOutput(path=path)):
+            assert path == "notes/new.txt"
+            assert (root / path).read_text(encoding="utf-8") == "created"
+        case (
+            ProjectInfoResult()
+            | ListFilesResult()
+            | ReadFileResult()
+            | WriteFileResult()
+            | OperationErrorResult()
+        ):
+            raise AssertionError(f"unexpected result: {result.type}")
+        case unreachable:
+            assert_never(unreachable)
+
+
+def test_legacy_write_file_creates_checkpoint(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+
+    result = dispatcher.execute(
+        WriteFileCommand(
+            request_id=RequestId("request-write"),
+            thread_id="thread-a",
+            path="legacy.txt",
+            content="written",
+            expected_sha256=None,
+        )
+    )
+
+    assert isinstance(result, WriteFileResult)
+    records = tuple((root / ".codex-remote-mcp/checkpoints").glob("cp_*.json"))
+    assert len(records) == 1

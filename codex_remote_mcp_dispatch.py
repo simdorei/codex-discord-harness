@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import assert_never
 
 from codex_remote_mcp_files import ProjectFileAccess, ProjectFileError
+from codex_remote_mcp_operations import (
+    execute_project_operation,
+    write_file_with_checkpoint,
+)
+from codex_remote_mcp_redaction import redact
 from simdorei_mcp_common.messages import (
     BridgeResult,
     GatewayCommand,
@@ -15,6 +20,8 @@ from simdorei_mcp_common.messages import (
     OperationErrorResult,
     ProjectInfoCommand,
     ProjectInfoResult,
+    ProjectOperationCommand,
+    ProjectOperationResult,
     ReadFileCommand,
     ReadFileResult,
     WriteFileCommand,
@@ -86,10 +93,19 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 ):
                     return WriteFileResult(
                         request_id=command.request_id,
-                        output=project.access.write_file(
+                        output=write_file_with_checkpoint(
+                            project.access.root,
                             path,
                             content,
                             expected_sha256=expected_sha256,
+                        ),
+                    )
+                case ProjectOperationCommand(operation=operation):
+                    return ProjectOperationResult(
+                        request_id=command.request_id,
+                        output=execute_project_operation(
+                            project.access.root,
+                            operation,
                         ),
                     )
                 case unreachable:
@@ -98,7 +114,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
             return OperationErrorResult(
                 request_id=command.request_id,
                 error_code=_error_code(exc),
-                message=str(exc),
+                message=redact(str(exc)),
             )
 
 

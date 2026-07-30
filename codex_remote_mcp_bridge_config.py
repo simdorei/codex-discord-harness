@@ -25,8 +25,8 @@ class RemoteMcpBridgeConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class BindingTicket:
-    binding_code: str
+class ProjectTicket:
+    project_scope: str
     expires_at: datetime
 
 

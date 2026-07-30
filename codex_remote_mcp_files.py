@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from codex_remote_mcp_redaction import redact
 from simdorei_mcp_common.messages import (
     FileEntry,
     ListFilesOutput,
@@ -20,15 +22,24 @@ MAX_LIST_RESULTS: Final = 500
 SENSITIVE_PARTS: Final = frozenset(
     {
         ".aws",
+        ".codex-remote-mcp",
         ".env",
         ".git",
+        ".npmrc",
         ".ssh",
         "cookies.txt",
         "credentials",
         "id_ed25519",
         "id_rsa",
         "secrets",
+        "gcloud",
     }
+)
+SENSITIVE_BASENAME: Final = (
+    re.compile(r"^\.env(?:\..+)?$", re.IGNORECASE),
+    re.compile(r"\.(?:pem|key|p12|pfx|keystore)$", re.IGNORECASE),
+    re.compile(r"^id_rsa.*$", re.IGNORECASE),
+    re.compile(r"(?:token|secret|credential)", re.IGNORECASE),
 )
 
 
@@ -71,6 +82,10 @@ class ProjectFileAccess:
 
     def project_info(self, thread_id: str) -> ProjectInfoOutput:
         return ProjectInfoOutput(root=str(self.root), thread_id=thread_id)
+
+    def resolve_path(self, value: str, *, require_file: bool = True) -> Path:
+        """Resolve one non-sensitive path while keeping it inside the project."""
+        return self._resolve(value, require_file=require_file)
 
     def list_files(self, pattern: str = "**/*", limit: int = 200) -> ListFilesOutput:
         bounded_limit = min(max(limit, 1), MAX_LIST_RESULTS)
@@ -117,14 +132,17 @@ class ProjectFileAccess:
         start_index = bounded_start - 1
         selected = lines[start_index : start_index + bounded_count]
         end_line = start_index + len(selected)
+        selected_content = "\n".join(selected)
+        safe_content = redact(selected_content)
         return ReadFileOutput(
             path=target.relative_to(self.root).as_posix(),
-            content="\n".join(selected),
+            content=safe_content,
             sha256=hashlib.sha256(raw).hexdigest(),
             start_line=bounded_start,
             end_line=end_line,
             total_lines=len(lines),
             truncated=end_line < len(lines),
+            redacted=safe_content != selected_content,
         )
 
     def write_file(
@@ -188,4 +206,9 @@ class ProjectFileAccess:
 
     def _is_sensitive(self, path: Path) -> bool:
         relative = path.relative_to(self.root)
-        return any(part.casefold() in SENSITIVE_PARTS for part in relative.parts)
+        parts = tuple(part.casefold() for part in relative.parts)
+        basename = relative.name
+        return (
+            any(part in SENSITIVE_PARTS for part in parts)
+            or any(pattern.search(basename) is not None for pattern in SENSITIVE_BASENAME)
+        )

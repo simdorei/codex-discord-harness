@@ -5,7 +5,7 @@ from pathlib import Path
 
 from codex_remote_mcp_bridge import LogFunc, RemoteMcpBridge
 from codex_remote_mcp_bridge_config import (
-    BindingTicket,
+    ProjectTicket,
     RemoteMcpBridgeConfig,
     load_remote_mcp_config,
 )
@@ -15,16 +15,17 @@ _bridge: RemoteMcpBridge | None = None
 _bridge_config: RemoteMcpBridgeConfig | None = None
 
 
-def issue_remote_mcp_binding(
+def register_remote_mcp_project(
     thread_id: str,
+    project_scope: str,
     root: Path,
     log: LogFunc,
-) -> BindingTicket | None:
+) -> ProjectTicket | None:
     config = load_remote_mcp_config()
     if config is None:
         return None
     bridge = _get_bridge(config, log)
-    return bridge.issue_binding(thread_id, root)
+    return bridge.register_project(thread_id, project_scope, root)
 
 
 def close_remote_mcp_bridge() -> None:
