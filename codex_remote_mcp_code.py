@@ -41,10 +41,9 @@ def read_project_rules(root: Path) -> ProjectRulesOutput:
     rules: list[RuleFile] = []
     for candidate in RULE_FILES:
         try:
-            target = access.resolve_path(candidate)
+            raw = access.read_bytes(candidate)
         except UnsafeProjectPathError:
             continue
-        raw = target.read_bytes()
         if len(raw) > MAX_FILE_BYTES:
             raw = raw[:MAX_FILE_BYTES]
         try:
@@ -69,10 +68,9 @@ def search_project(root: Path, request: CodeSearchRequest) -> CodeSearchOutput:
             break
         relative = candidate.relative_to(access.root).as_posix()
         try:
-            target = access.resolve_path(relative)
+            raw = access.read_bytes(relative)
         except UnsafeProjectPathError:
             continue
-        raw = target.read_bytes()
         if len(raw) > MAX_FILE_BYTES or b"\0" in raw:
             continue
         try:

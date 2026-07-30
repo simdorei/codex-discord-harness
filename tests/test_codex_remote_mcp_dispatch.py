@@ -19,6 +19,10 @@ from simdorei_mcp_common.messages import (
 )
 from simdorei_mcp_common.operation_outputs import FileCreateOutput
 from simdorei_mcp_common.operation_requests import FileCreateRequest
+from tests.remote_mcp_dispatch_support import (
+    TEST_PROJECT_SESSION_ID,
+    activate_test_session,
+)
 
 
 def test_dispatch_reads_from_bound_project(tmp_path: Path) -> None:
@@ -32,12 +36,14 @@ def test_dispatch_reads_from_bound_project(tmp_path: Path) -> None:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
 
     # When
     result = dispatcher.execute(
         ReadFileCommand(
             request_id=RequestId("request-a"),
             thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
             path="notes.txt",
             start_line=2,
             max_lines=20,
@@ -107,12 +113,14 @@ def test_dispatch_creates_project_file_operation(tmp_path: Path) -> None:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
 
     # When
     result = dispatcher.execute(
         ProjectOperationCommand(
             request_id=RequestId("request-create"),
             thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
             operation=FileCreateRequest(
                 path="notes/new.txt",
                 content="created",
@@ -130,6 +138,7 @@ def test_dispatch_creates_project_file_operation(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -146,11 +155,13 @@ def test_legacy_write_file_creates_checkpoint(tmp_path: Path) -> None:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
 
     result = dispatcher.execute(
         WriteFileCommand(
             request_id=RequestId("request-write"),
             thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
             path="legacy.txt",
             content="written",
             expected_sha256=None,

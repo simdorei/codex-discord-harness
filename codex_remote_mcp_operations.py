@@ -1,12 +1,15 @@
+# pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
 from pathlib import Path
 from typing import assert_never
 
-from codex_remote_mcp_checkpoints import (
+from codex_remote_mcp_checkpoint_transaction import (
     CheckpointTarget,
-    begin_checkpoint,
     checkpoint_transaction,
+)
+from codex_remote_mcp_checkpoints import (
+    begin_checkpoint,
     finish_checkpoint,
     list_checkpoints,
     restore_checkpoint,
@@ -14,6 +17,10 @@ from codex_remote_mcp_checkpoints import (
 )
 from codex_remote_mcp_code import read_project_rules, search_project
 from codex_remote_mcp_commands import list_commands, run_command
+from codex_remote_mcp_computer import (
+    ComputerController,
+    execute_computer_operation,
+)
 from codex_remote_mcp_files import ProjectFileAccess, ProjectFileError
 from codex_remote_mcp_git import git_commit, git_push, repo_diff, repo_status
 from codex_remote_mcp_images import (
@@ -39,6 +46,18 @@ from simdorei_mcp_common.operation_requests import (
     CodeSearchRequest,
     CommandListRequest,
     CommandRunRequest,
+    ComputerActivateRequest,
+    ComputerClickRequest,
+    ComputerCloseRequest,
+    ComputerDragRequest,
+    ComputerLaunchRequest,
+    ComputerListWindowsRequest,
+    ComputerPressKeysRequest,
+    ComputerScreenshotRequest,
+    ComputerScrollRequest,
+    ComputerSetClipboardRequest,
+    ComputerStopRequest,
+    ComputerTypeTextRequest,
     FileApplyPatchRequest,
     FileCreateRequest,
     GitCommitRequest,
@@ -62,9 +81,26 @@ class ProjectCapabilityError(ProjectFileError):
 def execute_project_operation(
     root: Path,
     operation: ProjectOperation,
+    *,
+    computer: ComputerController | None = None,
 ) -> ProjectOperationOutput:
     """Execute one typed capability inside a validated project root."""
     match operation:
+        case (
+            ComputerListWindowsRequest()
+            | ComputerActivateRequest()
+            | ComputerLaunchRequest()
+            | ComputerScreenshotRequest()
+            | ComputerClickRequest()
+            | ComputerDragRequest()
+            | ComputerScrollRequest()
+            | ComputerTypeTextRequest()
+            | ComputerPressKeysRequest()
+            | ComputerCloseRequest()
+            | ComputerSetClipboardRequest()
+            | ComputerStopRequest()
+        ):
+            return execute_computer_operation(operation, controller=computer)
         case ProjectRulesRequest():
             return read_project_rules(root)
         case CodeSearchRequest():
@@ -142,7 +178,7 @@ def _create_file(
 ) -> FileCreateOutput:
     access = ProjectFileAccess(root)
     target = access.resolve_path(request.path, require_file=False)
-    if target.exists() and not request.overwrite:
+    if access.file_exists(request.path) and not request.overwrite:
         raise ProjectCapabilityError(request.path, "file already exists")
     draft = begin_checkpoint(
         root,
@@ -150,18 +186,19 @@ def _create_file(
         (CheckpointTarget(path=request.path, absolute_path=target),),
     )
     expected_sha256 = None
-    if target.is_file():
+    if access.file_exists(request.path):
         expected_sha256 = access.read_file(
             request.path,
             start_line=1,
             max_lines=1,
         ).sha256
-    with checkpoint_transaction(draft):
+    with checkpoint_transaction(draft) as transaction:
         written = access.write_file(
             request.path,
             request.content,
             expected_sha256=expected_sha256,
         )
+        transaction.record_write(request.path, written.sha256)
         checkpoint_id = finish_checkpoint(draft)
     return FileCreateOutput(
         path=written.path,
@@ -186,11 +223,12 @@ def write_file_with_checkpoint(
         "write file",
         (CheckpointTarget(path=path, absolute_path=target),),
     )
-    with checkpoint_transaction(draft):
+    with checkpoint_transaction(draft) as transaction:
         output = access.write_file(
             path,
             content,
             expected_sha256=expected_sha256,
         )
-        finish_checkpoint(draft)
+        transaction.record_write(path, output.sha256)
+        _ = finish_checkpoint(draft)
     return output

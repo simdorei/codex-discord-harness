@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from pydantic import HttpUrl
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
-from remote_mcp_server.simdorei_mcp.oauth_provider import READ_SCOPE, WRITE_SCOPE
+from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
     OPEN_WORLD_ANNOTATIONS,
     READ_AUTH_META,

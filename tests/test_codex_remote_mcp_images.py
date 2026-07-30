@@ -32,6 +32,10 @@ from simdorei_mcp_common.operation_requests import (
     SaveImageFromUrlRequest,
     SaveImageRequest,
 )
+from tests.remote_mcp_dispatch_support import (
+    TEST_PROJECT_SESSION_ID,
+    activate_test_session,
+)
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nremote-image"
 
@@ -99,8 +103,10 @@ def test_image_save_writes_validated_image(tmp_path: Path) -> None:
         case ProjectOperationResult(output=ImageSaveOutput(image=image)):
             assert image.media_type == "image/png"
             assert (root / image.path).read_bytes() == PNG_BYTES
-        case _:
+        case ProjectOperationResult() | OperationErrorResult():
             raise AssertionError(f"unexpected result: {result.type}")
+        case unreachable:
+            assert_never(unreachable)
 
 
 def test_image_list_finds_project_images(tmp_path: Path) -> None:
@@ -117,8 +123,10 @@ def test_image_list_finds_project_images(tmp_path: Path) -> None:
     match result:
         case ProjectOperationResult(output=ImageListOutput(images=images)):
             assert tuple(image.path for image in images) == ("assets/test.png",)
-        case _:
+        case ProjectOperationResult() | OperationErrorResult():
             raise AssertionError(f"unexpected result: {result.type}")
+        case unreachable:
+            assert_never(unreachable)
 
 
 def test_image_retrieve_returns_base64_bytes(tmp_path: Path) -> None:
@@ -137,8 +145,10 @@ def test_image_retrieve_returns_base64_bytes(tmp_path: Path) -> None:
     match result:
         case ProjectOperationResult(output=ImageRetrieveOutput(data_base64=data)):
             assert base64.b64decode(data) == PNG_BYTES
-        case _:
+        case ProjectOperationResult() | OperationErrorResult():
             raise AssertionError(f"unexpected result: {result.type}")
+        case unreachable:
+            assert_never(unreachable)
 
 
 def test_image_url_rejects_loopback_destination(tmp_path: Path) -> None:
@@ -205,6 +215,7 @@ def _bound_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
     return root, dispatcher
 
 
@@ -220,5 +231,6 @@ def _command(
     return ProjectOperationCommand(
         request_id=RequestId(f"request-{suffix}"),
         thread_id="thread-a",
+        computer_session_id=TEST_PROJECT_SESSION_ID,
         operation=operation,
     )

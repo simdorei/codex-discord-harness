@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -11,12 +12,10 @@ from codex_remote_mcp_bridge_config import ProjectTicket
 
 LogFunc = Callable[[str], None]
 ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
-PRO_SKILL_CALL: Final = (
-    "$ask-chatgpt-pro "
-    "[@Browser](plugin://browser@openai-bundled)"
-)
+PRO_SKILL_CALL: Final = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
 PRO_CONVERSATION_SCOPE_LENGTH: Final = 24
 PRO_REVIEW_MARKER: Final = "<pro-review>"
+PROJECT_SCOPE_RANDOM_BYTES: Final = 24
 
 
 def _rewrite_pro_command(prompt: str) -> str | None:
@@ -44,6 +43,11 @@ def pro_conversation_scope(thread_id: str) -> str:
     return f"codex-pro-{digest[:PRO_CONVERSATION_SCOPE_LENGTH]}"
 
 
+def fresh_project_scope() -> str:
+    """Return a short-lived, unguessable selector for one registration."""
+    return f"codex-project-{secrets.token_urlsafe(PROJECT_SCOPE_RANDOM_BYTES)}"
+
+
 def rewrite_prompt(
     prompt: str,
     target_thread_id: str | None = None,
@@ -57,7 +61,7 @@ def rewrite_prompt(
         return mapped_delivery.keep_prompt(prompt)
     if not target_thread_id:
         return mapped_delivery.keep_prompt(rewritten)
-    project_scope = pro_conversation_scope(target_thread_id)
+    project_scope = fresh_project_scope()
     ticket = project_registrar(target_thread_id, project_scope, cwd, log)
     if ticket is None:
         return mapped_delivery.keep_prompt(rewritten)
@@ -66,7 +70,7 @@ def rewrite_prompt(
             "",
             "<local-project-mcp>",
             "A local Codex project is available through the configured MCP connector.",
-            f"conversation_scope: {project_scope}",
+            f"conversation_scope: {pro_conversation_scope(target_thread_id)}",
             f"project_scope: {ticket.project_scope}",
             "Before inspecting or changing local files, call select_project exactly once",
             "with the project_scope above. Read a file before updating it,",

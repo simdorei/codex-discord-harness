@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyright: reportAny=false
 import ctypes
 import json
 import os
@@ -10,14 +11,14 @@ import time
 import unittest
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import IO, cast
 from pathlib import Path
+from typing import IO, cast
 
 import codex_app_server_transport_process as process_mod
 
-
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
 
 
 def _pid_exists(pid: int) -> bool:
@@ -30,11 +31,25 @@ def _pid_exists(pid: int) -> bool:
             return True
         return True
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.GetExitCodeProcess.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    kernel32.GetExitCodeProcess.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
     handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not handle:
         return ctypes.get_last_error() == 5
-    _ = kernel32.CloseHandle(handle)
-    return True
+    exit_code = ctypes.c_uint32()
+    try:
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return int(exit_code.value) == _STILL_ACTIVE
+    finally:
+        _ = kernel32.CloseHandle(handle)
 
 
 def _wait_pid_gone(pid: int, timeout_sec: float = 3.0) -> bool:
@@ -61,7 +76,7 @@ def _kill_exact_tree(pid: int) -> None:
     try:
         os.kill(pid, 9)
     except ProcessLookupError:
-        pass
+        return
 
 
 @contextmanager
@@ -114,7 +129,9 @@ def _stubborn_process_tree(
 
 @unittest.skipUnless(os.name == "nt", "Windows task-tree semantics")
 class ResidentAppServerProcessTreeTests(unittest.TestCase):
-    def test_close_removes_owned_descendants_but_preserves_unrelated_process(self) -> None:
+    def test_close_removes_owned_descendants_but_preserves_unrelated_process(
+        self,
+    ) -> None:
         sentinel = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(300)"],
             creationflags=_CREATE_NO_WINDOW,
@@ -138,7 +155,9 @@ class ResidentAppServerProcessTreeTests(unittest.TestCase):
             self.assertIsNotNone(process.poll())
             self.assertTrue(all(_wait_pid_gone(pid) for pid in pids[1:]), pids)
 
-    def test_job_ownership_removes_a_child_spawned_during_graceful_shutdown(self) -> None:
+    def test_job_ownership_removes_a_child_spawned_during_graceful_shutdown(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             pid_path = Path(temp_dir) / "late-child.pid"
             parent_code = "\n".join(
@@ -154,7 +173,9 @@ class ResidentAppServerProcessTreeTests(unittest.TestCase):
             )
             late_pid = 0
             try:
-                process_mod.close_resident_app_server_process(process, lambda _line: None)
+                process_mod.close_resident_app_server_process(
+                    process, lambda _line: None
+                )
                 deadline = time.monotonic() + 3.0
                 while time.monotonic() < deadline and not pid_path.exists():
                     time.sleep(0.02)

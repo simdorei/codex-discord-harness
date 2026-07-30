@@ -300,6 +300,12 @@ Common prefix commands:
 
 Bundled Codex skill `deep-interview` powers `/interview` and `!interview` for unclear or risky requests.
 
+When the optional local-project MCP is connected, `!pro` can also let the
+matching ChatGPT Pro conversation inspect screenshots and operate safe Windows
+app windows while that thread's short-lived binding is active. Terminal,
+password/OTP, Windows security, and unrestricted shell control remain blocked.
+See [docs/remote-mcp.md](docs/remote-mcp.md) for the exact controls and stop rule.
+
 Numeric refs follow the same DB-root numbering as `!list`.
 
 See [docs/operations.md](docs/operations.md) for daily workflow details.

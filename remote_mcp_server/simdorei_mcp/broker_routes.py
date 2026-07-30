@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import final
+
+from remote_mcp_server.simdorei_mcp.broker_errors import (
+    ActiveBindingMissingError,
+    BridgeUnavailableError,
+    SessionProjectConflictError,
+)
+from remote_mcp_server.simdorei_mcp.broker_models import PendingCall, SessionRoute
+from simdorei_mcp_common.messages import DeviceId, RequestId
+
+RouteFailure = ActiveBindingMissingError | BridgeUnavailableError
+
+
+@final
+class BrokerRouteRegistry:  # MUTABLE_OK: caller serializes access with broker lock.
+    """Maintains the broker's session-to-thread routing indexes."""
+
+    def __init__(
+        self,
+        sessions: dict[str, SessionRoute],
+        thread_sessions: dict[tuple[DeviceId, str], str],
+        pending: dict[RequestId, PendingCall],
+    ) -> None:
+        self._sessions = sessions
+        self._thread_sessions = thread_sessions
+        self._pending = pending
+
+    def require_compatible(self, route: SessionRoute) -> None:
+        current = self._sessions.get(route.session)
+        if (
+            current is not None
+            and current.expires_at > datetime.now(UTC)
+            and (
+                current.device_id != route.device_id
+                or current.thread_id != route.thread_id
+                or current.subject != route.subject
+            )
+        ):
+            raise SessionProjectConflictError(
+                "This ChatGPT conversation is already connected to a different "
+                + "Codex thread. Open a new ChatGPT conversation and select there."
+            )
+
+    def replace(self, route: SessionRoute) -> None:
+        current = self._sessions.get(route.session)
+        if current is not None:
+            self.remove(current)
+        previous_session = self._thread_sessions.get((route.device_id, route.thread_id))
+        if previous_session is not None and previous_session != route.session:
+            previous = self._sessions.get(previous_session)
+            if previous is not None:
+                self.remove(previous)
+        self._sessions[route.session] = route
+        self._thread_sessions[(route.device_id, route.thread_id)] = route.session
+
+    def remove(self, route: SessionRoute) -> None:
+        if self._sessions.get(route.session) is route:
+            del self._sessions[route.session]
+        key = (route.device_id, route.thread_id)
+        if self._thread_sessions.get(key) == route.session:
+            del self._thread_sessions[key]
+        self.cancel(
+            route,
+            ActiveBindingMissingError("ChatGPT project selection was replaced"),
+        )
+
+    def cancel(self, route: SessionRoute, failure: RouteFailure) -> None:
+        for pending in self._pending.values():
+            if pending.computer_session_id == route.computer_session_id:
+                pending.failure = failure
+                pending.event.set()

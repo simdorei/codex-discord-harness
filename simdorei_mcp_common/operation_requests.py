@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class OperationRequest(BaseModel):
@@ -109,6 +109,117 @@ class CheckpointRestoreRequest(OperationRequest):
     checkpoint_id: str = Field(pattern=r"^cp_[a-f0-9]{16}$")
 
 
+ComputerApp = Literal["chrome", "notepad"]
+ComputerMouseButton = Literal["left", "right", "middle"]
+ComputerWindowId = Annotated[int, Field(gt=0)]
+ComputerObservationId = Annotated[str, Field(min_length=8, max_length=100)]
+ComputerCoordinate = Annotated[int, Field(ge=0, le=100_000)]
+ComputerClickCount = Annotated[int, Field(ge=1, le=3)]
+ComputerScrollDelta = Annotated[int, Field(ge=-10_000, le=10_000)]
+ComputerText = Annotated[str, Field(min_length=1, max_length=4_096)]
+ComputerClipboardText = Annotated[str, Field(max_length=100_000)]
+ComputerKeyList = Annotated[list[str], Field(min_length=1, max_length=4)]
+
+
+class ComputerRequestValidationError(ValueError):
+    """Raised when a computer request would perform no useful action."""
+
+
+class ComputerListWindowsRequest(OperationRequest):
+    kind: Literal["computer_list_windows"] = "computer_list_windows"
+
+
+class ComputerActivateRequest(OperationRequest):
+    kind: Literal["computer_activate"] = "computer_activate"
+    window_id: ComputerWindowId
+
+
+class ComputerLaunchRequest(OperationRequest):
+    kind: Literal["computer_launch"] = "computer_launch"
+    app: ComputerApp
+
+
+class ComputerScreenshotRequest(OperationRequest):
+    kind: Literal["computer_screenshot"] = "computer_screenshot"
+    window_id: ComputerWindowId
+
+
+class ObservedComputerRequest(OperationRequest):
+    window_id: ComputerWindowId
+    observation_id: ComputerObservationId
+
+
+class ComputerClickRequest(ObservedComputerRequest):
+    kind: Literal["computer_click"] = "computer_click"
+    x: ComputerCoordinate
+    y: ComputerCoordinate
+    button: ComputerMouseButton = "left"
+    click_count: ComputerClickCount = 1
+
+
+class ComputerDragRequest(ObservedComputerRequest):
+    kind: Literal["computer_drag"] = "computer_drag"
+    start_x: ComputerCoordinate
+    start_y: ComputerCoordinate
+    end_x: ComputerCoordinate
+    end_y: ComputerCoordinate
+
+
+class ComputerScrollRequest(ObservedComputerRequest):
+    kind: Literal["computer_scroll"] = "computer_scroll"
+    x: ComputerCoordinate
+    y: ComputerCoordinate
+    delta_x: ComputerScrollDelta = 0
+    delta_y: ComputerScrollDelta = 0
+
+    @model_validator(mode="after")
+    def require_nonzero_delta(self) -> Self:
+        if not self.delta_x and not self.delta_y:
+            raise ComputerRequestValidationError(
+                "A non-zero scroll amount is required."
+            )
+        return self
+
+
+class ComputerTypeTextRequest(ObservedComputerRequest):
+    kind: Literal["computer_type_text"] = "computer_type_text"
+    text: ComputerText
+
+
+class ComputerPressKeysRequest(ObservedComputerRequest):
+    kind: Literal["computer_press_keys"] = "computer_press_keys"
+    keys: tuple[str, ...] = Field(min_length=1, max_length=4)
+
+
+class ComputerCloseRequest(ObservedComputerRequest):
+    kind: Literal["computer_close"] = "computer_close"
+
+
+class ComputerSetClipboardRequest(ObservedComputerRequest):
+    kind: Literal["computer_set_clipboard"] = "computer_set_clipboard"
+    text: ComputerClipboardText
+
+
+class ComputerStopRequest(OperationRequest):
+    kind: Literal["computer_stop"] = "computer_stop"
+
+
+ComputerOperation = (
+    ComputerListWindowsRequest
+    | ComputerActivateRequest
+    | ComputerLaunchRequest
+    | ComputerScreenshotRequest
+    | ComputerClickRequest
+    | ComputerDragRequest
+    | ComputerScrollRequest
+    | ComputerTypeTextRequest
+    | ComputerPressKeysRequest
+    | ComputerCloseRequest
+    | ComputerSetClipboardRequest
+    | ComputerStopRequest
+)
+
+
 ProjectOperation = Annotated[
     ProjectRulesRequest
     | ProjectStatusRequest
@@ -127,6 +238,18 @@ ProjectOperation = Annotated[
     | RetrieveImageRequest
     | CheckpointListRequest
     | CheckpointShowRequest
-    | CheckpointRestoreRequest,
+    | CheckpointRestoreRequest
+    | ComputerListWindowsRequest
+    | ComputerActivateRequest
+    | ComputerLaunchRequest
+    | ComputerScreenshotRequest
+    | ComputerClickRequest
+    | ComputerDragRequest
+    | ComputerScrollRequest
+    | ComputerTypeTextRequest
+    | ComputerPressKeysRequest
+    | ComputerCloseRequest
+    | ComputerSetClipboardRequest
+    | ComputerStopRequest,
     Field(discriminator="kind"),
 ]

@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import assert_never
+from typing import assert_never, final
 
+import anyio
+import anyio.lowlevel
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
+from starlette.websockets import WebSocketDisconnect
 
-from remote_mcp_server.simdorei_mcp.app import create_app
+from remote_mcp_server.simdorei_mcp.app import WebSocketBridgeSender, create_app
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 from simdorei_mcp_common.messages import (
     BridgeHello,
+    DeviceId,
     GatewayHello,
     ListFilesCommand,
     ProjectAck,
     ProjectInfoCommand,
+    ProjectOperationCommand,
+    ProjectSessionCommand,
     ProjectUpsert,
     ReadFileCommand,
     WriteFileCommand,
@@ -23,11 +29,13 @@ from simdorei_mcp_common.messages import (
 
 
 def _settings() -> GatewaySettings:
-    return GatewaySettings(
-        device_id="device-a",
-        device_token=SecretStr("bridge-secret-1234567890"),
-        public_base_url="https://simdorei.duckdns.org",
-        owner_token=SecretStr("owner-secret-12345678901234567890"),
+    return GatewaySettings.model_validate(
+        {
+            "device_id": "device-a",
+            "device_token": "bridge-secret-1234567890",
+            "public_base_url": "https://simdorei.duckdns.org",
+            "owner_token": "owner-secret-12345678901234567890",
+        }
     )
 
 
@@ -41,14 +49,15 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
     ):
         socket.send_text(
             BridgeHello(
-                protocol_version=2,
-                device_id="device-a",
+                protocol_version=5,
+                device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
         hello = parse_gateway_message(socket.receive_text())
         socket.send_text(
             ProjectUpsert(
                 project_scope="codex-pro-project-a",
+                binding_id="binding-generation-project-a",
                 thread_id="thread-a",
                 project_name="project-a",
                 expires_at=datetime.now(UTC) + timedelta(minutes=10),
@@ -59,14 +68,30 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
     match hello:
         case GatewayHello():
             pass
-        case ProjectAck() | ProjectInfoCommand() | ListFilesCommand() | ReadFileCommand() | WriteFileCommand():
+        case (
+            ProjectAck()
+            | ProjectInfoCommand()
+            | ProjectOperationCommand()
+            | ProjectSessionCommand()
+            | ListFilesCommand()
+            | ReadFileCommand()
+            | WriteFileCommand()
+        ):
             raise AssertionError(f"unexpected message: {hello.type}")
         case unreachable:
             assert_never(unreachable)
     match project:
-        case ProjectAck():
-            pass
-        case GatewayHello() | ProjectInfoCommand() | ListFilesCommand() | ReadFileCommand() | WriteFileCommand():
+        case ProjectAck(binding_id=binding_id):
+            assert binding_id == "binding-generation-project-a"
+        case (
+            GatewayHello()
+            | ProjectInfoCommand()
+            | ProjectOperationCommand()
+            | ProjectSessionCommand()
+            | ListFilesCommand()
+            | ReadFileCommand()
+            | WriteFileCommand()
+        ):
             raise AssertionError(f"unexpected message: {project.type}")
         case unreachable:
             assert_never(unreachable)
@@ -81,3 +106,104 @@ def test_bridge_protocol_rejects_version_one_hello() -> None:
                 "device_id": "device-a",
             }
         )
+
+
+def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
+    app = create_app(_settings())
+    headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/bridge", headers=headers) as first,
+    ):
+        first.send_text(
+            BridgeHello(
+                protocol_version=5,
+                device_id=DeviceId("device-a"),
+            ).model_dump_json()
+        )
+        assert isinstance(parse_gateway_message(first.receive_text()), GatewayHello)
+
+        with client.websocket_connect("/bridge", headers=headers) as replacement:
+            replacement.send_text(
+                BridgeHello(
+                    protocol_version=5,
+                    device_id=DeviceId("device-a"),
+                ).model_dump_json()
+            )
+            assert isinstance(
+                parse_gateway_message(replacement.receive_text()),
+                GatewayHello,
+            )
+            with pytest.raises(WebSocketDisconnect) as closed:
+                _ = first.receive_text()
+
+    assert closed.value.code == 1012
+
+
+@final
+class _BlockingGatewaySocket:
+    def __init__(self) -> None:
+        self.send_started = anyio.Event()
+        self.release_send = anyio.Event()
+        self.close_called = anyio.Event()
+        self.sending = False
+        self.close_overlapped_send = False
+        self.close_code = 0
+        self.close_reason = ""
+
+    async def send_text(self, data: str) -> None:
+        _ = data
+        self.sending = True
+        self.send_started.set()
+        await self.release_send.wait()
+        self.sending = False
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_overlapped_send = self.sending
+        self.close_code = code
+        self.close_reason = reason or ""
+        self.close_called.set()
+
+
+def test_gateway_sender_serializes_protocol_close_after_an_inflight_send() -> None:
+    async def scenario() -> None:
+        socket = _BlockingGatewaySocket()
+        sender = WebSocketBridgeSender(socket)
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(sender.send_control, GatewayHello())
+            await socket.send_started.wait()
+            tasks.start_soon(sender.reject, 1002, "duplicate hello")
+            await anyio.lowlevel.checkpoint()
+            assert not socket.close_called.is_set()
+            socket.release_send.set()
+
+        assert socket.close_called.is_set()
+        assert socket.close_overlapped_send is False
+        assert socket.close_code == 1002
+        assert socket.close_reason == "duplicate hello"
+
+    anyio.run(scenario)
+
+
+def test_duplicate_hello_closes_with_protocol_error() -> None:
+    app = create_app(_settings())
+    headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/bridge", headers=headers) as socket,
+    ):
+        hello = BridgeHello(
+            protocol_version=5,
+            device_id=DeviceId("device-a"),
+        ).model_dump_json()
+        socket.send_text(hello)
+        assert isinstance(parse_gateway_message(socket.receive_text()), GatewayHello)
+
+        socket.send_text(hello)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            _ = socket.receive_text()
+
+    assert closed.value.code == 1002

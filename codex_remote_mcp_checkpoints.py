@@ -3,17 +3,19 @@ from __future__ import annotations
 import base64
 import difflib
 import hashlib
-import os
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import ClassVar, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from codex_remote_mcp_checkpoint_transaction import (
+    BeforeSnapshot,
+    CheckpointDraft,
+    CheckpointTarget,
+    checkpoint_transaction,
+)
+from codex_remote_mcp_file_store import ProjectFileStore
 from codex_remote_mcp_files import (
     FileConflictError,
     ProjectFileAccess,
@@ -27,7 +29,7 @@ MAX_CHECKPOINT_BYTES: Final = 10_485_760
 
 
 class StoredSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     path: str
     before_exists: bool
@@ -37,34 +39,12 @@ class StoredSnapshot(BaseModel):
 
 
 class StoredCheckpoint(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     checkpoint_id: str = Field(pattern=r"^cp_[a-f0-9]{16}$")
     created_at: str
     reason: str
     snapshots: tuple[StoredSnapshot, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointTarget:
-    path: str
-    absolute_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class BeforeSnapshot:
-    target: CheckpointTarget
-    existed: bool
-    content: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointDraft:
-    root: Path
-    checkpoint_id: str
-    created_at: str
-    reason: str
-    snapshots: tuple[BeforeSnapshot, ...]
 
 
 def begin_checkpoint(
@@ -74,10 +54,11 @@ def begin_checkpoint(
 ) -> CheckpointDraft:
     """Capture pre-mutation bytes for a bounded set of validated paths."""
     snapshots: list[BeforeSnapshot] = []
+    access = ProjectFileAccess(root)
     total_bytes = 0
     for target in targets:
-        existed = target.absolute_path.is_file()
-        content = target.absolute_path.read_bytes() if existed else b""
+        existed = access.file_exists(target.path)
+        content = access.read_bytes(target.path) if existed else b""
         total_bytes += len(content)
         if total_bytes > MAX_CHECKPOINT_BYTES:
             raise ProjectFileSizeError(
@@ -108,10 +89,11 @@ def begin_checkpoint(
 def finish_checkpoint(draft: CheckpointDraft) -> str:
     """Persist the before/after record after a successful mutation."""
     stored: list[StoredSnapshot] = []
+    access = ProjectFileAccess(draft.root)
     total_bytes = 0
     for snapshot in draft.snapshots:
-        after_exists = snapshot.target.absolute_path.is_file()
-        after = snapshot.target.absolute_path.read_bytes() if after_exists else b""
+        after_exists = access.file_exists(snapshot.target.path)
+        after = access.read_bytes(snapshot.target.path) if after_exists else b""
         total_bytes += len(snapshot.content) + len(after)
         if total_bytes > MAX_CHECKPOINT_BYTES * 2:
             raise ProjectFileSizeError(
@@ -133,11 +115,11 @@ def finish_checkpoint(draft: CheckpointDraft) -> str:
         reason=draft.reason,
         snapshots=tuple(stored),
     )
-    directory = draft.root / CHECKPOINT_DIRECTORY
-    directory.mkdir(parents=True, exist_ok=True)
-    _atomic_bytes_write(
-        directory / f"{draft.checkpoint_id}.json",
+    relative = Path(CHECKPOINT_DIRECTORY) / f"{draft.checkpoint_id}.json"
+    _ = ProjectFileStore(draft.root.resolve()).write_bytes(
+        relative,
         record.model_dump_json().encode("utf-8"),
+        expected_sha256=None,
     )
     return draft.checkpoint_id
 
@@ -148,7 +130,7 @@ def list_checkpoints(root: Path) -> tuple[CheckpointEntry, ...]:
     if not directory.is_dir():
         return ()
     entries = [
-        _entry(_load_record(path))
+        _entry(_load_record(root, path.name.removesuffix(".json")))
         for path in directory.glob("cp_*.json")
         if path.is_file()
     ]
@@ -157,7 +139,7 @@ def list_checkpoints(root: Path) -> tuple[CheckpointEntry, ...]:
 
 def show_checkpoint(root: Path, checkpoint_id: str) -> tuple[CheckpointEntry, str]:
     """Return checkpoint metadata and a bounded unified diff."""
-    record = _load_record(_record_path(root, checkpoint_id))
+    record = _load_record(root, checkpoint_id)
     fragments = tuple(_snapshot_diff(snapshot) for snapshot in record.snapshots)
     patch = "\n".join(fragment for fragment in fragments if fragment)
     return _entry(record), redact(patch[:MAX_CHECKPOINT_BYTES])
@@ -165,75 +147,68 @@ def show_checkpoint(root: Path, checkpoint_id: str) -> tuple[CheckpointEntry, st
 
 def restore_checkpoint(root: Path, checkpoint_id: str) -> tuple[str, ...]:
     """Restore every checkpointed path to its before state."""
-    record = _load_record(_record_path(root, checkpoint_id))
+    record = _load_record(root, checkpoint_id)
     access = ProjectFileAccess(root)
-    targets = tuple(
-        (
-            snapshot,
-            access.resolve_path(snapshot.path, require_file=False),
-        )
-        for snapshot in record.snapshots
-    )
-    for snapshot, target in targets:
-        current_exists = target.is_file()
+    snapshots = record.snapshots
+    targets: list[CheckpointTarget] = []
+    for snapshot in snapshots:
+        absolute_path = access.resolve_path(snapshot.path, require_file=False)
+        targets.append(CheckpointTarget(snapshot.path, absolute_path))
+        current_exists = access.file_exists(snapshot.path)
         expected_after = base64.b64decode(
             snapshot.after_base64,
             validate=True,
         )
-        if (
-            current_exists != snapshot.after_exists
-            or (target.exists() and not current_exists)
-            or (current_exists and target.read_bytes() != expected_after)
+        if current_exists != snapshot.after_exists or (
+            current_exists and access.read_bytes(snapshot.path) != expected_after
         ):
             raise FileConflictError(
                 snapshot.path,
                 "file changed after checkpoint was created",
             )
+    rollback = begin_checkpoint(
+        root,
+        f"rollback failed restore {checkpoint_id}",
+        tuple(targets),
+    )
     restored: list[str] = []
-    for snapshot, target in targets:
-        if snapshot.before_exists:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            content = base64.b64decode(snapshot.before_base64, validate=True)
-            _atomic_bytes_write(target, content)
-        else:
-            target.unlink(missing_ok=True)
-        restored.append(snapshot.path)
+    with checkpoint_transaction(rollback) as transaction:
+        for snapshot in snapshots:
+            current_exists = access.file_exists(snapshot.path)
+            expected_after = base64.b64decode(
+                snapshot.after_base64,
+                validate=True,
+            )
+            if snapshot.before_exists:
+                content = base64.b64decode(snapshot.before_base64, validate=True)
+                expected = (
+                    hashlib.sha256(expected_after).hexdigest()
+                    if snapshot.after_exists
+                    else None
+                )
+                _ = access.write_bytes(
+                    snapshot.path,
+                    content,
+                    expected_sha256=expected,
+                )
+                transaction.record_write(
+                    snapshot.path,
+                    hashlib.sha256(content).hexdigest(),
+                )
+            elif current_exists:
+                access.delete_file(
+                    snapshot.path,
+                    expected_sha256=hashlib.sha256(expected_after).hexdigest(),
+                )
+                transaction.record_delete(snapshot.path)
+            restored.append(snapshot.path)
     return tuple(restored)
 
 
-def rollback_checkpoint(draft: CheckpointDraft) -> None:
-    """Restore captured before bytes after a mutation fails."""
-    access = ProjectFileAccess(draft.root)
-    for snapshot in draft.snapshots:
-        target = access.resolve_path(
-            snapshot.target.path,
-            require_file=False,
-        )
-        if snapshot.existed:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_bytes_write(target, snapshot.content)
-        else:
-            target.unlink(missing_ok=True)
-
-
-@contextmanager
-def checkpoint_transaction(draft: CheckpointDraft) -> Iterator[None]:
-    """Rollback an entire mutation if any write or persistence step fails."""
-    try:
-        yield
-    except Exception:
-        # Intentional broad recovery boundary: the checkpoint is the only
-        # transaction layer spanning arbitrary filesystem and storage errors.
-        rollback_checkpoint(draft)
-        raise
-
-
-def _record_path(root: Path, checkpoint_id: str) -> Path:
-    return root / CHECKPOINT_DIRECTORY / f"{checkpoint_id}.json"
-
-
-def _load_record(path: Path) -> StoredCheckpoint:
-    return StoredCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+def _load_record(root: Path, checkpoint_id: str) -> StoredCheckpoint:
+    relative = Path(CHECKPOINT_DIRECTORY) / f"{checkpoint_id}.json"
+    raw = ProjectFileStore(root.resolve()).read_bytes(relative)
+    return StoredCheckpoint.model_validate_json(raw)
 
 
 def _entry(record: StoredCheckpoint) -> CheckpointEntry:
@@ -260,24 +235,3 @@ def _snapshot_diff(snapshot: StoredSnapshot) -> str:
             tofile=f"b/{snapshot.path}",
         )
     )
-
-
-def _atomic_bytes_write(path: Path, content: bytes) -> None:
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-        temporary = None
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)

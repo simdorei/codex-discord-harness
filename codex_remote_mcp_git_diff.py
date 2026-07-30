@@ -73,10 +73,9 @@ def _untracked_diff(
     patches: list[str] = []
     for path in (value for value in raw_paths.split("\0") if value):
         try:
-            target = access.resolve_path(path)
+            raw = access.read_bytes(path)
         except ProjectFileError:
             continue
-        raw = target.read_bytes()
         if len(raw) > MAX_FILE_BYTES or b"\0" in raw:
             files.append(DiffFile(path=path, added=0, removed=0))
             patches.append(f"Binary untracked file: {path}\n")

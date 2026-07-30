@@ -7,7 +7,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
-from remote_mcp_server.simdorei_mcp.oauth_provider import READ_SCOPE, WRITE_SCOPE
+from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
     READ_AUTH_META,
     READ_ONLY_ANNOTATIONS,
@@ -152,6 +152,7 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     from remote_mcp_server.simdorei_mcp.tools_commands_git import (
         register_command_git_tools,
     )
+    from remote_mcp_server.simdorei_mcp.tools_computer import register_computer_tools
     from remote_mcp_server.simdorei_mcp.tools_images import register_image_tools
     from remote_mcp_server.simdorei_mcp.tools_project import register_project_tools
 
@@ -159,3 +160,4 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     register_command_git_tools(mcp, broker)
     register_image_tools(mcp, broker)
     register_checkpoint_tools(mcp, broker)
+    register_computer_tools(mcp, broker)

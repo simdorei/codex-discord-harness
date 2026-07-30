@@ -3,7 +3,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
-from remote_mcp_server.simdorei_mcp.oauth_provider import READ_SCOPE, WRITE_SCOPE
+from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
     READ_AUTH_META,
     READ_ONLY_ANNOTATIONS,

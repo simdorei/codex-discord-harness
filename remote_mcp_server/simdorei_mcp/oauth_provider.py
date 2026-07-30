@@ -18,11 +18,11 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import SecretStr
 
+from remote_mcp_server.simdorei_mcp.oauth_scopes import (
+    DEFAULT_OAUTH_SCOPES,
+    OAuthProviderConfigurationError,
+)
 from remote_mcp_server.simdorei_mcp.oauth_store import OAuthStore
-
-READ_SCOPE = "files:read"
-WRITE_SCOPE = "files:write"
-OAUTH_SCOPES = [READ_SCOPE, WRITE_SCOPE]
 
 
 class ApprovalNotFoundError(Exception):
@@ -79,7 +79,9 @@ class SingleUserOAuthProvider(
         params: AuthorizationParams,
     ) -> str:
         if client.client_id is None:
-            raise ValueError("Registered OAuth client is missing client_id.")
+            raise OAuthProviderConfigurationError(
+                "Registered OAuth client is missing client_id."
+            )
         if params.resource not in (None, self._resource_url):
             from mcp.server.auth.provider import AuthorizeError
 
@@ -121,7 +123,7 @@ class SingleUserOAuthProvider(
             code_value = secrets.token_urlsafe(32)
             code = AuthorizationCode(
                 code=code_value,
-                scopes=pending.params.scopes or OAUTH_SCOPES,
+                scopes=pending.params.scopes or DEFAULT_OAUTH_SCOPES,
                 expires_at=time.time() + 300,
                 client_id=pending.client_id,
                 code_challenge=pending.params.code_challenge,
@@ -139,10 +141,11 @@ class SingleUserOAuthProvider(
             state=pending.params.state,
         )
 
-    async def pending_exists(self, request_id: str) -> bool:
+    async def pending_scopes(self, request_id: str) -> tuple[str, ...] | None:
         async with self._lock:
             self._discard_expired()
-            return request_id in self._pending
+            pending = self._pending.get(request_id)
+            return None if pending is None else tuple(pending.params.scopes or DEFAULT_OAUTH_SCOPES)
 
     async def load_authorization_code(
         self,
@@ -192,9 +195,15 @@ class SingleUserOAuthProvider(
     ) -> OAuthToken:
         if client.client_id is None:
             raise TokenError("invalid_client", "OAuth client_id is missing.")
+        requested_scopes = scopes or refresh_token.scopes
+        if not set(requested_scopes).issubset(refresh_token.scopes):
+            raise TokenError(
+                "invalid_scope",
+                "A refresh token cannot acquire additional OAuth scopes.",
+            )
         access, new_refresh, family_id = self._new_token_pair(
             client_id=client.client_id,
-            scopes=scopes,
+            scopes=requested_scopes,
             subject=refresh_token.subject or "owner",
             resource=self._resource_url,
         )

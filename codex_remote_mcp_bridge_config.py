@@ -4,12 +4,15 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import override
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True, slots=True)
 class RemoteMcpConfigurationError(Exception):
     reason: str
 
+    @override
     def __str__(self) -> str:
         return self.reason
 
@@ -46,8 +49,7 @@ def load_remote_mcp_config(
     device_token = _required(values, "CODEX_REMOTE_MCP_DEVICE_TOKEN")
     if not _secure_bridge_url(bridge_url):
         raise RemoteMcpConfigurationError(
-            "CODEX_REMOTE_MCP_BRIDGE_URL must use wss:// "
-            "(ws:// is allowed only for localhost)."
+            "CODEX_REMOTE_MCP_BRIDGE_URL must use wss:// (ws:// is allowed only for localhost)."
         )
     return RemoteMcpBridgeConfig(
         bridge_url=bridge_url,
@@ -66,12 +68,32 @@ def load_remote_mcp_config(
 def _required(values: Mapping[str, str], name: str) -> str:
     value = values.get(name, "").strip()
     if not value:
-        raise RemoteMcpConfigurationError(f"{name} is required when remote MCP is enabled.")
+        raise RemoteMcpConfigurationError(
+            f"{name} is required when remote MCP is enabled."
+        )
     return value
 
 
 def _secure_bridge_url(url: str) -> bool:
-    return url.startswith(("wss://", "ws://127.0.0.1", "ws://localhost"))
+    try:
+        parsed = urlsplit(url)
+        _ = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.hostname is None
+        or bool(parsed.fragment)
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    if parsed.scheme == "wss":
+        return True
+    return parsed.scheme == "ws" and parsed.hostname.casefold() in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }
 
 
 def _bounded_int(

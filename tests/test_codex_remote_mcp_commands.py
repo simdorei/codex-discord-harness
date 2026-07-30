@@ -27,6 +27,10 @@ from simdorei_mcp_common.operation_requests import (
     CommandListRequest,
     CommandRunRequest,
 )
+from tests.remote_mcp_dispatch_support import (
+    TEST_PROJECT_SESSION_ID,
+    activate_test_session,
+)
 
 
 def test_command_list_discovers_package_script(tmp_path: Path) -> None:
@@ -47,6 +51,7 @@ def test_command_list_discovers_package_script(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -77,6 +82,7 @@ def test_command_run_executes_discovered_verification_script(tmp_path: Path) -> 
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -133,6 +139,7 @@ def _bound_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
     return root, dispatcher
 
 
@@ -163,5 +170,6 @@ def _command(
     return ProjectOperationCommand(
         request_id=RequestId(f"request-{suffix}"),
         thread_id="thread-a",
+        computer_session_id=TEST_PROJECT_SESSION_ID,
         operation=operation,
     )

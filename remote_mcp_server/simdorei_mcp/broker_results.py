@@ -14,6 +14,7 @@ from simdorei_mcp_common.messages import (
     ProjectInfoOutput,
     ProjectInfoResult,
     ProjectOperationResult,
+    ProjectSessionResult,
     ReadFileOutput,
     ReadFileResult,
     WriteFileOutput,
@@ -33,6 +34,7 @@ def project_info_output(result: BridgeResult) -> ProjectInfoOutput:
             | ReadFileResult()
             | WriteFileResult()
             | ProjectOperationResult()
+            | ProjectSessionResult()
         ):
             raise BridgeProtocolError("local bridge returned the wrong result type")
         case unreachable:
@@ -50,6 +52,7 @@ def list_files_output(result: BridgeResult) -> ListFilesOutput:
             | ReadFileResult()
             | WriteFileResult()
             | ProjectOperationResult()
+            | ProjectSessionResult()
         ):
             raise BridgeProtocolError("local bridge returned the wrong result type")
         case unreachable:
@@ -67,6 +70,7 @@ def read_file_output(result: BridgeResult) -> ReadFileOutput:
             | ListFilesResult()
             | WriteFileResult()
             | ProjectOperationResult()
+            | ProjectSessionResult()
         ):
             raise BridgeProtocolError("local bridge returned the wrong result type")
         case unreachable:
@@ -84,6 +88,7 @@ def write_file_output(result: BridgeResult) -> WriteFileOutput:
             | ListFilesResult()
             | ReadFileResult()
             | ProjectOperationResult()
+            | ProjectSessionResult()
         ):
             raise BridgeProtocolError("local bridge returned the wrong result type")
         case unreachable:
@@ -101,6 +106,25 @@ def operation_output(result: BridgeResult) -> ProjectOperationOutput:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectSessionResult()
+        ):
+            raise BridgeProtocolError("local bridge returned the wrong result type")
+        case unreachable:
+            assert_never(unreachable)
+
+
+def require_project_session_result(result: BridgeResult) -> None:
+    match result:
+        case ProjectSessionResult():
+            return
+        case OperationErrorResult(message=message):
+            raise RemoteOperationError(message)
+        case (
+            ProjectInfoResult()
+            | ListFilesResult()
+            | ReadFileResult()
+            | WriteFileResult()
+            | ProjectOperationResult()
         ):
             raise BridgeProtocolError("local bridge returned the wrong result type")
         case unreachable:

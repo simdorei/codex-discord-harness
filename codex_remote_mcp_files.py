@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Final, override
 
+from codex_remote_mcp_file_store import (
+    ProjectFileStore,
+    ProjectFileStoreConflict,
+    ProjectFileStoreError,
+)
 from codex_remote_mcp_redaction import redact
 from simdorei_mcp_common.messages import (
     FileEntry,
@@ -48,6 +51,7 @@ class ProjectFileError(Exception):
     path: str
     reason: str
 
+    @override
     def __str__(self) -> str:
         return f"{self.path}: {self.reason}"
 
@@ -73,15 +77,36 @@ class ProjectFileAccess:
     """Confined UTF-8 file access for one bound project root."""
 
     root: Path
+    _store: ProjectFileStore = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         resolved = self.root.expanduser().resolve()
         if not resolved.is_dir():
-            raise UnsafeProjectPathError(str(resolved), "project root is not a directory")
+            raise UnsafeProjectPathError(
+                str(resolved), "project root is not a directory"
+            )
         object.__setattr__(self, "root", resolved)
+        try:
+            store = ProjectFileStore(resolved)
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(
+                str(resolved),
+                f"project root cannot be retained safely: {exc}",
+            ) from exc
+        object.__setattr__(self, "_store", store)
 
     def project_info(self, thread_id: str) -> ProjectInfoOutput:
         return ProjectInfoOutput(root=str(self.root), thread_id=thread_id)
+
+    def verify_root(self) -> None:
+        try:
+            self._store.verify_root()
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(str(self.root), str(exc)) from exc
 
     def resolve_path(self, value: str, *, require_file: bool = True) -> Path:
         """Resolve one non-sensitive path while keeping it inside the project."""
@@ -94,32 +119,29 @@ class ProjectFileAccess:
         for candidate in matched:
             if len(entries) >= bounded_limit:
                 break
-            if not candidate.is_file() or self._is_sensitive(candidate):
+            if self._is_sensitive(candidate):
                 continue
-            resolved = candidate.resolve()
-            if not resolved.is_relative_to(self.root):
+            relative = candidate.relative_to(self.root).as_posix()
+            try:
+                size = self.file_size(relative)
+            except ProjectFileError:
                 continue
             entries.append(
                 FileEntry(
-                    path=resolved.relative_to(self.root).as_posix(),
-                    size_bytes=resolved.stat().st_size,
+                    path=relative,
+                    size_bytes=size,
                 )
             )
-        visible_count = sum(
-            1
-            for candidate in matched
-            if candidate.is_file()
-            and not self._is_sensitive(candidate)
-            and candidate.resolve().is_relative_to(self.root)
-        )
         return ListFilesOutput(
             files=tuple(entries),
-            truncated=visible_count > len(entries),
+            truncated=len(entries) == bounded_limit and len(matched) > len(entries),
         )
 
-    def read_file(self, path: str, *, start_line: int, max_lines: int) -> ReadFileOutput:
+    def read_file(
+        self, path: str, *, start_line: int, max_lines: int
+    ) -> ReadFileOutput:
         target = self._resolve(path)
-        raw = target.read_bytes()
+        raw = self.read_bytes(path)
         if len(raw) > MAX_FILE_BYTES:
             raise ProjectFileSizeError(path, f"file exceeds {MAX_FILE_BYTES} bytes")
         try:
@@ -156,34 +178,11 @@ class ProjectFileAccess:
         raw = content.encode("utf-8")
         if len(raw) > MAX_FILE_BYTES:
             raise ProjectFileSizeError(path, f"content exceeds {MAX_FILE_BYTES} bytes")
-        created = not target.exists()
-        if created and expected_sha256 is not None:
-            raise FileConflictError(path, "new files require expected_sha256=null")
-        if not created:
-            current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
-            if expected_sha256 is None:
-                raise FileConflictError(path, "existing files require expected_sha256")
-            if current_hash != expected_sha256:
-                raise FileConflictError(path, "file changed since it was read")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temp_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=target.parent,
-                prefix=f".{target.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temp_path = Path(handle.name)
-            os.replace(temp_path, target)
-            temp_path = None
-        finally:
-            if temp_path is not None:
-                temp_path.unlink(missing_ok=True)
+        created = self.write_bytes(
+            path,
+            raw,
+            expected_sha256=expected_sha256,
+        )
         return WriteFileOutput(
             path=target.relative_to(self.root).as_posix(),
             sha256=hashlib.sha256(raw).hexdigest(),
@@ -192,23 +191,76 @@ class ProjectFileAccess:
         )
 
     def _resolve(self, value: str, *, require_file: bool = True) -> Path:
+        relative = self._relative(value)
+        try:
+            return self._store.ensure(relative, require_file=require_file)
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def read_bytes(self, value: str) -> bytes:
+        relative = self._relative(value)
+        try:
+            return self._store.read_bytes(relative)
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def file_exists(self, value: str) -> bool:
+        relative = self._relative(value)
+        try:
+            return self._store.file_exists(relative)
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def file_size(self, value: str) -> int:
+        relative = self._relative(value)
+        try:
+            return self._store.file_size(relative)
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def write_bytes(
+        self,
+        value: str,
+        content: bytes,
+        *,
+        expected_sha256: str | None,
+    ) -> bool:
+        relative = self._relative(value)
+        try:
+            return self._store.write_bytes(
+                relative,
+                content,
+                expected_sha256=expected_sha256,
+            )
+        except ProjectFileStoreConflict as exc:
+            raise FileConflictError(value, str(exc)) from exc
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def delete_file(self, value: str, *, expected_sha256: str) -> None:
+        relative = self._relative(value)
+        try:
+            self._store.delete_file(relative, expected_sha256=expected_sha256)
+        except ProjectFileStoreConflict as exc:
+            raise FileConflictError(value, str(exc)) from exc
+        except ProjectFileStoreError as exc:
+            raise UnsafeProjectPathError(value, str(exc)) from exc
+
+    def _relative(self, value: str) -> Path:
         relative = Path(value)
-        if relative.is_absolute():
-            raise UnsafeProjectPathError(value, "absolute paths are not allowed")
-        target = (self.root / relative).resolve()
-        if not target.is_relative_to(self.root):
-            raise UnsafeProjectPathError(value, "path is outside the project root")
+        if relative.is_absolute() or relative.drive or ".." in relative.parts:
+            raise UnsafeProjectPathError(
+                value, "relative paths without '..' are required"
+            )
+        target = self.root / relative
         if self._is_sensitive(target):
             raise UnsafeProjectPathError(value, "sensitive paths are not exposed")
-        if require_file and not target.is_file():
-            raise UnsafeProjectPathError(value, "path is not a file")
-        return target
+        return relative
 
     def _is_sensitive(self, path: Path) -> bool:
         relative = path.relative_to(self.root)
         parts = tuple(part.casefold() for part in relative.parts)
         basename = relative.name
-        return (
-            any(part in SENSITIVE_PARTS for part in parts)
-            or any(pattern.search(basename) is not None for pattern in SENSITIVE_BASENAME)
+        return any(part in SENSITIVE_PARTS for part in parts) or any(
+            pattern.search(basename) is not None for pattern in SENSITIVE_BASENAME
         )

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
-import tempfile
 from pathlib import Path
 from typing import Final
 
-from codex_remote_mcp_checkpoints import (
+from codex_remote_mcp_checkpoint_transaction import (
     CheckpointTarget,
-    begin_checkpoint,
     checkpoint_transaction,
+)
+from codex_remote_mcp_checkpoints import (
+    begin_checkpoint,
     finish_checkpoint,
 )
 from codex_remote_mcp_files import ProjectFileAccess, ProjectFileError
@@ -82,7 +82,7 @@ def save_image_from_url(
             public_http_client() as client,
             client.stream("GET", url) as response,
         ):
-            response.raise_for_status()
+            _ = response.raise_for_status()
             for chunk in response.iter_bytes():
                 content.extend(chunk)
                 if len(content) > MAX_IMAGE_BYTES:
@@ -113,8 +113,8 @@ def list_images(root: Path) -> ImageListOutput:
             continue
         relative = candidate.relative_to(access.root).as_posix()
         try:
-            target = access.resolve_path(relative)
-            entries.append(_image_entry(target, relative))
+            content = access.read_bytes(relative)
+            entries.append(_image_entry(relative, content))
         except ProjectFileError:
             continue
     return ImageListOutput(images=tuple(entries))
@@ -124,9 +124,9 @@ def retrieve_image(root: Path, path: str) -> ImageRetrieveOutput:
     """Return one bounded project image as base64."""
     access = ProjectFileAccess(root)
     target = access.resolve_path(path)
-    content = target.read_bytes()
-    _validate_image(path, content)
-    image = _image_entry(target, target.relative_to(access.root).as_posix())
+    content = access.read_bytes(path)
+    _ = _validate_image(path, content)
+    image = _image_entry(target.relative_to(access.root).as_posix(), content)
     return ImageRetrieveOutput(
         image=image,
         data_base64=base64.b64encode(content).decode("ascii"),
@@ -142,21 +142,25 @@ def _save_bytes(
 ) -> ImageSaveOutput:
     access = ProjectFileAccess(root)
     target = access.resolve_path(path, require_file=False)
-    if target.exists() and not overwrite:
+    exists = access.file_exists(path)
+    if exists and not overwrite:
         raise ProjectImageError(path, "file already exists")
-    _validate_image(path, content)
+    _ = _validate_image(path, content)
     draft = begin_checkpoint(
         root,
         "save image",
         (CheckpointTarget(path=path, absolute_path=target),),
     )
-    with checkpoint_transaction(draft):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(target, content)
-        finish_checkpoint(draft)
+    with checkpoint_transaction(draft) as transaction:
+        expected = (
+            hashlib.sha256(access.read_bytes(path)).hexdigest() if exists else None
+        )
+        _ = access.write_bytes(path, content, expected_sha256=expected)
+        transaction.record_write(path, hashlib.sha256(content).hexdigest())
+        _ = finish_checkpoint(draft)
     relative = target.relative_to(access.root).as_posix()
     return ImageSaveOutput(
-        image=_image_entry(target, relative),
+        image=_image_entry(relative, content),
         sha256=hashlib.sha256(content).hexdigest(),
     )
 
@@ -176,33 +180,12 @@ def _validate_image(path: str, content: bytes) -> str:
     return media_type
 
 
-def _image_entry(target: Path, relative: str) -> ImageEntry:
-    size = target.stat().st_size
+def _image_entry(relative: str, content: bytes) -> ImageEntry:
+    size = len(content)
     if size > MAX_IMAGE_BYTES:
         raise ProjectImageError(relative, f"image exceeds {MAX_IMAGE_BYTES} bytes")
     return ImageEntry(
         path=relative,
-        media_type=_validate_image(relative, target.read_bytes()),
+        media_type=_validate_image(relative, content),
         size_bytes=size,
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-        temporary = None
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)

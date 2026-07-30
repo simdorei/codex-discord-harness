@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, NewType
+from typing import Annotated, Literal, NewType, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic_core import PydanticCustomError
 
 from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
@@ -21,6 +22,7 @@ class ProtocolModel(BaseModel):
 class ProjectUpsert(ProtocolModel):
     type: Literal["project_upsert"] = "project_upsert"
     project_scope: str = Field(min_length=12, max_length=200)
+    binding_id: str = Field(min_length=16, max_length=64)
     thread_id: str = Field(min_length=1, max_length=200)
     project_name: str = Field(min_length=1, max_length=200)
     expires_at: datetime
@@ -66,10 +68,15 @@ class WriteFileOutput(ProtocolModel):
 
 
 class ProjectCommand(ProtocolModel):
-    """Base class for commands routed to one bound Codex thread."""
+    """Base class for commands routed through one selected ChatGPT session."""
 
     request_id: RequestId
     thread_id: str
+    computer_session_id: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=64,
+    )
 
 
 class ProjectInfoCommand(ProjectCommand):
@@ -99,6 +106,21 @@ class WriteFileCommand(ProjectCommand):
 class ProjectOperationCommand(ProjectCommand):
     type: Literal["project_operation"] = "project_operation"
     operation: ProjectOperation
+
+
+class ProjectSessionCommand(ProjectCommand):
+    """Makes one computer-control generation authoritative for a thread."""
+
+    type: Literal["project_session"] = "project_session"
+
+    @model_validator(mode="after")
+    def require_session_generation(self) -> Self:
+        if self.computer_session_id is None:
+            raise PydanticCustomError(
+                "computer_session_id",
+                "computer_session_id is required",
+            )
+        return self
 
 
 class ProjectInfoResult(ProtocolModel):
@@ -131,6 +153,11 @@ class ProjectOperationResult(ProtocolModel):
     output: ProjectOperationOutput
 
 
+class ProjectSessionResult(ProtocolModel):
+    type: Literal["project_session_result"] = "project_session_result"
+    request_id: RequestId
+
+
 class OperationErrorResult(ProtocolModel):
     type: Literal["operation_error"] = "operation_error"
     request_id: RequestId
@@ -140,18 +167,19 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[2]
+    protocol_version: Literal[5]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[2] = 2
+    protocol_version: Literal[5] = 5
 
 
 class ProjectAck(ProtocolModel):
     type: Literal["project_ack"] = "project_ack"
     project_scope: str
+    binding_id: str = Field(min_length=16, max_length=64)
 
 
 GatewayCommand = Annotated[
@@ -159,7 +187,8 @@ GatewayCommand = Annotated[
     | ListFilesCommand
     | ReadFileCommand
     | WriteFileCommand
-    | ProjectOperationCommand,
+    | ProjectOperationCommand
+    | ProjectSessionCommand,
     Field(discriminator="type"),
 ]
 BridgeResult = Annotated[
@@ -168,6 +197,7 @@ BridgeResult = Annotated[
     | ReadFileResult
     | WriteFileResult
     | ProjectOperationResult
+    | ProjectSessionResult
     | OperationErrorResult,
     Field(discriminator="type"),
 ]
@@ -179,6 +209,7 @@ BridgeInboundMessage = Annotated[
     | ReadFileResult
     | WriteFileResult
     | ProjectOperationResult
+    | ProjectSessionResult
     | OperationErrorResult,
     Field(discriminator="type"),
 ]
@@ -189,7 +220,8 @@ GatewayInboundMessage = Annotated[
     | ListFilesCommand
     | ReadFileCommand
     | WriteFileCommand
-    | ProjectOperationCommand,
+    | ProjectOperationCommand
+    | ProjectSessionCommand,
     Field(discriminator="type"),
 ]
 

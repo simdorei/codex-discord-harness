@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Protocol
 
 from codex_remote_mcp_bridge import LogFunc, RemoteMcpBridge
 from codex_remote_mcp_bridge_config import (
@@ -11,7 +12,20 @@ from codex_remote_mcp_bridge_config import (
 )
 
 _BRIDGE_LOCK = threading.Lock()
-_bridge: RemoteMcpBridge | None = None
+
+
+class ManagedRemoteMcpBridge(Protocol):
+    def register_project(
+        self,
+        thread_id: str,
+        project_scope: str,
+        root: Path,
+    ) -> ProjectTicket: ...
+
+    def close(self) -> None: ...
+
+
+_bridge: ManagedRemoteMcpBridge | None = None
 _bridge_config: RemoteMcpBridgeConfig | None = None
 
 
@@ -32,20 +46,23 @@ def close_remote_mcp_bridge() -> None:
     global _bridge, _bridge_config
     with _BRIDGE_LOCK:
         bridge = _bridge
+        if bridge is None:
+            return
+        bridge.close()
         _bridge = None
         _bridge_config = None
-    if bridge is not None:
-        bridge.close()
 
 
-def _get_bridge(config: RemoteMcpBridgeConfig, log: LogFunc) -> RemoteMcpBridge:
+def _get_bridge(config: RemoteMcpBridgeConfig, log: LogFunc) -> ManagedRemoteMcpBridge:
     global _bridge, _bridge_config
     with _BRIDGE_LOCK:
         if _bridge is not None and _bridge_config == config:
             return _bridge
-        previous = _bridge
-        _bridge = RemoteMcpBridge(config, log=log)
+        if _bridge is not None:
+            _bridge.close()
+            _bridge = None
+            _bridge_config = None
+        replacement = RemoteMcpBridge(config, log=log)
+        _bridge = replacement
         _bridge_config = config
-    if previous is not None:
-        previous.close()
-    return _bridge
+        return replacement

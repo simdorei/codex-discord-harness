@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
-from typing import Final, TypeVar
+from typing import ClassVar, Final, Protocol, TypeVar
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp import Context
@@ -12,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
-from remote_mcp_server.simdorei_mcp.oauth_provider import READ_SCOPE, WRITE_SCOPE
+from remote_mcp_server.simdorei_mcp.oauth_scopes import (
+    COMPUTER_CONTROL_REQUIRED_SCOPES,
+    COMPUTER_OBSERVE_REQUIRED_SCOPES,
+    READ_SCOPE,
+    WRITE_SCOPE,
+)
 from simdorei_mcp_common.operation_outputs import OperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
 
@@ -20,8 +26,22 @@ READ_AUTH_META: Final = {
     "securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE]}]
 }
 WRITE_AUTH_META: Final = {
+    "securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE, WRITE_SCOPE]}]
+}
+COMPUTER_OBSERVE_AUTH_META: Final = {
     "securitySchemes": [
-        {"type": "oauth2", "scopes": [READ_SCOPE, WRITE_SCOPE]}
+        {
+            "type": "oauth2",
+            "scopes": list(COMPUTER_OBSERVE_REQUIRED_SCOPES),
+        }
+    ]
+}
+COMPUTER_CONTROL_AUTH_META: Final = {
+    "securitySchemes": [
+        {
+            "type": "oauth2",
+            "scopes": list(COMPUTER_CONTROL_REQUIRED_SCOPES),
+        }
     ]
 }
 ToolContext = Context[ServerSession, None, object]
@@ -41,6 +61,21 @@ OPEN_WORLD_ANNOTATIONS: Final = ToolAnnotations(
     destructiveHint=True,
     openWorldHint=True,
 )
+COMPUTER_OBSERVE_ANNOTATIONS: Final = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    openWorldHint=True,
+)
+COMPUTER_CONTROL_ANNOTATIONS: Final = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    openWorldHint=True,
+)
+COMPUTER_STOP_ANNOTATIONS: Final = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    openWorldHint=True,
+)
 SELECT_ANNOTATIONS: Final = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -49,7 +84,11 @@ SELECT_ANNOTATIONS: Final = ToolAnnotations(
 
 
 class OpenAiToolSession(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True,
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     session: str = Field(alias="openai/session", min_length=1)
 
@@ -60,7 +99,20 @@ class ToolIdentity:
     subject: str
 
 
-def tool_identity(ctx: ToolContext, required_scope: str) -> ToolIdentity:
+class ToolIdentityRequestContext(Protocol):
+    @property
+    def meta(self) -> BaseModel | None: ...
+
+
+class ToolIdentityContext(Protocol):
+    @property
+    def request_context(self) -> ToolIdentityRequestContext: ...
+
+
+def tool_identity(
+    ctx: ToolIdentityContext,
+    required_scope: str | tuple[str, ...],
+) -> ToolIdentity:
     meta = ctx.request_context.meta
     if meta is None:
         raise ToolError("ChatGPT did not provide conversation identity metadata.")
@@ -75,9 +127,19 @@ def tool_identity(ctx: ToolContext, required_scope: str) -> ToolIdentity:
     access_token = get_access_token()
     if access_token is None or access_token.subject is None:
         raise ToolError("ChatGPT OAuth identity is unavailable.")
-    if required_scope not in access_token.scopes:
-        raise ToolError(f"OAuth scope {required_scope} is required.")
-    return ToolIdentity(session=session.session, subject=access_token.subject)
+    required_scopes = (
+        (required_scope,) if isinstance(required_scope, str) else required_scope
+    )
+    missing_scopes = tuple(
+        scope for scope in required_scopes if scope not in access_token.scopes
+    )
+    if missing_scopes:
+        raise ToolError(f"OAuth scope {missing_scopes[0]} is required.")
+    principal_source = (
+        f"{len(access_token.subject)}:{access_token.subject}{access_token.client_id}"
+    )
+    principal = hashlib.sha256(principal_source.encode("utf-8")).hexdigest()
+    return ToolIdentity(session=session.session, subject=principal)
 
 
 async def execute_operation(
@@ -86,7 +148,7 @@ async def execute_operation(
     operation: ProjectOperation,
     output_type: type[OutputT],
     *,
-    required_scope: str,
+    required_scope: str | tuple[str, ...],
 ) -> OutputT:
     identity = tool_identity(ctx, required_scope)
     try:
@@ -98,7 +160,5 @@ async def execute_operation(
     except BrokerError as exc:
         raise ToolError(str(exc)) from exc
     if not isinstance(output, output_type):
-        raise ToolError(
-            "The local bridge returned an unexpected operation result."
-        )
+        raise ToolError("The local bridge returned an unexpected operation result.")
     return output

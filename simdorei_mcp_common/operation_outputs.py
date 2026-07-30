@@ -170,6 +170,56 @@ class CheckpointRestoreOutput(OperationOutput):
     restored_files: tuple[str, ...]
 
 
+class ComputerWindowEntry(OperationOutput):
+    window_id: int = Field(gt=0)
+    title: str
+    process_name: str
+    left: int
+    top: int
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    active: bool
+
+
+class ComputerWindowsOutput(OperationOutput):
+    kind: Literal["computer_windows"] = "computer_windows"
+    windows: tuple[ComputerWindowEntry, ...]
+
+
+class ComputerScreenshotOutput(OperationOutput):
+    kind: Literal["computer_screenshot"] = "computer_screenshot"
+    observation_id: str = Field(min_length=8, max_length=100)
+    window: ComputerWindowEntry
+    media_type: Literal["image/png"] = "image/png"
+    data_base64: str = Field(min_length=12, max_length=12_000_000)
+
+
+ComputerActionName = Literal[
+    "activate",
+    "launch",
+    "click",
+    "drag",
+    "scroll",
+    "type_text",
+    "press_keys",
+    "close",
+    "set_clipboard",
+]
+
+
+class ComputerActionOutput(OperationOutput):
+    kind: Literal["computer_action"] = "computer_action"
+    action: ComputerActionName
+    window_id: int | None = Field(default=None, gt=0)
+    message: str
+
+
+class ComputerStopOutput(OperationOutput):
+    kind: Literal["computer_stop"] = "computer_stop"
+    stopped: Literal[True] = True
+    message: str
+
+
 ProjectOperationOutput = Annotated[
     ProjectRulesOutput
     | ProjectStatusOutput
@@ -187,6 +237,10 @@ ProjectOperationOutput = Annotated[
     | ImageRetrieveOutput
     | CheckpointListOutput
     | CheckpointShowOutput
-    | CheckpointRestoreOutput,
+    | CheckpointRestoreOutput
+    | ComputerWindowsOutput
+    | ComputerScreenshotOutput
+    | ComputerActionOutput
+    | ComputerStopOutput,
     Field(discriminator="kind"),
 ]

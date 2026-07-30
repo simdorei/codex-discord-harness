@@ -5,7 +5,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import assert_never
 
-import anyio
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from mcp.server.auth.settings import (
@@ -17,26 +16,28 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, ValidationError
 
+from remote_mcp_server.simdorei_mcp.bridge_sender import WebSocketBridgeSender
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
-from remote_mcp_server.simdorei_mcp.broker_models import BridgeSender
 from remote_mcp_server.simdorei_mcp.oauth_approval import create_approval_router
-from remote_mcp_server.simdorei_mcp.oauth_provider import (
+from remote_mcp_server.simdorei_mcp.oauth_provider import SingleUserOAuthProvider
+from remote_mcp_server.simdorei_mcp.oauth_scopes import (
+    DEFAULT_OAUTH_SCOPES,
     OAUTH_SCOPES,
-    SingleUserOAuthProvider,
+    READ_SCOPE,
 )
 from remote_mcp_server.simdorei_mcp.oauth_store import OAuthStore
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 from remote_mcp_server.simdorei_mcp.tools import register_tools
 from simdorei_mcp_common.messages import (
     BridgeHello,
-    GatewayCommand,
     GatewayHello,
     ListFilesResult,
     OperationErrorResult,
     ProjectAck,
     ProjectInfoResult,
     ProjectOperationResult,
+    ProjectSessionResult,
     ProjectUpsert,
     ReadFileResult,
     WriteFileResult,
@@ -46,24 +47,16 @@ from simdorei_mcp_common.messages import (
 LOGGER = structlog.get_logger()
 
 
+class GatewayConfigurationError(Exception):
+    """Raised when a required public gateway setting is incomplete."""
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ok: bool
     service: str
     upstream_ready: bool
-
-
-class WebSocketBridgeSender(BridgeSender):
-    """Serializes concurrent MCP tool requests onto one device socket."""
-
-    def __init__(self, socket: WebSocket) -> None:
-        self._socket = socket
-        self._send_lock = anyio.Lock()
-
-    async def send(self, command: GatewayCommand) -> None:
-        async with self._send_lock:
-            await self._socket.send_text(command.model_dump_json())
 
 
 def create_app(settings: GatewaySettings) -> FastAPI:
@@ -88,17 +81,27 @@ def create_app(settings: GatewaySettings) -> FastAPI:
             "before changing them and pass their SHA-256 values to file_apply_patch. "
             "Use retrieve_image when visual inspection is needed. Run only commands "
             "returned by command_list. Review repo_status and show_changes before "
-            "git_commit or git_push."
+            "git_commit or git_push. For computer use, first launch an isolated "
+            "Chrome or blank Notepad window, list and activate that session-owned "
+            "window. Only Notepad can be captured. Spend each Notepad "
+            "observation ID on exactly one action within 30 seconds. Take a new "
+            "screenshot after every action. Chrome allows launch, listing, "
+            "activation, and emergency stop only because web pixels can contain "
+            "unverifiable secret surfaces. Clipboard "
+            "writes also require a fresh Notepad observation. Never operate "
+            "ChatGPT, Codex, terminals, "
+            "password managers, remote desktop, security/privacy, sign-in, password, "
+            "OTP, UAC, or CAPTCHA surfaces; leave those steps to the user."
         ),
         auth_server_provider=oauth_provider,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(str(settings.public_base_url)),
             resource_server_url=AnyHttpUrl(resource_url),
-            required_scopes=OAUTH_SCOPES,
+            required_scopes=[READ_SCOPE],
             client_registration_options=ClientRegistrationOptions(
                 enabled=True,
                 valid_scopes=OAUTH_SCOPES,
-                default_scopes=OAUTH_SCOPES,
+                default_scopes=DEFAULT_OAUTH_SCOPES,
             ),
             revocation_options=RevocationOptions(enabled=True),
         ),
@@ -152,13 +155,17 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         try:
             first = parse_bridge_message(await socket.receive_text())
             match first:
-                case BridgeHello(device_id=device_id) if device_id == expected_device_id:
-                    await broker.attach(device_id, sender)
+                case BridgeHello(device_id=device_id) if (
+                    device_id == expected_device_id
+                ):
+                    displaced = await broker.attach(device_id, sender)
                     attached = True
-                    await socket.send_text(GatewayHello().model_dump_json())
+                    if displaced is not None:
+                        await displaced.close()
+                    await sender.send_control(GatewayHello())
                     LOGGER.info("bridge.connected", device_id=device_id)
                 case BridgeHello():
-                    await socket.close(code=1008, reason="device mismatch")
+                    await sender.reject(1008, "device mismatch")
                     return
                 case (
                     ProjectUpsert()
@@ -167,19 +174,26 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                     | ReadFileResult()
                     | WriteFileResult()
                     | ProjectOperationResult()
+                    | ProjectSessionResult()
                     | OperationErrorResult()
                 ):
-                    await socket.close(code=1002, reason="hello required")
+                    await sender.reject(1002, "hello required")
                     return
                 case unreachable:
                     assert_never(unreachable)
             while True:
                 message = parse_bridge_message(await socket.receive_text())
                 match message:
-                    case ProjectUpsert(project_scope=project_scope):
-                        await broker.upsert(expected_device_id, message)
-                        await socket.send_text(
-                            ProjectAck(project_scope=project_scope).model_dump_json()
+                    case ProjectUpsert(
+                        project_scope=project_scope,
+                        binding_id=binding_id,
+                    ):
+                        await broker.upsert(expected_device_id, sender, message)
+                        await sender.send_control(
+                            ProjectAck(
+                                project_scope=project_scope,
+                                binding_id=binding_id,
+                            )
                         )
                     case (
                         ProjectInfoResult()
@@ -187,11 +201,12 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                         | ReadFileResult()
                         | WriteFileResult()
                         | ProjectOperationResult()
+                        | ProjectSessionResult()
                         | OperationErrorResult()
                     ):
-                        await broker.complete(expected_device_id, message)
+                        await broker.complete(expected_device_id, sender, message)
                     case BridgeHello():
-                        await socket.close(code=1002, reason="duplicate hello")
+                        await sender.reject(1002, "duplicate hello")
                         return
                     case unreachable:
                         assert_never(unreachable)
@@ -203,7 +218,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                 device_id=expected_device_id,
                 error_type=type(exc).__name__,
             )
-            await socket.close(code=1008, reason="invalid bridge message")
+            await sender.reject(1008, "invalid bridge message")
         finally:
             if attached:
                 await broker.detach(expected_device_id, sender)
@@ -227,5 +242,7 @@ def _authorized(socket: WebSocket, settings: GatewaySettings) -> bool:
 def _public_host(settings: GatewaySettings) -> str:
     host = settings.public_base_url.host
     if host is None:
-        raise ValueError("SIMDOREI_MCP_PUBLIC_BASE_URL must include a host.")
+        raise GatewayConfigurationError(
+            "SIMDOREI_MCP_PUBLIC_BASE_URL must include a host."
+        )
     return host

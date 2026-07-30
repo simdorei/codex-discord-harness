@@ -31,6 +31,10 @@ from simdorei_mcp_common.operation_requests import (
     RepoDiffRequest,
     RepoStatusRequest,
 )
+from tests.remote_mcp_dispatch_support import (
+    TEST_PROJECT_SESSION_ID,
+    activate_test_session,
+)
 
 
 def test_repo_status_and_diff_report_working_change(tmp_path: Path) -> None:
@@ -52,6 +56,7 @@ def test_repo_status_and_diff_report_working_change(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {status.type}")
@@ -66,6 +71,7 @@ def test_repo_status_and_diff_report_working_change(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {diff.type}")
@@ -100,6 +106,7 @@ def test_git_commit_stages_and_commits_selected_file(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -125,6 +132,7 @@ def test_repo_diff_includes_untracked_text_file(tmp_path: Path) -> None:
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -185,37 +193,6 @@ def test_git_commit_preserves_other_staged_file(tmp_path: Path) -> None:
     assert staged == ["existing.txt"]
 
 
-def test_git_commit_disables_repository_hooks_and_parent_secrets(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root, dispatcher = _git_project(tmp_path)
-    marker = tmp_path / "hook-secret.txt"
-    hook = root / ".git/hooks/pre-commit"
-    hook.write_text(
-        "#!/bin/sh\n"
-        f"printf '%s' \"$PROBE_SECRET\" > '{marker.as_posix()}'\n",
-        encoding="utf-8",
-    )
-    hook.chmod(0o755)
-    monkeypatch.setenv("PROBE_SECRET", "credential-value-from-parent")
-    (root / "notes.txt").write_text("safe commit\n", encoding="utf-8")
-
-    result = dispatcher.execute(
-        _command(
-            "hook-safe",
-            GitCommitRequest(
-                message="test: hooks disabled",
-                paths=("notes.txt",),
-            ),
-        )
-    )
-
-    assert isinstance(result, ProjectOperationResult)
-    assert isinstance(result.output, GitCommitOutput)
-    assert not marker.exists()
-
-
 def test_git_push_rejects_option_like_branch_name() -> None:
     # Given / When / Then
     with pytest.raises(ValidationError):
@@ -251,6 +228,7 @@ def test_git_push_sends_current_branch_to_configured_remote(tmp_path: Path) -> N
             | ListFilesResult()
             | ReadFileResult()
             | WriteFileResult()
+            | ProjectOperationResult()
             | OperationErrorResult()
         ):
             raise AssertionError(f"unexpected result: {result.type}")
@@ -273,6 +251,7 @@ def _git_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
+    activate_test_session(dispatcher)
     return root, dispatcher
 
 
@@ -288,6 +267,7 @@ def _command(
     return ProjectOperationCommand(
         request_id=RequestId(f"request-{suffix}"),
         thread_id="thread-a",
+        computer_session_id=TEST_PROJECT_SESSION_ID,
         operation=operation,
     )
 

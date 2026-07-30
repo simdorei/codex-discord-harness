@@ -19,7 +19,11 @@ running because a hosted server cannot directly read files that remain on a PC.
 
 - ChatGPT connects to the VPS through OAuth 2.1. The owner token is entered only
   on the VPS approval page and is never copied into a model-visible chat.
-- Each `!pro` call registers a non-secret project scope for 30 minutes by default.
+- Each `!pro` call registers a fresh, unguessable project scope for 30 minutes
+  by default. A newer registration for the same Codex thread revokes the older
+  scope and its selected ChatGPT session.
+- Treat that project scope as a temporary access capability: do not copy, quote,
+  log, or share it outside the connector's `select_project` call.
 - Each Codex thread gets a stable, opaque conversation scope.
 - The same scope reuses its ChatGPT conversation when that conversation can still
   be found.
@@ -28,6 +32,8 @@ running because a hosted server cannot directly read files that remain on a PC.
 - A ChatGPT conversation already connected to another Codex thread cannot switch
   projects. A new ChatGPT conversation can select the other active project scope.
 - Disconnecting the local bridge revokes the server-side conversation route.
+- OAuth route ownership includes both the approved connector and account owner,
+  so another connector cannot impersonate a saved ChatGPT session name.
 - Paths cannot escape the bound project.
 - `.env`, credential, key, cookie, and common secret paths are blocked.
 - Files are UTF-8 text and at most 1 MiB.
@@ -50,7 +56,54 @@ running because a hosted server cannot directly read files that remain on a PC.
   test commands are also recognized. They run in a workspace-confined,
   network-disabled sandbox. Network, deployment, destructive, and arbitrary
   shell commands are rejected.
-- Mouse, keyboard, desktop, and unrestricted shell control are not exposed.
+- During an active project binding, ChatGPT can launch, list, and activate an
+  isolated Chrome or blank Notepad window owned by that selection. Notepad can
+  return native screenshots, click, drag, scroll, type Unicode text, press
+  allowlisted keys, set clipboard text, request a normal window close, and
+  trigger an emergency stop.
+- Every pointer, typing, key, clipboard, and close action requires a fresh screenshot token.
+  The token expires after 30 seconds, belongs to one window, and is consumed by
+  one action, so stale coordinates cannot be replayed.
+- Selecting the project from a new ChatGPT conversation or OAuth connector
+  revokes screenshot tokens issued to the previous selection for that thread.
+- Terminals, password managers, ChatGPT/Codex, remote-desktop apps, Windows
+  security surfaces, sign-in/password/OTP windows, Windows-key shortcuts, and
+  unrestricted shell control remain blocked. Clipboard contents cannot be read,
+  and `Ctrl+V` is rejected so pre-existing clipboard text cannot be exposed by
+  pasting it into Notepad and taking a screenshot.
+- `stop_computer_control` disables computer tools for that Codex thread until a
+  new `!pro` binding renews it. Binding expiry or bridge disconnection also
+  revokes computer control. Rebinding or stopping also closes every app process
+  launched by the old selection; isolated Chrome profile removal retries while
+  Windows releases short-lived file locks. Cleanup remains owned by the session
+  and is retried on the next stop instead of being abandoned in the background.
+- Only genuine Chrome and classic single-document Notepad executables launched
+  by the current ChatGPT selection from their standard Windows installation
+  paths are controllable. Pre-existing user windows are invisible to the connector.
+  Window names returned to ChatGPT are coarse app labels rather than document
+  or page titles.
+- Chrome can be launched, listed, activated, and removed by emergency stop, but
+  its pixels are never returned to ChatGPT. A web page controls its own title,
+  so titles cannot prove that rendered pixels exclude authentication, CAPTCHA,
+  consent, or secret surfaces. Notepad supports the screenshot-bound editing
+  action set.
+- Computer observation and computer control use dedicated OAuth scopes. A
+  connector authorized before these scopes were added must be reconnected and
+  approved again; an old file-only token cannot acquire desktop authority.
+- Window screenshots are captured from the selected window handle, not from the
+  desktop underneath overlays. Keyboard and pointer actions are sent to the
+  verified Notepad editor control rather than global Windows input. Input is
+  rejected if the process, executable path, bounds, document content/title,
+  binding, or short-lived observation changes.
+- A new selection or rebind is acknowledged only after every already-admitted
+  operation for the old generation finishes and the previous controller stops.
+  Queued old screenshots or actions are cancelled, and every command that
+  arrives with the old generation after that boundary is rejected locally.
+- If a launched window disappears while its process is still winding down, it
+  is omitted from the controllable list but retained only for identity-checked
+  cleanup. If the process is still running but the original window identity can
+  no longer be proved, forced termination is refused. Failed process cleanup
+  stays retryable and is reported instead of being acknowledged as complete.
 
 This is a single-owner gateway. OAuth protects the ChatGPT-to-VPS side; the
 existing device token separately protects the VPS-to-local-PC bridge.
@@ -79,7 +132,7 @@ https://simdorei.duckdns.org/mcp
 ```
 
 After that, send `!pro <question>` or `!pro review <review request>` from a
-mapped Discord thread. Codex opens ChatGPT Pro and includes the non-secret
+mapped Discord thread. Codex opens ChatGPT Pro and includes the short-lived
 project scope. ChatGPT calls `select_project` before using the project file
 tools. It can then search and edit files, inspect images, run allowlisted
 project checks, review Git changes, create commits, and push an already
@@ -90,6 +143,12 @@ not switch to Work, agent mode, deep research, or another model. If the
 local-project connector is not offered to normal Pro for the account, the
 workflow reports that limitation instead of pretending that files were read or
 changed.
+
+For computer control, ChatGPT first launches Chrome or Notepad, then lists and
+activates that session-owned window. It takes screenshots only from Notepad.
+One returned observation ID authorizes one matching Notepad UI action for 30
+seconds. After each action it takes another screenshot. Chrome pixels, UAC,
+login, CAPTCHA, password, and OTP surfaces are never returned to ChatGPT.
 
 ## Hosted deployment
 
@@ -111,17 +170,31 @@ The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed
 tokens persist in the Docker volume mounted at `/data`.
 
-### Protocol 2 rollout
+### Protocol 5 rollout
 
 The expanded project-operation protocol intentionally rejects old bridge or
 gateway processes instead of mixing message formats. Upgrade in one coordinated
 maintenance window:
 
 1. Stop the local bridge.
-2. Deploy the gateway that reports bridge protocol 2.
+2. Deploy the gateway that reports bridge protocol 5.
 3. Restart the updated local bridge immediately.
 4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
    `project_status` round trip before allowing write tools.
 
 The bridge reconnects automatically. During the short gap, project tools fail
 closed rather than being routed to an incompatible local process.
+
+If rollout or the authenticated smoke check fails, roll both sides back in the
+same maintenance window:
+
+1. Stop the local bridge so no mixed protocol traffic can be admitted.
+2. Restore the previous gateway source or image and start the existing Compose
+   project again. Keep the private `.env` and the named `/data` OAuth volume.
+3. Restore the local repository to the matching previous commit.
+4. Restart the local bridge.
+5. Confirm `/healthz`, one authenticated `select_project`, and one read-only
+   `project_status` round trip before enabling writes again.
+
+Do not leave only one side rolled back: protocol mismatches are deliberately
+rejected, and the persistent OAuth database must not be deleted during rollback.

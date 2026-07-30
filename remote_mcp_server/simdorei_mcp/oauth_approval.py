@@ -11,6 +11,12 @@ from remote_mcp_server.simdorei_mcp.oauth_provider import (
     ApprovalNotFoundError,
     SingleUserOAuthProvider,
 )
+from remote_mcp_server.simdorei_mcp.oauth_scopes import (
+    COMPUTER_CONTROL_SCOPE,
+    COMPUTER_OBSERVE_SCOPE,
+    READ_SCOPE,
+    WRITE_SCOPE,
+)
 
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -36,9 +42,10 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
 
     @router.get("/oauth/approve", response_class=HTMLResponse)
     async def approval_page(request_id: str) -> HTMLResponse:
-        if not await provider.pending_exists(request_id):
+        scopes = await provider.pending_scopes(request_id)
+        if scopes is None:
             return _page("This authorization request expired.", status_code=400)
-        return _page(_approval_form(request_id))
+        return _page(_approval_form(request_id, scopes))
 
     @router.post("/oauth/approve")
     async def approve(request: Request) -> Response:
@@ -54,9 +61,13 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
         except ApprovalNotFoundError:
             return _page("This authorization request expired.", status_code=400)
         except ApprovalDeniedError:
+            scopes = await provider.pending_scopes(submission.request_id)
+            if scopes is None:
+                return _page("This authorization request expired.", status_code=400)
             return _page(
                 _approval_form(
                     submission.request_id,
+                    scopes,
                     message="The owner token did not match.",
                 ),
                 status_code=401,
@@ -70,14 +81,24 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
     return router
 
 
-def _approval_form(request_id: str, message: str = "") -> str:
+def _approval_form(
+    request_id: str,
+    scopes: tuple[str, ...],
+    message: str = "",
+) -> str:
     safe_request_id = escape(request_id, quote=True)
     safe_message = escape(message)
     feedback = f'<p class="error">{safe_message}</p>' if safe_message else ""
+    permissions = "".join(
+        f"<li><code>{escape(scope)}</code> — {escape(_scope_description(scope))}</li>"
+        for scope in scopes
+    )
     return f"""
     <main>
       <h1>Connect ChatGPT to your local project</h1>
       <p>Enter the private owner token stored for this MCP server.</p>
+      <p>This connection requests these permissions:</p>
+      <ul>{permissions}</ul>
       {feedback}
       <form method="post" action="/oauth/approve">
         <input type="hidden" name="request_id" value="{safe_request_id}">
@@ -88,6 +109,22 @@ def _approval_form(request_id: str, message: str = "") -> str:
       </form>
     </main>
     """
+
+
+def _scope_description(scope: str) -> str:
+    descriptions = {
+        READ_SCOPE: "Read non-sensitive files in the selected local project.",
+        WRITE_SCOPE: "Create, update, delete, and run allowed project operations.",
+        COMPUTER_OBSERVE_SCOPE: (
+            "List launched app windows and capture screenshots only from the blank "
+            "Notepad owned by the selected chat session."
+        ),
+        COMPUTER_CONTROL_SCOPE: (
+            "Launch isolated Chrome or blank Notepad windows; window-bound keyboard, "
+            "mouse, clipboard, and close controls are available only in Notepad."
+        ),
+    }
+    return descriptions.get(scope, "Additional connector permission.")
 
 
 def _page(content: str, status_code: int = 200) -> HTMLResponse:

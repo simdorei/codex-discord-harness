@@ -65,6 +65,34 @@ class PromptRewriteTests(unittest.TestCase):
             result.prompt,
         )
 
+    def test_each_pro_registration_uses_a_fresh_project_scope(self) -> None:
+        issued: list[str] = []
+
+        def register(
+            thread_id: str,
+            project_scope: str,
+            root: Path,
+            log: prompt_rewrite.LogFunc,
+        ) -> ProjectTicket:
+            _ = thread_id, root, log
+            issued.append(project_scope)
+            return ProjectTicket(
+                project_scope=project_scope,
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            )
+
+        for _ in range(2):
+            _ = prompt_rewrite.rewrite_prompt(
+                "!pro inspect",
+                target_thread_id="thread-1",
+                cwd=Path.cwd(),
+                log=lambda _: None,
+                project_registrar=register,
+            )
+
+        self.assertEqual(len(issued), 2)
+        self.assertNotEqual(issued[0], issued[1])
+
     def test_rewrite_prompt_expands_pro_command(self) -> None:
         logs: list[str] = []
 
@@ -122,7 +150,10 @@ class PromptRewriteTests(unittest.TestCase):
         self.assertEqual(logs, [])
 
     def test_rewrite_prompt_keeps_dollar_prefixed_prompt(self) -> None:
-        for prompt in ["$custom \uc870\uc0ac\uae4c\uc9c0\ub9cc\ud574", "$mirror-check hello"]:
+        for prompt in [
+            "$custom \uc870\uc0ac\uae4c\uc9c0\ub9cc\ud574",
+            "$mirror-check hello",
+        ]:
             with self.subTest(prompt=prompt):
                 logs: list[str] = []
 

@@ -37,21 +37,55 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    required, leave the tab open for handoff and ask the user to complete only
    that step. An OAuth owner token belongs only in the MCP approval page, never
    in ChatGPT conversation text.
+   A connector approved before computer scopes existed must be reconnected and
+   approved once more. Do not try to reuse a file-only OAuth grant for desktop
+   observation or control.
 4. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
 5. Do not silently fall back to a non-Pro model.
 6. When the request includes a `<local-project-mcp>` block, send that block with
    the consultation request. In ChatGPT, use the configured local-project MCP
-   connector and call `select_project` with the supplied non-secret
+   connector and call `select_project` with the supplied short-lived
    `project_scope` before asking ChatGPT to inspect or edit project files. Call it
    once for every newly supplied scope instruction, including when reusing a
-   conversation, so access is renewed for the originating Codex thread.
+   conversation, so access is renewed for the originating Codex thread. Treat the
+   scope as a temporary access capability: never quote, repeat, log, or share it.
    After selection, prefer the dedicated project tools: search/read before
    editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
    for visual inspection, commands returned by `command_list` for verification,
    and `repo_status` plus `show_changes` before `git_commit` or `git_push`.
-   Checkpoints can inspect or undo MCP file mutations. The connector does not
-   provide desktop input or arbitrary shell access.
-7. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
+   Checkpoints can inspect or undo MCP file mutations.
+7. When the user asks ChatGPT Pro to operate the current Windows PC, use the
+   connector's computer tools only after `select_project` succeeds:
+   - call `launch_computer_app` first, then `list_computer_windows`, and
+     `activate_computer_window`; call `screenshot_computer_window` only for
+     Notepad;
+   - use the returned `observation_id` for exactly one click, drag, scroll,
+     typing, key, or close action within 30 seconds;
+   - take a new screenshot after every UI-changing action;
+   - expect only the isolated Chrome or blank classic Notepad window launched by
+     the current selection to be listed; pre-existing user windows remain hidden,
+     and labels stay coarse instead of exposing page or document titles;
+   - use Chrome only for launch, listing, activation, and emergency stop. Never
+     request Chrome pixels: page-controlled titles cannot prove that rendered
+     content excludes sign-in, CAPTCHA, consent, or secret surfaces. Notepad
+     supports the full screenshot-bound editing action set;
+   - clipboard writes require and consume a fresh Notepad observation too;
+   - never request `Ctrl+V`; paste is intentionally blocked so pre-existing
+     clipboard secrets cannot be moved into Notepad and captured;
+   - use `stop_computer_control` as the emergency stop. A new `!pro` binding is
+     required before that thread can control the PC again. Stop or rebind also
+     closes the isolated apps launched by the old selection.
+   A fresh ChatGPT project selection invalidates screenshot IDs from the prior
+   conversation or connector, even when both selections target the same Codex
+   thread. An already-admitted old operation finishes before the new selection
+   is acknowledged; commands arriving afterward with the old generation are
+   rejected. Take a new screenshot after reconnecting.
+   Never operate terminals, password managers, ChatGPT/Codex windows, remote
+   desktop apps, Windows security/privacy surfaces, sign-in/password/OTP
+   screens, or Windows-key shortcuts. Leave unavoidable UAC, login, CAPTCHA,
+   password, and OTP work open for direct user handoff. The connector does not
+   provide arbitrary shell access or a security-boundary bypass.
+8. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
    agent mode, deep research, or a different model to gain local tools. If the
    connector is unavailable in Pro, stop with the exact limitation instead of
    claiming that local work happened.
