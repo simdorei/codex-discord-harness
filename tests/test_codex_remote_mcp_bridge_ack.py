@@ -3,18 +3,30 @@ from __future__ import annotations
 import queue
 import threading
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Self, final
 
+import pytest
+
 from codex_remote_mcp_bridge import RemoteMcpBridge
 from codex_remote_mcp_bridge_config import ProjectTicket, RemoteMcpBridgeConfig
+from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
+from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
     BridgeHello,
     GatewayHello,
     ProjectAck,
+    ProjectInfoCommand,
+    ProjectInfoResult,
     ProjectUpsert,
+    RequestId,
+)
+from tests.remote_mcp_dispatch_support import (
+    TEST_PROJECT_SESSION_ID,
+    activate_test_session,
 )
 
 
@@ -103,6 +115,60 @@ def test_delayed_ack_cannot_confirm_a_refreshed_binding(tmp_path: Path) -> None:
     assert len(tickets) == 2
 
 
+def test_failed_registration_preserves_the_previous_local_binding(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    socket = ManualAckSocket()
+    dispatcher = LocalProjectDispatcher()
+    bridge = RemoteMcpBridge(
+        replace(_config(), binding_ack_timeout_seconds=0.05),
+        connector=ManualAckConnector(socket),
+        dispatcher=dispatcher,
+        log=lambda _: None,
+    )
+    tickets: list[ProjectTicket] = []
+
+    def register_first() -> None:
+        tickets.append(
+            bridge.register_project(
+                "thread-1",
+                "codex-pro-project-old",
+                first_root,
+            )
+        )
+
+    first_worker = threading.Thread(target=register_first)
+    first_worker.start()
+    first = _wait_for_project(socket.sent)
+    _ack(socket, first)
+    first_worker.join(timeout=2)
+    assert not first_worker.is_alive()
+    activate_test_session(dispatcher, "thread-1")
+
+    with pytest.raises(RemoteMcpBridgeError, match="did not acknowledge"):
+        _ = bridge.register_project(
+            "thread-1",
+            "codex-pro-project-new",
+            second_root,
+        )
+    result = dispatcher.execute(
+        ProjectInfoCommand(
+            request_id=RequestId("inspect-old-binding"),
+            thread_id="thread-1",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
+        )
+    )
+    _wait_for_project_send_count(socket.sent, first.binding_id, expected=2)
+    bridge.close()
+
+    assert isinstance(result, ProjectInfoResult)
+    assert Path(result.output.root) == first_root.resolve()
+
+
 def _ack(socket: ManualAckSocket, project: ProjectUpsert) -> None:
     socket.inbound.put(
         ProjectAck(
@@ -126,6 +192,24 @@ def _wait_for_project(
             if project.binding_id != excluding:
                 return project
     raise AssertionError("expected project registration was not sent")
+
+
+def _wait_for_project_send_count(
+    messages: list[str],
+    binding_id: str,
+    *,
+    expected: int,
+) -> None:
+    deadline = datetime.now(UTC).timestamp() + 2
+    while datetime.now(UTC).timestamp() < deadline:
+        count = sum(
+            '"type":"project_upsert"' in message
+            and ProjectUpsert.model_validate_json(message).binding_id == binding_id
+            for message in messages
+        )
+        if count >= expected:
+            return
+    raise AssertionError("expected project registration was not restored")
 
 
 def _config() -> RemoteMcpBridgeConfig:

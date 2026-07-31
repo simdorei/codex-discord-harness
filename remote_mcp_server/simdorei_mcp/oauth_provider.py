@@ -1,3 +1,5 @@
+"""Single-user OAuth protocol provider. (# noqa: SIZE_OK)"""
+
 from __future__ import annotations
 
 import hmac
@@ -9,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import anyio
 from mcp.server.auth.provider import (
     AccessToken,
+    AuthorizeError,
     AuthorizationCode,
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
@@ -53,6 +56,7 @@ class SingleUserOAuthProvider(
         resource_url: str,
         access_token_seconds: int,
         refresh_token_seconds: int,
+        pending_authorization_limit: int,
     ) -> None:
         self._store = store
         self._owner_token = owner_token
@@ -60,6 +64,7 @@ class SingleUserOAuthProvider(
         self._resource_url = resource_url
         self._access_token_seconds = access_token_seconds
         self._refresh_token_seconds = refresh_token_seconds
+        self._pending_authorization_limit = pending_authorization_limit
         self._pending: dict[str, PendingAuthorization] = {}
         self._codes: dict[str, AuthorizationCode] = {}
         self._lock = anyio.Lock()
@@ -83,8 +88,6 @@ class SingleUserOAuthProvider(
                 "Registered OAuth client is missing client_id."
             )
         if params.resource not in (None, self._resource_url):
-            from mcp.server.auth.provider import AuthorizeError
-
             raise AuthorizeError("invalid_request", "Unknown protected resource.")
         request_id = secrets.token_urlsafe(32)
         pending = PendingAuthorization(
@@ -94,6 +97,11 @@ class SingleUserOAuthProvider(
         )
         async with self._lock:
             self._discard_expired()
+            if len(self._pending) >= self._pending_authorization_limit:
+                raise AuthorizeError(
+                    "temporarily_unavailable",
+                    "Too many authorization requests are awaiting approval.",
+                )
             self._pending[request_id] = pending
         return f"{self._public_base_url}/oauth/approve?{urlencode({'request_id': request_id})}"
 
@@ -145,7 +153,11 @@ class SingleUserOAuthProvider(
         async with self._lock:
             self._discard_expired()
             pending = self._pending.get(request_id)
-            return None if pending is None else tuple(pending.params.scopes or DEFAULT_OAUTH_SCOPES)
+            return (
+                None
+                if pending is None
+                else tuple(pending.params.scopes or DEFAULT_OAUTH_SCOPES)
+            )
 
     async def load_authorization_code(
         self,
@@ -264,7 +276,9 @@ class SingleUserOAuthProvider(
     def _discard_expired(self) -> None:
         now = time.time()
         self._pending = {
-            key: value for key, value in self._pending.items() if value.expires_at >= now
+            key: value
+            for key, value in self._pending.items()
+            if value.expires_at >= now
         }
         self._codes = {
             key: value for key, value in self._codes.items() if value.expires_at >= now
@@ -275,4 +289,6 @@ def _append_query(url: str, **values: str | None) -> str:
     parts = urlsplit(url)
     query = parse_qsl(parts.query, keep_blank_values=True)
     query.extend((key, value) for key, value in values.items() if value is not None)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )

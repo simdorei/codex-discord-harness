@@ -1,3 +1,5 @@
+"""Cohesive project routing and request rendezvous. (# noqa: SIZE_OK)"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -9,8 +11,12 @@ import anyio
 from remote_mcp_server.simdorei_mcp.broker_errors import (
     ActiveBindingMissingError,
     BindingCodeError,
+    BridgeProtocolError,
     BridgeTimeoutError,
     BridgeUnavailableError,
+)
+from remote_mcp_server.simdorei_mcp.broker_idempotency import (
+    command_fingerprint,
 )
 from remote_mcp_server.simdorei_mcp.broker_models import (
     BridgeSender,
@@ -34,13 +40,20 @@ from simdorei_mcp_common.messages import (
     ProjectUpsert,
     RequestId,
 )
+from simdorei_mcp_common.request_deadlines import (
+    GATEWAY_REQUEST_TIMEOUT_SECONDS,
+)
 
 
 @final
 class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing state.
     """Owns live devices, registered project scopes, and session routes."""
 
-    def __init__(self, *, request_timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        request_timeout_seconds: float = GATEWAY_REQUEST_TIMEOUT_SECONDS,
+    ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
         self._lock = anyio.Lock()
         self._selection_lock = anyio.Lock()
@@ -58,6 +71,10 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
     @property
     def pending_call_count(self) -> int:
         return len(self._pending)
+
+    async def is_device_connected(self, device_id: DeviceId) -> bool:
+        async with self._lock:
+            return device_id in self._devices
 
     async def attach(
         self,
@@ -199,11 +216,8 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         sender: BridgeSender,
         command: GatewayCommand,
     ) -> BridgeResult:
-        pending = PendingCall(
-            event=anyio.Event(),
-            device_id=route.device_id,
-            computer_session_id=route.computer_session_id,
-        )
+        fingerprint = command_fingerprint(command)
+        should_send = False
         async with self._lock:
             if self._sessions.get(route.session) is not route:
                 raise ActiveBindingMissingError(
@@ -211,17 +225,49 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 )
             if self._devices.get(route.device_id) is not sender:
                 raise BridgeUnavailableError("selected local bridge is disconnected")
-            self._pending[command.request_id] = pending
+            pending = self._pending.get(command.request_id)
+            if pending is None:
+                pending = PendingCall(
+                    event=anyio.Event(),
+                    device_id=route.device_id,
+                    computer_session_id=route.computer_session_id,
+                    fingerprint=fingerprint,
+                )
+                self._pending[command.request_id] = pending
+                should_send = True
+            elif (
+                pending.device_id != route.device_id
+                or pending.computer_session_id != route.computer_session_id
+                or pending.fingerprint != fingerprint
+            ):
+                raise BridgeProtocolError(
+                    "request ID was reused with different command content"
+                )
+            else:
+                pending.waiter_count += 1
         try:
-            await sender.send(command)
-            with anyio.fail_after(self._request_timeout_seconds):
+            if should_send:
+                await sender.send(command)
+            remaining_seconds = (
+                command.deadline_at - datetime.now(UTC)
+            ).total_seconds()
+            timeout_seconds = min(
+                self._request_timeout_seconds,
+                max(0.001, remaining_seconds),
+            )
+            with anyio.fail_after(timeout_seconds):
                 await pending.event.wait()
         except TimeoutError as exc:
             raise BridgeTimeoutError("local bridge response timed out") from exc
         finally:
             with anyio.CancelScope(shield=True):
                 async with self._lock:
-                    _ = self._pending.pop(command.request_id, None)
+                    pending.waiter_count -= 1
+                    if (
+                        pending.waiter_count == 0
+                        and self._pending.get(command.request_id) is pending
+                    ):
+                        _ = self._pending.pop(command.request_id, None)
         if pending.failure is not None:
             raise pending.failure
         if pending.result is None:

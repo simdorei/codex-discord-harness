@@ -162,7 +162,9 @@ SIMDOREI_MCP_OWNER_TOKEN=a-separate-random-secret-at-least-24-characters
 SIMDOREI_MCP_OAUTH_DATABASE_PATH=/data/oauth.sqlite3
 SIMDOREI_MCP_OAUTH_ACCESS_TOKEN_SECONDS=3600
 SIMDOREI_MCP_OAUTH_REFRESH_TOKEN_SECONDS=2592000
-SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS=30
+SIMDOREI_MCP_OAUTH_PENDING_AUTHORIZATION_LIMIT=100
+SIMDOREI_MCP_OAUTH_CLIENT_LIMIT=500
+SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS=330
 SIMDOREI_MCP_LOG_LEVEL=INFO
 ```
 
@@ -170,14 +172,14 @@ The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed
 tokens persist in the Docker volume mounted at `/data`.
 
-### Protocol 5 rollout
+### Protocol 6 rollout
 
 The expanded project-operation protocol intentionally rejects old bridge or
 gateway processes instead of mixing message formats. Upgrade in one coordinated
 maintenance window:
 
 1. Stop the local bridge.
-2. Deploy the gateway that reports bridge protocol 5.
+2. Deploy the gateway that reports bridge protocol 6.
 3. Restart the updated local bridge immediately.
 4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
    `project_status` round trip before allowing write tools.

@@ -8,6 +8,13 @@ from pydantic import Field, HttpUrl, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from simdorei_mcp_common.messages import DeviceId
+from simdorei_mcp_common.request_deadlines import (
+    GATEWAY_REQUEST_TIMEOUT_SECONDS,
+)
+
+
+class GatewaySettingsError(RuntimeError):
+    """Raised when a required gateway setting is unavailable."""
 
 
 class GatewaySettings(BaseSettings):
@@ -28,7 +35,17 @@ class GatewaySettings(BaseSettings):
         ge=3600,
         le=60 * 60 * 24 * 365,
     )
-    request_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    oauth_pending_authorization_limit: int = Field(
+        default=100,
+        ge=1,
+        le=1_000,
+    )
+    oauth_client_limit: int = Field(default=500, ge=10, le=10_000)
+    request_timeout_seconds: float = Field(
+        default=GATEWAY_REQUEST_TIMEOUT_SECONDS,
+        ge=GATEWAY_REQUEST_TIMEOUT_SECONDS,
+        le=600,
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
 
@@ -43,6 +60,10 @@ def load_gateway_settings() -> GatewaySettings:
         "oauth_database_path": "SIMDOREI_MCP_OAUTH_DATABASE_PATH",
         "oauth_access_token_seconds": "SIMDOREI_MCP_OAUTH_ACCESS_TOKEN_SECONDS",
         "oauth_refresh_token_seconds": "SIMDOREI_MCP_OAUTH_REFRESH_TOKEN_SECONDS",
+        "oauth_pending_authorization_limit": (
+            "SIMDOREI_MCP_OAUTH_PENDING_AUTHORIZATION_LIMIT"
+        ),
+        "oauth_client_limit": "SIMDOREI_MCP_OAUTH_CLIENT_LIMIT",
         "request_timeout_seconds": "SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS",
         "log_level": "SIMDOREI_MCP_LOG_LEVEL",
     }
@@ -56,5 +77,5 @@ def load_gateway_settings() -> GatewaySettings:
 def _required_environment(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise RuntimeError(f"{name} is required.")
+        raise GatewaySettingsError(f"{name} is required.")
     return value

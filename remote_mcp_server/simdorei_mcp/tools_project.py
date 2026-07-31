@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
@@ -16,8 +14,9 @@ from remote_mcp_server.simdorei_mcp.tool_context import (
     ToolContext,
     execute_operation,
     tool_identity,
+    tool_request_id,
 )
-from simdorei_mcp_common.messages import ReadFileCommand, ReadFileOutput, RequestId
+from simdorei_mcp_common.messages import ReadFileCommand, ReadFileOutput
 from simdorei_mcp_common.operation_outputs import (
     CodeSearchOutput,
     FileApplyPatchOutput,
@@ -101,12 +100,13 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> ReadFileOutput:
         """Read a bounded UTF-8 line range from one project file."""
         identity = tool_identity(ctx, READ_SCOPE)
+        request_id = tool_request_id(ctx, identity)
         try:
             return await broker.read_file(
                 identity.session,
                 identity.subject,
                 ReadFileCommand(
-                    request_id=RequestId(uuid4().hex),
+                    request_id=request_id,
                     thread_id="pending-route",
                     path=path,
                     start_line=start_line,

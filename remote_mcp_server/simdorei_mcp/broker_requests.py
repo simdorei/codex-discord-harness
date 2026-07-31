@@ -27,6 +27,7 @@ from simdorei_mcp_common.messages import (
 )
 from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
+from simdorei_mcp_common.request_deadlines import operation_request_deadline
 
 
 class BrokerTransport(Protocol):
@@ -105,12 +106,15 @@ class BrokerRequestsMixin:
         session: str,
         subject: str,
         operation: ProjectOperation,
+        *,
+        request_id: RequestId | None = None,
     ) -> ProjectOperationOutput:
         return await project_operation(
             self._transport(),
             session,
             subject,
             operation,
+            request_id=request_id,
         )
 
 
@@ -192,15 +196,18 @@ async def project_operation(
     session: str,
     subject: str,
     operation: ProjectOperation,
+    *,
+    request_id: RequestId | None = None,
 ) -> ProjectOperationOutput:
     route, sender = await broker._route(session, subject)
     result = await broker._dispatch(
         route,
         sender,
         ProjectOperationCommand(
-            request_id=RequestId(uuid4().hex),
+            request_id=request_id or RequestId(uuid4().hex),
             thread_id=route.thread_id,
             computer_session_id=route.computer_session_id,
+            deadline_at=operation_request_deadline(operation),
             operation=operation,
         ),
     )

@@ -8,6 +8,7 @@ from pydantic_core import PydanticCustomError
 
 from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
+from simdorei_mcp_common.request_deadlines import default_request_deadline
 
 DeviceId = NewType("DeviceId", str)
 RequestId = NewType("RequestId", str)
@@ -72,6 +73,7 @@ class ProjectCommand(ProtocolModel):
 
     request_id: RequestId
     thread_id: str
+    deadline_at: datetime = Field(default_factory=default_request_deadline)
     computer_session_id: str | None = Field(
         default=None,
         min_length=16,
@@ -167,13 +169,13 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[5]
+    protocol_version: Literal[6]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[5] = 5
+    protocol_version: Literal[6] = 6
 
 
 class ProjectAck(ProtocolModel):

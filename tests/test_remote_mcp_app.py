@@ -49,7 +49,7 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
     ):
         socket.send_text(
             BridgeHello(
-                protocol_version=5,
+                protocol_version=6,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -97,6 +97,17 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
             assert_never(unreachable)
 
 
+def test_health_reports_bridge_disconnected_before_local_bridge_attaches() -> None:
+    app = create_app(_settings())
+
+    with TestClient(app) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["upstream_ready"] is False
+
+
 def test_bridge_protocol_rejects_version_one_hello() -> None:
     with pytest.raises(ValidationError):
         BridgeHello.model_validate(
@@ -118,7 +129,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
     ):
         first.send_text(
             BridgeHello(
-                protocol_version=5,
+                protocol_version=6,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -127,7 +138,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
         with client.websocket_connect("/bridge", headers=headers) as replacement:
             replacement.send_text(
                 BridgeHello(
-                    protocol_version=5,
+                    protocol_version=6,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )
@@ -196,7 +207,7 @@ def test_duplicate_hello_closes_with_protocol_error() -> None:
         client.websocket_connect("/bridge", headers=headers) as socket,
     ):
         hello = BridgeHello(
-            protocol_version=5,
+            protocol_version=6,
             device_id=DeviceId("device-a"),
         ).model_dump_json()
         socket.send_text(hello)

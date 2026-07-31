@@ -65,6 +65,7 @@ def test_dispatch_reads_from_bound_project(tmp_path: Path) -> None:
         case unreachable:
             assert_never(unreachable)
 
+
 def test_dispatch_reports_expired_binding(tmp_path: Path) -> None:
     # Given
     root = tmp_path / "project"
@@ -171,3 +172,99 @@ def test_legacy_write_file_creates_checkpoint(tmp_path: Path) -> None:
     assert isinstance(result, WriteFileResult)
     records = tuple((root / ".codex-remote-mcp/checkpoints").glob("cp_*.json"))
     assert len(records) == 1
+
+
+def test_duplicate_file_create_request_returns_the_original_result(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    activate_test_session(dispatcher)
+    command = ProjectOperationCommand(
+        request_id=RequestId("request-create-once"),
+        thread_id="thread-a",
+        computer_session_id=TEST_PROJECT_SESSION_ID,
+        operation=FileCreateRequest(
+            path="created-once.txt",
+            content="created exactly once",
+        ),
+    )
+
+    first = dispatcher.execute(command)
+    duplicate = dispatcher.execute(command)
+
+    assert isinstance(first, ProjectOperationResult)
+    assert duplicate == first
+    assert (root / "created-once.txt").read_text(encoding="utf-8") == (
+        "created exactly once"
+    )
+    checkpoints = tuple((root / ".codex-remote-mcp/checkpoints").glob("cp_*.json"))
+    assert len(checkpoints) == 1
+
+
+def test_reused_request_id_with_different_content_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    activate_test_session(dispatcher)
+
+    first = dispatcher.execute(
+        ProjectOperationCommand(
+            request_id=RequestId("request-conflict"),
+            thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
+            operation=FileCreateRequest(path="first.txt", content="first"),
+        )
+    )
+    conflict = dispatcher.execute(
+        ProjectOperationCommand(
+            request_id=RequestId("request-conflict"),
+            thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
+            operation=FileCreateRequest(path="second.txt", content="second"),
+        )
+    )
+
+    assert isinstance(first, ProjectOperationResult)
+    assert isinstance(conflict, OperationErrorResult)
+    assert conflict.error_code == "request_id_conflict"
+    assert not (root / "second.txt").exists()
+
+
+def test_expired_mutation_is_not_executed(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    activate_test_session(dispatcher)
+
+    result = dispatcher.execute(
+        ProjectOperationCommand(
+            request_id=RequestId("request-expired"),
+            thread_id="thread-a",
+            computer_session_id=TEST_PROJECT_SESSION_ID,
+            deadline_at=datetime.now(UTC) - timedelta(seconds=1),
+            operation=FileCreateRequest(path="late.txt", content="too late"),
+        )
+    )
+
+    assert isinstance(result, OperationErrorResult)
+    assert result.error_code == "request_expired"
+    assert not (root / "late.txt").exists()

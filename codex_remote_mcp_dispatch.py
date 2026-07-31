@@ -11,8 +11,9 @@ from codex_remote_mcp_computer import (
     is_computer_operation,
     new_computer_controller,
 )
-from codex_remote_mcp_computer_errors import ComputerControlError
+from codex_remote_mcp_command_policy import requires_execution_lock
 from codex_remote_mcp_dispatch_commands import execute_bound_project_command
+from codex_remote_mcp_dispatch_errors import project_error_code
 from codex_remote_mcp_dispatch_state import ActiveProject, ProjectDispatchState
 from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
@@ -92,13 +93,33 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code="binding_missing",
                 message="The Codex thread is not bound on this device.",
             )
+        if isinstance(command, (WriteFileCommand, ProjectOperationCommand)):
+            return project.result_cache.execute_once(
+                command,
+                lambda: self._execute_admitted(command, project),
+            )
+        return self._execute_admitted(command, project)
+
+    def _execute_admitted(
+        self,
+        command: GatewayCommand,
+        project: ActiveProject,
+    ) -> BridgeResult:
+        if command.deadline_at <= datetime.now(UTC):
+            return OperationErrorResult(
+                request_id=command.request_id,
+                error_code="request_expired",
+                message="The local project request expired before execution.",
+            )
         if isinstance(command, ProjectOperationCommand) and isinstance(
             command.operation,
             ComputerStopRequest,
         ):
             return self._execute_computer_stop(command, project)
-        with project.execution_lock:
-            return self._execute_locked(command, project)
+        if requires_execution_lock(command):
+            with project.execution_lock:
+                return self._execute_locked(command, project)
+        return self._execute_locked(command, project)
 
     def _execute_computer_stop(
         self,
@@ -119,7 +140,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,
-                error_code=_error_code(exc),
+                error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
         return ProjectOperationResult(
@@ -159,7 +180,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
             except ProjectFileError as exc:
                 return OperationErrorResult(
                     request_id=command.request_id,
-                    error_code=_error_code(exc),
+                    error_code=project_error_code(exc),
                     message=redact(str(exc)),
                 )
             return ProjectSessionResult(request_id=command.request_id)
@@ -172,7 +193,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,
-                error_code=_error_code(exc),
+                error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
         if isinstance(command, ProjectOperationCommand) and is_computer_operation(
@@ -193,7 +214,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
             except ProjectFileError as exc:
                 return OperationErrorResult(
                     request_id=command.request_id,
-                    error_code=_error_code(exc),
+                    error_code=project_error_code(exc),
                     message=redact(str(exc)),
                 )
             if computer is None:
@@ -207,7 +228,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,
-                error_code=_error_code(exc),
+                error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
 
@@ -248,9 +269,3 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
 
     def _stop_computer(self, thread_id: str) -> None:
         self._state.stop_computer(thread_id)
-
-
-def _error_code(exc: ProjectFileError) -> str:
-    if isinstance(exc, ComputerControlError):
-        return "computer_control"
-    return type(exc).__name__.removesuffix("Error").casefold()

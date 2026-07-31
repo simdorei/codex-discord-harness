@@ -44,7 +44,9 @@ def test_computer_screenshot_returns_observation_and_native_image() -> None:
     with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
-                BridgeHello(protocol_version=5, device_id=DeviceId("device-a")).model_dump_json()
+                BridgeHello(
+                    protocol_version=6, device_id=DeviceId("device-a")
+                ).model_dump_json()
             )
             _ = parse_gateway_message(socket.receive_text())
             socket.send_text(

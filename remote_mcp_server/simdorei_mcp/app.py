@@ -66,12 +66,16 @@ def create_app(settings: GatewaySettings) -> FastAPI:
     public_base_url = str(settings.public_base_url).rstrip("/")
     resource_url = f"{public_base_url}/mcp"
     oauth_provider = SingleUserOAuthProvider(
-        store=OAuthStore(settings.oauth_database_path),
+        store=OAuthStore(
+            settings.oauth_database_path,
+            max_clients=settings.oauth_client_limit,
+        ),
         owner_token=settings.owner_token,
         public_base_url=public_base_url,
         resource_url=resource_url,
         access_token_seconds=settings.oauth_access_token_seconds,
         refresh_token_seconds=settings.oauth_refresh_token_seconds,
+        pending_authorization_limit=(settings.oauth_pending_authorization_limit),
     )
     mcp = FastMCP(
         "simdorei-local-project",
@@ -137,10 +141,11 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     @app.get("/healthz")
     async def health() -> HealthResponse:
+        bridge_connected = await broker.is_device_connected(settings.device_id)
         return HealthResponse(
             ok=True,
             service="simdorei-local-project-mcp",
-            upstream_ready=True,
+            upstream_ready=bridge_connected,
         )
 
     @app.websocket("/bridge")

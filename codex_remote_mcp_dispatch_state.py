@@ -10,12 +10,18 @@ from typing import final
 from codex_remote_mcp_computer import ComputerController
 from codex_remote_mcp_computer_errors import ComputerControlError
 from codex_remote_mcp_files import ProjectFileAccess
+from codex_remote_mcp_idempotency import IdempotentResultCache
 
 
 @dataclass(frozen=True, slots=True)
 class ActiveProject:
     access: ProjectFileAccess
     expires_at: datetime
+    result_cache: IdempotentResultCache = field(
+        default_factory=IdempotentResultCache,
+        compare=False,
+        repr=False,
+    )
     execution_lock: threading.RLock = field(
         default_factory=threading.RLock,
         compare=False,

@@ -53,7 +53,9 @@ def test_mcp_initialize_and_tool_listing() -> None:
         )
 
     assert initialized.status_code == 200
-    assert initialized.json()["result"]["serverInfo"]["name"] == "simdorei-local-project"
+    assert (
+        initialized.json()["result"]["serverInfo"]["name"] == "simdorei-local-project"
+    )
     assert tools.status_code == 200
     names = {tool["name"] for tool in tools.json()["result"]["tools"]}
     assert names == {
@@ -119,9 +121,7 @@ def test_mcp_requires_oauth_and_publishes_discovery(tmp_path: Path) -> None:
             },
             json=initialize,
         )
-        resource_metadata = client.get(
-            "/.well-known/oauth-protected-resource/mcp"
-        )
+        resource_metadata = client.get("/.well-known/oauth-protected-resource/mcp")
         server_metadata = client.get("/.well-known/oauth-authorization-server")
 
     assert protected.status_code == 401
@@ -145,7 +145,7 @@ def test_oauth_chat_session_selects_registered_local_project(tmp_path: Path) -> 
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=5,
+                    protocol_version=6,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

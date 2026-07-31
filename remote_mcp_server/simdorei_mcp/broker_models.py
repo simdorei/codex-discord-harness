@@ -46,7 +46,9 @@ class PendingCall:
         "device_id",
         "event",
         "failure",
+        "fingerprint",
         "result",
+        "waiter_count",
     )
 
     def __init__(
@@ -54,12 +56,15 @@ class PendingCall:
         *,
         event: anyio.Event,
         computer_session_id: str,
+        fingerprint: str,
         result: BridgeResult | None = None,
         device_id: DeviceId | None = None,
         failure: BrokerError | None = None,
     ) -> None:
         self.event = event
         self.computer_session_id = computer_session_id
+        self.fingerprint = fingerprint
         self.result = result
         self.device_id = device_id
         self.failure = failure
+        self.waiter_count = 1

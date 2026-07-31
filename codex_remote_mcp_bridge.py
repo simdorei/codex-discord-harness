@@ -1,3 +1,5 @@
+"""Cohesive remote bridge connection state machine. (# noqa: SIZE_OK)"""
+
 from __future__ import annotations
 
 import queue
@@ -11,6 +13,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 from websockets.exceptions import WebSocketException
 
+from codex_remote_mcp_bridge_closure import bridge_close_details
 from codex_remote_mcp_bridge_config import ProjectTicket, RemoteMcpBridgeConfig
 from codex_remote_mcp_bridge_connection import (
     BridgeConnector,
@@ -21,6 +24,8 @@ from codex_remote_mcp_bridge_connection import (
     invalidate_sessions,
     receive_message,
 )
+from codex_remote_mcp_bridge_workers import BridgeCommandWorkers
+from codex_remote_mcp_process_lock import acquire_remote_mcp_process_lock
 from codex_remote_mcp_bridge_projects import (
     prune_expired_projects,
     replace_thread_project,
@@ -64,11 +69,15 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         self._log = log
         self._now = now
         self._dispatcher = dispatcher or LocalProjectDispatcher()
+        self._workers = BridgeCommandWorkers(self._dispatcher, log=log)
         self._condition = threading.Condition()
+        self._registration_lock = threading.Lock()
         self._outbound: queue.Queue[ProjectUpsert] = queue.Queue()
         self._active: dict[str, ProjectUpsert] = {}
+        self._pending_projects: dict[str, ProjectUpsert] = {}
         self._acked: dict[str, str] = {}
         self._last_error = ""
+        self._terminal_error: RemoteMcpBridgeError | None = None
         self._connected = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -89,6 +98,16 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             raise RemoteMcpBridgeError(
                 "A project scope is required for project registration."
             )
+        with self._registration_lock:
+            return self._register_project(thread_id, project_scope, root)
+
+    def _register_project(
+        self,
+        thread_id: str,
+        project_scope: str,
+        root: Path,
+    ) -> ProjectTicket:
+        self._reset_terminal_for_retry()
         expires_at = self._now() + timedelta(seconds=self._config.binding_ttl_seconds)
         project = ProjectUpsert(
             project_scope=project_scope,
@@ -97,31 +116,76 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             project_name=root.resolve().name or "local-project",
             expires_at=expires_at,
         )
-        self._dispatcher.upsert(thread_id, root, expires_at)
+        registration_error: RemoteMcpBridgeError | None = None
         with self._condition:
             self._prune_expired_locked()
-            replace_thread_project(self._active, self._acked, project)
+            self._pending_projects[project_scope] = project
             if self._connected:
                 self._outbound.put(project)
             self._ensure_started()
             acknowledged = self._condition.wait_for(
                 lambda: (
                     self._acked.get(project_scope) == project.binding_id
+                    or self._terminal_error is not None
                     or self._stop.is_set()
                 ),
                 timeout=self._config.binding_ack_timeout_seconds,
             )
-            if not acknowledged or self._acked.get(project_scope) != project.binding_id:
+            if self._terminal_error is not None:
+                registration_error = self._terminal_error
+            elif (
+                not acknowledged or self._acked.get(project_scope) != project.binding_id
+            ):
                 detail = (
                     f" Last connection error: {self._last_error}"
                     if self._last_error
                     else ""
                 )
-                raise RemoteMcpBridgeError(
+                registration_error = RemoteMcpBridgeError(
                     "The local project bridge did not acknowledge the binding in time."
                     + detail
                 )
+            if registration_error is not None:
+                self._rollback_registration_locked(project)
+        if registration_error is not None:
+            raise registration_error
+
+        committed = False
+        try:
+            self._dispatcher.upsert(thread_id, root, expires_at)
+            with self._condition:
+                pending = self._pending_projects.get(project_scope)
+                if pending != project:
+                    raise RemoteMcpBridgeError(
+                        "The pending local project registration changed unexpectedly."
+                    )
+                _ = self._pending_projects.pop(project_scope, None)
+                replace_thread_project(self._active, self._acked, project)
+                self._acked[project_scope] = project.binding_id
+                committed = True
+        finally:
+            if not committed:
+                with self._condition:
+                    self._rollback_registration_locked(project)
         return ProjectTicket(project_scope=project_scope, expires_at=expires_at)
+
+    def _reset_terminal_for_retry(self) -> None:
+        with self._condition:
+            terminal_error = self._terminal_error
+            thread = self._thread
+        if terminal_error is None:
+            return
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1)
+        if thread is not None and thread.is_alive():
+            raise RemoteMcpBridgeError(
+                "The previous remote MCP bridge failure is still shutting down."
+            )
+        with self._condition:
+            self._thread = None
+            self._terminal_error = None
+            self._last_error = ""
+            self._stop.clear()
 
     def close(self) -> None:
         self._stop.set()
@@ -140,9 +204,10 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=12)
-        cleanup_complete = invalidate_sessions(self._dispatcher, self._log)
         if thread is not None and thread.is_alive():
             raise RemoteMcpBridgeError("The local project bridge did not stop in time.")
+        self._workers.close()
+        cleanup_complete = invalidate_sessions(self._dispatcher, self._log)
         if not cleanup_complete:
             raise RemoteMcpBridgeError(
                 "The local project bridge could not close every session-owned app."
@@ -160,6 +225,19 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         self._thread.start()
 
     def _run(self) -> None:
+        with acquire_remote_mcp_process_lock(self._config.device_id) as owns_bridge:
+            if not owns_bridge:
+                self._fail_terminal(
+                    RemoteMcpBridgeError(
+                        "Another process already owns the remote MCP connection "
+                        "for this device."
+                    ),
+                    "remote_mcp_bridge_owner_conflict",
+                )
+                return
+            self._run_owned()
+
+    def _run_owned(self) -> None:
         while not self._stop.is_set():
             try:
                 with SerializedBridgeConnection(
@@ -180,18 +258,54 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                 WebSocketException,
                 RemoteMcpBridgeError,
             ) as exc:
+                close = bridge_close_details(exc)
+                if close is not None and close.was_replaced:
+                    self._fail_terminal(
+                        RemoteMcpBridgeError(
+                            "The remote MCP bridge was replaced by another process."
+                        ),
+                        "remote_mcp_bridge_displaced " + close.log_fields(),
+                    )
+                    return
+                if close is not None and close.was_rejected:
+                    self._fail_terminal(
+                        RemoteMcpBridgeError(
+                            "The remote MCP gateway rejected the bridge connection."
+                        ),
+                        "remote_mcp_bridge_rejected " + close.log_fields(),
+                    )
+                    return
                 with self._condition:
                     self._last_error = str(exc)
                     self._connected = False
                     self._acked.clear()
                     self._condition.notify_all()
-                self._log(f"remote_mcp_bridge_disconnected error={type(exc).__name__}")
+                close_fields = f" {close.log_fields()}" if close is not None else ""
+                self._log(
+                    "remote_mcp_bridge_disconnected "
+                    + f"error={type(exc).__name__}{close_fields}"
+                )
             _ = self._stop.wait(self._config.reconnect_delay_seconds)
 
+    def _fail_terminal(
+        self,
+        error: RemoteMcpBridgeError,
+        log_message: str,
+    ) -> None:
+        with self._condition:
+            self._last_error = str(error)
+            self._terminal_error = error
+            self._connected = False
+            self._acked.clear()
+            self._stop.set()
+            self._condition.notify_all()
+        self._log(log_message)
+
     def _serve_connection(self, socket: BridgeSocket) -> None:
+        generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=5,
+                protocol_version=6,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )
@@ -212,12 +326,17 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             self._last_error = ""
             self._acked.clear()
             self._prune_expired_locked()
-            projects = tuple(self._active.values())
+            projects_by_scope = {
+                **self._active,
+                **self._pending_projects,
+            }
+            projects = tuple(projects_by_scope.values())
             self._condition.notify_all()
         for project in projects:
             socket.send(project.model_dump_json())
         self._log("remote_mcp_bridge_connected")
         while not self._stop.is_set():
+            self._send_worker_results(socket, generation)
             self._send_queued_projects(socket)
             try:
                 message = receive_message(socket, timeout=0.25)
@@ -226,7 +345,9 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             match message:
                 case ProjectAck(project_scope=project_scope, binding_id=binding_id):
                     with self._condition:
-                        project = self._active.get(project_scope)
+                        project = self._pending_projects.get(
+                            project_scope
+                        ) or self._active.get(project_scope)
                         if (
                             project is not None
                             and project.binding_id == binding_id
@@ -242,11 +363,21 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                     | ProjectOperationCommand()
                     | ProjectSessionCommand()
                 ):
-                    socket.send(self._dispatcher.execute(message).model_dump_json())
+                    rejected = self._workers.submit(generation, message)
+                    if rejected is not None:
+                        socket.send(rejected.model_dump_json())
                 case GatewayHello():
                     raise RemoteMcpBridgeError("The gateway sent a duplicate hello.")
                 case _:
                     assert_never(message)
+
+    def _send_worker_results(
+        self,
+        socket: BridgeSocket,
+        generation: int,
+    ) -> None:
+        for result in self._workers.drain(generation):
+            socket.send(result.model_dump_json())
 
     def _send_queued_projects(self, socket: BridgeSocket) -> None:
         while True:
@@ -256,9 +387,28 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                 return
             with self._condition:
                 self._prune_expired_locked()
-                current = self._active.get(project.project_scope)
+                current = self._pending_projects.get(
+                    project.project_scope
+                ) or self._active.get(project.project_scope)
             if current == project:
                 socket.send(project.model_dump_json())
 
     def _prune_expired_locked(self) -> None:
         prune_expired_projects(self._active, self._acked, self._now())
+        expired_pending = tuple(
+            scope
+            for scope, project in self._pending_projects.items()
+            if project.expires_at <= self._now()
+        )
+        for scope in expired_pending:
+            _ = self._pending_projects.pop(scope, None)
+            _ = self._acked.pop(scope, None)
+
+    def _rollback_registration_locked(self, project: ProjectUpsert) -> None:
+        if self._pending_projects.get(project.project_scope) == project:
+            _ = self._pending_projects.pop(project.project_scope, None)
+        if self._acked.get(project.project_scope) == project.binding_id:
+            _ = self._acked.pop(project.project_scope, None)
+        if self._connected:
+            for active in self._active.values():
+                self._outbound.put(active)
