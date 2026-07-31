@@ -104,6 +104,7 @@ class CountingConnector:
             self.second_call.set()
         return self._socket_factory()
 
+
 @final
 class RejectedHandshakeSocket:
     def __enter__(self) -> Self:
