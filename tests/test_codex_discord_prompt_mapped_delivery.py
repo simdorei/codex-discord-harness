@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+import threading
 from types import TracebackType
 import unittest
 
@@ -41,13 +43,17 @@ class DepsFixture:
     app_menu_result: bool = False
     preprocess_result: mapped_delivery.PromptPreprocessResult | None = None
     transport_calls: list[tuple[str, str | None]] = field(default_factory=list)
-    marked_discord_origin_prompts: list[tuple[str | None, str]] = field(default_factory=list)
+    marked_discord_origin_prompts: list[tuple[str | None, str]] = field(
+        default_factory=list
+    )
     deactivated: list[str | None] = field(default_factory=list)
     release_result: bool = True
     app_menu_calls: list[tuple[str | None, str, str]] = field(default_factory=list)
     resume_failures: list[tuple[str, str]] = field(default_factory=list)
     selected_thread_ids: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+    preprocess_started: threading.Event | None = None
+    preprocess_release: threading.Event | None = None
 
     async def prepare(self, channel: FakeChannel, target_thread_id: str | None) -> bool:
         _ = channel, target_thread_id
@@ -63,15 +69,23 @@ class DepsFixture:
         target_thread_id: str | None,
     ) -> mapped_delivery.PromptPreprocessResult:
         _ = target_thread_id
+        if self.preprocess_started is not None and self.preprocess_release is not None:
+            self.preprocess_started.set()
+            released = self.preprocess_release.wait(timeout=0.5)
+            self.logs.append(f"preprocess_released={released}")
         if self.preprocess_result is None:
             return mapped_delivery.keep_prompt(prompt)
         self.logs.append(f"preprocess_prompt={prompt}")
         return self.preprocess_result
 
-    def mark_discord_origin_prompt(self, target_thread_id: str | None, prompt: str) -> None:
+    def mark_discord_origin_prompt(
+        self, target_thread_id: str | None, prompt: str
+    ) -> None:
         self.marked_discord_origin_prompts.append((target_thread_id, prompt))
 
-    async def transport(self, prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+    async def transport(
+        self, prompt: str, target_thread_id: str | None
+    ) -> tuple[int, str]:
         self.transport_calls.append((prompt, target_thread_id))
         return self.transport_result
 
@@ -124,7 +138,9 @@ class DepsFixture:
             run_transport_prompt_no_wait=self.transport,
             send_chunks=self.send_chunks,
             is_delivery_confirmation_timeout=lambda output: self.pending,
-            format_pending_ask_delivery_output=lambda output: f"[delivery_pending]\n{output}",
+            format_pending_ask_delivery_output=lambda output: (
+                f"[delivery_pending]\n{output}"
+            ),
             release_session_mirror_output_target=self.release,
             is_selected_thread_busy_error=lambda exit_code, output: self.busy,
             send_codex_app_menu_if_available=self.send_app_menu,
@@ -135,7 +151,32 @@ class DepsFixture:
 
 
 class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_success_sends_visible_preprocess_line_and_delivers_rewritten_prompt(self) -> None:
+    async def test_blocking_preprocessor_does_not_block_discord_event_loop(
+        self,
+    ) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        fixture = DepsFixture(
+            preprocess_started=started,
+            preprocess_release=release,
+        )
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.05, release.set)
+
+        result = await mapped_delivery.handle_mapped_prompt_delivery(
+            FakeChannel(),
+            "!pro inspect",
+            "thread-1",
+            deps=fixture.build(),
+        )
+
+        self.assertTrue(result.handled)
+        self.assertTrue(started.is_set())
+        self.assertIn("preprocess_released=True", fixture.logs)
+
+    async def test_success_sends_visible_preprocess_line_and_delivers_rewritten_prompt(
+        self,
+    ) -> None:
         fixture = DepsFixture(
             transport_result=(0, "delivered"),
             preprocess_result=mapped_delivery.PromptPreprocessResult(
@@ -155,7 +196,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.handled)
         self.assertEqual(channel.messages, ["\ubc88\uc5ed: Check Discord QA"])
         self.assertEqual(fixture.transport_calls, [("Check Discord QA", "thread-1")])
-        self.assertEqual(fixture.marked_discord_origin_prompts, [("thread-1", "Check Discord QA")])
+        self.assertEqual(
+            fixture.marked_discord_origin_prompts, [("thread-1", "Check Discord QA")]
+        )
 
     async def test_prepare_false_returns_not_handled_without_transport(self) -> None:
         fixture = DepsFixture(prepared=False)
@@ -173,7 +216,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.messages, [])
         self.assertEqual(channel.typing_events, [])
 
-    async def test_success_uses_transport_and_logs_without_channel_message(self) -> None:
+    async def test_success_uses_transport_and_logs_without_channel_message(
+        self,
+    ) -> None:
         fixture = DepsFixture(transport_result=(0, "delivered"))
         channel = FakeChannel()
 
@@ -189,7 +234,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.typing_events, ["enter", "exit"])
         self.assertEqual(channel.messages, [])
         self.assertEqual(fixture.deactivated, [])
-        self.assertIn("ask_transport_no_wait_done exit=0 target=thread-1", "\n".join(fixture.logs))
+        self.assertIn(
+            "ask_transport_no_wait_done exit=0 target=thread-1", "\n".join(fixture.logs)
+        )
 
     async def test_success_syncs_selected_thread_to_mapped_target(self) -> None:
         fixture = DepsFixture(transport_result=(0, "delivered"))
@@ -220,7 +267,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(result.handled)
-        self.assertEqual(channel.messages, ["[delivery_pending]\ndelivery could not be confirmed"])
+        self.assertEqual(
+            channel.messages, ["[delivery_pending]\ndelivery could not be confirmed"]
+        )
         self.assertEqual(fixture.deactivated, [])
 
     async def test_exit_zero_pending_delivery_reports_pending_message(self) -> None:
@@ -238,7 +287,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(result.handled)
-        self.assertEqual(channel.messages, ["[delivery_pending]\n[delivery_pending]\nnot confirmed"])
+        self.assertEqual(
+            channel.messages, ["[delivery_pending]\n[delivery_pending]\nnot confirmed"]
+        )
         self.assertEqual(fixture.deactivated, [])
 
     async def test_failure_deactivates_and_sends_transport_failure(self) -> None:
@@ -257,7 +308,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.messages, ["Ask failed (transport exit 7)\n\nboom"])
         self.assertEqual(fixture.resume_failures, [])
 
-    async def test_failure_preserves_output_target_when_subscription_release_is_deferred(self) -> None:
+    async def test_failure_preserves_output_target_when_subscription_release_is_deferred(
+        self,
+    ) -> None:
         fixture = DepsFixture(
             transport_result=(7, "boom"),
             release_result=False,
@@ -320,7 +373,9 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fixture.deactivated, ["019ecf32"])
         self.assertEqual(
             channel.messages,
-            ["Ask failed: Codex recorded this message in a different thread. I did not resend it here."],
+            [
+                "Ask failed: Codex recorded this message in a different thread. I did not resend it here."
+            ],
         )
         self.assertNotIn("019ecf32", channel.messages[0])
         self.assertNotIn("019ed92d", channel.messages[0])
@@ -345,7 +400,13 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fixture.deactivated, ["thread-1"])
         self.assertEqual(
             fixture.app_menu_calls,
-            [("thread-1", "selected thread is still busy", "ask_transport_no_wait_busy")],
+            [
+                (
+                    "thread-1",
+                    "selected thread is still busy",
+                    "ask_transport_no_wait_busy",
+                )
+            ],
         )
         self.assertEqual(channel.messages, [])
 

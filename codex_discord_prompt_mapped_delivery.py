@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -39,7 +40,9 @@ def ignore_discord_origin_prompt(target_thread_id: str | None, prompt: str) -> N
 
 
 class PrepareMappedSessionMirrorOutput(Protocol[ChannelContraT]):
-    def __call__(self, channel: ChannelContraT, target_thread_id: str | None) -> Awaitable[bool]: ...
+    def __call__(
+        self, channel: ChannelContraT, target_thread_id: str | None
+    ) -> Awaitable[bool]: ...
 
 
 class ChannelTyping(Protocol[ChannelContraT]):
@@ -52,7 +55,9 @@ class ChannelTyping(Protocol[ChannelContraT]):
 
 
 class TransportNoWait(Protocol):
-    def __call__(self, prompt: str, target_thread_id: str | None) -> Awaitable[tuple[int, str]]: ...
+    def __call__(
+        self, prompt: str, target_thread_id: str | None
+    ) -> Awaitable[tuple[int, str]]: ...
 
 
 class ChunkSender(Protocol[ChannelContraT]):
@@ -77,7 +82,9 @@ class AppMenuSender(Protocol[ChannelContraT]):
 
 
 class ResumeFailureSender(Protocol[ChannelContraT]):
-    def __call__(self, channel: ChannelContraT, content: str, target_thread_id: str) -> Awaitable[None]: ...
+    def __call__(
+        self, channel: ChannelContraT, content: str, target_thread_id: str
+    ) -> Awaitable[None]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,13 +145,21 @@ async def handle_mapped_prompt_delivery(
         deps.set_selected_thread_id(target_thread_id)
         deps.log(f"mapped_prompt_selected_thread_synced target={target_thread_id}")
 
-    preprocessed = deps.preprocess_prompt(prompt, target_thread_id)
+    preprocessed = await asyncio.to_thread(
+        deps.preprocess_prompt,
+        prompt,
+        target_thread_id,
+    )
     if preprocessed.visible_line:
-        await deps.send_chunks(channel, preprocessed.visible_line, context="prompt_preprocess_visible_line")
+        await deps.send_chunks(
+            channel, preprocessed.visible_line, context="prompt_preprocess_visible_line"
+        )
         deps.mark_recent_discord_origin_prompt(target_thread_id, preprocessed.prompt)
 
     async with deps.channel_typing(channel, context="ask_transport_no_wait"):
-        exit_code, output = await deps.run_transport_prompt_no_wait(preprocessed.prompt, target_thread_id)
+        exit_code, output = await deps.run_transport_prompt_no_wait(
+            preprocessed.prompt, target_thread_id
+        )
     turn_id = parse_app_server_delivery_turn_id(output)
     deps.log(
         f"ask_transport_no_wait_done exit={exit_code} target={target_thread_id or '-'} "
@@ -165,7 +180,9 @@ async def handle_mapped_prompt_delivery(
             "mapped_prompt_output_release_deferred "
             + f"target={target_thread_id or '-'} exit={exit_code}"
         )
-    if deps.is_selected_thread_busy_error(exit_code, output) and await deps.send_codex_app_menu_if_available(
+    if deps.is_selected_thread_busy_error(
+        exit_code, output
+    ) and await deps.send_codex_app_menu_if_available(
         channel,
         target_thread_id,
         output,
