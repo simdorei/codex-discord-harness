@@ -18,18 +18,26 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    still explicitly reports the in-app Browser unavailable after its prescribed
    troubleshooting.
 2. Route the browser conversation before sending anything:
-   - When `<local-project-mcp>` supplies `conversation_scope`, keep a persistent
-     browser-runtime map keyed by that value. Store the tab binding and canonical
-     `chatgpt.com` conversation URL only after ChatGPT assigns a conversation URL.
+   - When `<local-project-mcp>` supplies `conversation_scope`, use the bundled
+     `scripts/conversation_map.py` before opening or creating a chat. Run
+     `acquire --scope <conversation_scope>` with Python. This local SQLite map is
+     authoritative across Codex and Browser restarts; keep only the live tab
+     binding in browser-runtime memory.
+   - For `status: found`, open or rebind the returned canonical URL. For
+     `status: busy`, wait briefly and retry `acquire`; do not create another tab
+     or conversation. For `status: acquired`, keep the returned lease token only
+     in local working state, create one chat, then run
+     `set --scope <conversation_scope> --url <canonical-url> --lease-token
+     <lease-token>` as soon as ChatGPT assigns its canonical conversation URL.
+     If creation fails, run `release` with the same scope and lease token.
    - Reuse only the record for the current scope. Never reuse a mapped conversation
      for a different scope, even when both Codex threads use the same folder.
    - If the mapped tab is still open, focus and reuse it. If the tab binding is
      stale, look for an already-open tab with the saved canonical URL and rebind it.
    - If the saved conversation cannot be found, was deleted, redirects to a new
-     chat, or no matching open tab or usable URL remains, discard that record and
-     create one new conversation. Save its canonical URL after the first message.
-   - Serialize conversation creation for one scope. Do not create a second
-     conversation or tab while an existing create/open attempt is in progress.
+     chat, or no matching open tab or usable URL remains, run `delete` for that
+     scope and acquire one new creation lease. Save the new canonical URL after
+     the first message.
    - Without `conversation_scope`, reuse an open `chatgpt.com` tab only when it is
      clearly the user's intended consultation chat; otherwise open a new chat.
 3. Confirm that the user is signed in and that Pro is selected. If login, OAuth

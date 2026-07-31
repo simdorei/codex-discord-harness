@@ -42,6 +42,9 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         source_skill = Path(".agents/skills/ask-chatgpt-pro/SKILL.md").read_text(
             encoding="utf-8"
         )
+        conversation_map = (
+            plugin_root / "skills/ask-chatgpt-pro/scripts/conversation_map.py"
+        )
 
         self.assertEqual(manifest.skills, "./skills/")
         self.assertRegex(manifest.version, r"^0\.1\.0\+codex\.\d{14}$")
@@ -49,6 +52,8 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertIn("select_project", ask_skill)
         self.assertIn("file_apply_patch", ask_skill)
         self.assertIn("git_push", ask_skill)
+        self.assertIn("conversation_map.py", ask_skill)
+        self.assertTrue(conversation_map.is_file())
         self.assertIn("name: deep-interview", skill_text)
         self.assertTrue(auto_research.is_file())
         self.assertTrue(auto_answer.is_file())
