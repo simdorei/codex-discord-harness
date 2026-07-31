@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Coroutine
+import importlib
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, runtime_checkable
 import asyncio  # noqa: ANYIO_OK
 import re
 import tempfile
 import unittest
 from unittest import mock
-
-import codex_discord_bot as bot
 
 
 class RequestedExit(Exception):
@@ -38,8 +37,40 @@ class StopMarkerLoop(Protocol):
     def __call__(self, client: StopMarkerClient) -> Coroutine[None, None, None]: ...
 
 
+class StopMarkerBotType(Protocol):
+    def stop_marker_loop(
+        self,
+        client: StopMarkerClient,
+    ) -> Coroutine[None, None, None]: ...
+
+
+@runtime_checkable
+class BotModule(Protocol):
+    CodexDiscordBot: StopMarkerBotType
+    ACTIVE_DISCORD_DELIVERIES: set[str]
+    SCRIPT_DIR: Path
+    STOP_MARKER_CLOSE_TIMEOUT_SECONDS: float
+    STOP_MARKER_DRAIN_TIMEOUT_SECONDS: float
+
+    def begin_discord_delivery(self, label: str) -> str: ...
+
+    def end_discord_delivery(self, token: str) -> None: ...
+
+    def clear_discord_delivery_stopping(self) -> None: ...
+
+
+def _load_bot_module() -> BotModule:
+    module = importlib.import_module("codex_discord_bot")
+    if not isinstance(module, BotModule):
+        raise AssertionError("codex_discord_bot compatibility exports are incomplete")
+    return module
+
+
+bot = _load_bot_module()
+
+
 def _stop_marker_loop() -> StopMarkerLoop:
-    return cast(StopMarkerLoop, bot.CodexDiscordBot.stop_marker_loop)
+    return bot.CodexDiscordBot.stop_marker_loop
 
 
 class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
