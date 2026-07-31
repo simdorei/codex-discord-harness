@@ -152,3 +152,26 @@ function Claim-RestartRequest {
         throw
     }
 }
+
+function Restore-RestartRequest {
+    param([string]$ClaimPath)
+
+    if ([string]::IsNullOrWhiteSpace($ClaimPath) -or -not (Test-Path -LiteralPath $ClaimPath)) {
+        return
+    }
+    [System.IO.File]::WriteAllText($RestartRequestPath, '')
+    Remove-Item -LiteralPath $ClaimPath -Force -ErrorAction Stop
+    Write-LauncherLog "watchdog_restart_restored marker=$RestartRequestPath claim=$ClaimPath"
+}
+
+function Restore-OrphanedRestartClaims {
+    foreach ($claim in @(Get-ChildItem -Path $RestartClaimPattern -File -ErrorAction SilentlyContinue)) {
+        $ownerAlive = $false
+        if ($claim.Name -match '\.(\d+)$') {
+            $ownerAlive = $null -ne (Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue)
+        }
+        if (-not $ownerAlive) {
+            Restore-RestartRequest -ClaimPath $claim.FullName
+        }
+    }
+}

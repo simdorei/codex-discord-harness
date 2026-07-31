@@ -56,6 +56,8 @@ function Register-DiscordWatchdogTask {
     $settings = New-ScheduledTaskSettingsSet `
         -MultipleInstances IgnoreNew `
         -StartWhenAvailable `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
         -RestartCount 3 `
         -RestartInterval (New-TimeSpan -Minutes 1)
@@ -71,6 +73,7 @@ function Register-DiscordWatchdogTask {
         -Description 'Keeps Codex Discord Remote running and restarts it after exit.'
 
     Register-ScheduledTask -TaskName $WatchdogTaskName -InputObject $task -Force | Out-Null
+    Enable-ScheduledTask -TaskName $WatchdogTaskName | Out-Null
     Start-ScheduledTask -TaskName $WatchdogTaskName
     Write-Output "Registered scheduled task: $WatchdogTaskName"
 }

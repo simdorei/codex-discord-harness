@@ -19,8 +19,11 @@ __pycache__/
 .pytest_cache/
 .codex_discord_bot.lock/
 .codex_discord_bot.runtime.lock
+.codex_discord_bot.disabled
 .codex_discord_bot.health
+.codex_discord_bot.heartbeat
 .codex_discord_bot.restart
+.codex_discord_bot.stop
 discord_attachments/
 generated_images/
 .pro-web-review/

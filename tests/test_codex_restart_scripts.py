@@ -15,7 +15,9 @@ WATCHDOG_RUNTIME = ROOT / "codex-discord-watchdog-runtime.ps1"
 WATCHDOG_RESTART_RUNTIME = ROOT / "codex-discord-watchdog-restart-runtime.ps1"
 
 
-def _write_fake_restart_repo(repo_root: Path, bridge_line: str, bridge_stderr: str = "") -> None:
+def _write_fake_restart_repo(
+    repo_root: Path, bridge_line: str, bridge_stderr: str = ""
+) -> None:
     _ = (repo_root / "codex-discord-watchdog.ps1").write_text(
         WATCHDOG.read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -33,7 +35,9 @@ def _write_fake_restart_repo(repo_root: Path, bridge_line: str, bridge_stderr: s
     if bridge_stderr:
         bridge_script += f"print({bridge_stderr!r}, file=sys.stderr)\n"
     bridge_script += f"print({bridge_line!r})\n"
-    _ = (repo_root / "codex_desktop_bridge.py").write_text(bridge_script, encoding="utf-8")
+    _ = (repo_root / "codex_desktop_bridge.py").write_text(
+        bridge_script, encoding="utf-8"
+    )
 
 
 def _watchdog_text() -> str:
@@ -50,7 +54,9 @@ def _watchdog_text() -> str:
 @unittest.skipUnless(shutil.which("powershell.exe"), "powershell.exe is required")
 @unittest.skipUnless(shutil.which("py"), "py launcher is required")
 class RestartScriptTests(unittest.TestCase):
-    def run_restart_dry_run(self, repo_root: Path, quiet_seconds: int = 90) -> subprocess.CompletedProcess[str]:
+    def run_restart_dry_run(
+        self, repo_root: Path, quiet_seconds: int = 90
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 "powershell.exe",
@@ -165,6 +171,40 @@ class RestartScriptTests(unittest.TestCase):
         self.assertIn("watchdog_restart_claimed", text)
         self.assertIn("watchdog_restart_claim_lost", text)
 
+    def test_watchdog_restores_orphaned_restart_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            restart_path = repo_root / ".codex_discord_bot.restart"
+            claim_path = repo_root / ".codex_discord_bot.restart.claimed.999999"
+            _ = claim_path.write_text("", encoding="ascii")
+            command = "\n".join(
+                [
+                    f"$RestartRequestPath = {str(restart_path)!r}",
+                    f"$RestartClaimPattern = {str(repo_root / '.codex_discord_bot.restart.claimed.*')!r}",
+                    "function Write-LauncherLog { param([string]$Message) }",
+                    f". {str(WATCHDOG_RESTART_RUNTIME)!r}",
+                    "Restore-OrphanedRestartClaims",
+                ]
+            )
+            completed = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-Command", command],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertTrue(restart_path.exists())
+            self.assertFalse(claim_path.exists())
+
+    def test_tray_restart_reenables_a_disabled_scheduled_task(self) -> None:
+        text = (ROOT / "codex-discord-tray.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("[System.IO.File]::WriteAllText($RestartRequestPath, '')", text)
+        self.assertIn("Enable-ScheduledTask -TaskName 'Codex Discord Bot'", text)
+
     def test_watchdog_restarts_after_repeated_unhealthy_system_samples(self) -> None:
         text = _watchdog_text()
 
@@ -235,7 +275,9 @@ class RestartScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertIn("codex_app_previous_package_version: 1.0.0.0", completed.stdout)
+            self.assertIn(
+                "codex_app_previous_package_version: 1.0.0.0", completed.stdout
+            )
             self.assertIn("codex_app_update_detected: True", completed.stdout)
             state_bytes = state_path.read_bytes()
             self.assertFalse(state_bytes.startswith(b"\xef\xbb\xbf"))

@@ -28,6 +28,8 @@ class TaskTriggerCapture(TypedDict):
 class TaskSettingsCapture(TypedDict):
     MultipleInstances: str
     StartWhenAvailable: bool
+    AllowStartIfOnBatteries: bool
+    DontStopIfGoingOnBatteries: bool
     RestartCount: int
     RestartIntervalSeconds: float
 
@@ -55,10 +57,13 @@ class WatchdogCapture(TypedDict):
     Principal: TaskPrincipalCapture
     Task: ScheduledTaskCapture
     Registration: TaskRegistrationCapture
+    EnabledTaskName: str
     StartedTaskName: str
 
 
-@unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Windows PowerShell test")
+@unittest.skipUnless(
+    os.name == "nt" and shutil.which("powershell.exe"), "Windows PowerShell test"
+)
 class SetupDiscordBotPowerShellTests(unittest.TestCase):
     def test_registers_limited_minute_watchdog_without_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -69,7 +74,9 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
                 encoding="utf-8",
             )
             _ = (temp_path / "setup_discord_bot.py").write_text("", encoding="utf-8")
-            _ = (temp_path / "codex-discord-watchdog.ps1").write_text("", encoding="utf-8")
+            _ = (temp_path / "codex-discord-watchdog.ps1").write_text(
+                "", encoding="utf-8"
+            )
             fake_python = temp_path / "fake-python.cmd"
             _ = fake_python.write_text("@exit /b 0\n", encoding="utf-8")
             capture_path = temp_path / "scheduled-task.json"
@@ -97,7 +104,9 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
                 check=False,
             )
 
-            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            self.assertEqual(
+                completed.returncode, 0, completed.stderr + completed.stdout
+            )
             captured = cast(
                 WatchdogCapture,
                 json.loads(capture_path.read_text(encoding="utf-8-sig")),
@@ -106,17 +115,27 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
         self.assertEqual(captured["Action"]["Execute"], "powershell.exe")
         self.assertEqual(captured["Action"]["WorkingDirectory"], str(temp_path))
         self.assertIn("-WindowStyle Hidden", captured["Action"]["Argument"])
-        self.assertIn(str(temp_path / "codex-discord-watchdog.ps1"), captured["Action"]["Argument"])
-        self.assertEqual([item["Kind"] for item in captured["Triggers"]], ["logon", "repeat"])
+        self.assertIn(
+            str(temp_path / "codex-discord-watchdog.ps1"),
+            captured["Action"]["Argument"],
+        )
+        self.assertEqual(
+            [item["Kind"] for item in captured["Triggers"]], ["logon", "repeat"]
+        )
         self.assertEqual(captured["Triggers"][1]["IntervalSeconds"], 60)
         self.assertEqual(captured["Settings"]["MultipleInstances"], "IgnoreNew")
         self.assertTrue(captured["Settings"]["StartWhenAvailable"])
+        self.assertTrue(captured["Settings"]["AllowStartIfOnBatteries"])
+        self.assertTrue(captured["Settings"]["DontStopIfGoingOnBatteries"])
         self.assertEqual(captured["Settings"]["RestartCount"], 3)
         self.assertEqual(captured["Settings"]["RestartIntervalSeconds"], 60)
         self.assertEqual(captured["Principal"]["RunLevel"], "Limited")
         self.assertEqual(captured["Principal"]["LogonType"], "Interactive")
         self.assertEqual(captured["Task"]["TriggerCount"], 2)
-        self.assertEqual(captured["Registration"], {"TaskName": "Codex Discord Bot", "Force": True})
+        self.assertEqual(
+            captured["Registration"], {"TaskName": "Codex Discord Bot", "Force": True}
+        )
+        self.assertEqual(captured["EnabledTaskName"], "Codex Discord Bot")
         self.assertEqual(captured["StartedTaskName"], "Codex Discord Bot")
 
 
@@ -158,6 +177,8 @@ function New-ScheduledTaskSettingsSet {
     param(
         [string]$MultipleInstances,
         [switch]$StartWhenAvailable,
+        [switch]$AllowStartIfOnBatteries,
+        [switch]$DontStopIfGoingOnBatteries,
         [timespan]$ExecutionTimeLimit,
         [int]$RestartCount,
         [timespan]$RestartInterval
@@ -165,6 +186,8 @@ function New-ScheduledTaskSettingsSet {
     $value = [pscustomobject]@{
         MultipleInstances = $MultipleInstances
         StartWhenAvailable = $StartWhenAvailable.IsPresent
+        AllowStartIfOnBatteries = $AllowStartIfOnBatteries.IsPresent
+        DontStopIfGoingOnBatteries = $DontStopIfGoingOnBatteries.IsPresent
         RestartCount = $RestartCount
         RestartIntervalSeconds = $RestartInterval.TotalSeconds
     }
@@ -198,6 +221,11 @@ function Register-ScheduledTask {
 function Start-ScheduledTask {
     param([string]$TaskName)
     $global:Captured.StartedTaskName = $TaskName
+}
+
+function Enable-ScheduledTask {
+    param([string]$TaskName)
+    $global:Captured.EnabledTaskName = $TaskName
 }
 
 & $env:HARNESS_SETUP | Out-Null

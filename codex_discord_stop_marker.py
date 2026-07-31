@@ -23,6 +23,7 @@ class ExitBotProcess(Protocol):
 @dataclass(frozen=True, slots=True)
 class StopMarkerLoopDeps:
     stop_request_path: Path
+    heartbeat_path: Path
     poll_seconds: float
     drain_timeout_seconds: float
     close_timeout_seconds: float
@@ -37,6 +38,13 @@ class StopMarkerLoopDeps:
 
 async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
     while not deps.is_closed():
+        try:
+            deps.heartbeat_path.touch()
+        except OSError as exc:
+            deps.log(
+                f"heartbeat_update_failed path={deps.heartbeat_path} "
+                + f"error_type={type(exc).__name__}"
+            )
         if deps.stop_request_path.exists():
             deps.log(f"stop_marker_detected path={deps.stop_request_path}")
             try:
@@ -51,11 +59,15 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
                 timeout_seconds=deps.drain_timeout_seconds,
                 reason="stop_marker",
             )
-            deps.log(f"stop_marker_close_start timeout_seconds={deps.close_timeout_seconds:g}")
+            deps.log(
+                f"stop_marker_close_start timeout_seconds={deps.close_timeout_seconds:g}"
+            )
             try:
                 await deps.close_with_timeout()
             except TimeoutError:
-                deps.log(f"stop_marker_close_timeout timeout_seconds={deps.close_timeout_seconds:g}")
+                deps.log(
+                    f"stop_marker_close_timeout timeout_seconds={deps.close_timeout_seconds:g}"
+                )
                 deps.exit_bot_process(0, reason="stop_marker_close_timeout")
             deps.log("stop_marker_close_done")
             deps.exit_bot_process(0, reason="stop_marker_close_done")

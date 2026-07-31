@@ -43,6 +43,23 @@ def _stop_marker_loop() -> StopMarkerLoop:
 
 
 class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ready_stop_watcher_updates_event_loop_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
+            heartbeat_path = Path(temp_dir) / ".codex_discord_bot.heartbeat"
+            client = StopMarkerClient()
+
+            with (
+                mock.patch.object(bot, "STOP_REQUEST_PATH", marker_path),
+                mock.patch.object(bot, "STOP_MARKER_POLL_SECONDS", 0.01),
+            ):
+                task = asyncio.create_task(_stop_marker_loop()(client))
+                await asyncio.sleep(0.05)
+                client.closed = True
+                await asyncio.wait_for(task, timeout=1)
+
+            self.assertTrue(heartbeat_path.exists())
+
     async def test_stop_marker_waits_for_discord_delivery_drain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
@@ -132,13 +149,15 @@ class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def test_watchdog_graceful_stop_wait_exceeds_bot_drain_timeout(self) -> None:
         watchdog_text = "\n".join(
             [
-                (bot.SCRIPT_DIR / "codex-discord-watchdog.ps1").read_text(encoding="utf-8"),
+                (bot.SCRIPT_DIR / "codex-discord-watchdog.ps1").read_text(
+                    encoding="utf-8"
+                ),
                 (bot.SCRIPT_DIR / "codex-discord-watchdog-runtime.ps1").read_text(
                     encoding="utf-8"
                 ),
-                (bot.SCRIPT_DIR / "codex-discord-watchdog-restart-runtime.ps1").read_text(
-                    encoding="utf-8"
-                ),
+                (
+                    bot.SCRIPT_DIR / "codex-discord-watchdog-restart-runtime.ps1"
+                ).read_text(encoding="utf-8"),
             ]
         )
         match = re.search(r"\$GracefulStopTimeoutSeconds\s*=\s*(\d+)", watchdog_text)

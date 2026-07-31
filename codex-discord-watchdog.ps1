@@ -7,6 +7,7 @@ param(
     [int]$RestartWaitTimeoutSeconds = 900,
     [int]$HealthCpuPercent = 95,
     [int]$HealthFreeMemoryMb = 768,
+    [int]$HealthHeartbeatMaxAgeSeconds = 45,
     [int]$HealthBadSampleLimit = 2
 )
 
@@ -18,7 +19,9 @@ $BridgePath = Join-Path $ScriptDir 'codex_desktop_bridge.py'
 $RuntimeLockPath = Join-Path $ScriptDir '.codex_discord_bot.runtime.lock'
 $RestartRequestPath = Join-Path $ScriptDir '.codex_discord_bot.restart'
 $RestartClaimPath = Join-Path $ScriptDir ".codex_discord_bot.restart.claimed.$PID"
+$RestartClaimPattern = Join-Path $ScriptDir '.codex_discord_bot.restart.claimed.*'
 $HealthStatePath = Join-Path $ScriptDir '.codex_discord_bot.health'
+$HeartbeatPath = Join-Path $ScriptDir '.codex_discord_bot.heartbeat'
 $StopRequestPath = Join-Path $ScriptDir '.codex_discord_bot.stop'
 $DisablePath = Join-Path $ScriptDir '.codex_discord_bot.disabled'
 $HeadlessLauncher = Join-Path $ScriptDir 'codex-discord-bot-headless.vbs'
@@ -105,6 +108,21 @@ function Get-WatchdogSystemHealthIssue {
     if ($HealthFreeMemoryMb -gt 0 -and $freeMemoryMb -le $HealthFreeMemoryMb) {
         $issues += "free_memory_mb=$freeMemoryMb threshold=$HealthFreeMemoryMb"
     }
+    if (
+        $HealthHeartbeatMaxAgeSeconds -gt 0 -and
+        $HeartbeatPath -and
+        (Test-Path -LiteralPath $HeartbeatPath)
+    ) {
+        $heartbeatAgeSeconds = [math]::Floor(
+            ((Get-Date) - (Get-Item -LiteralPath $HeartbeatPath).LastWriteTime).TotalSeconds
+        )
+        if ($heartbeatAgeSeconds -ge $HealthHeartbeatMaxAgeSeconds) {
+            $issues += (
+                "heartbeat_age_seconds=$heartbeatAgeSeconds " +
+                "threshold=$HealthHeartbeatMaxAgeSeconds"
+            )
+        }
+    }
     if ($issues.Count -eq 0) {
         return ""
     }
@@ -184,6 +202,10 @@ if (Test-Path -LiteralPath $DisablePath) {
 
 Ensure-ChatGptDesktopRunning -DryRun:$DryRun
 
+if (-not $DryRun) {
+    Restore-OrphanedRestartClaims
+}
+
 if (Test-Path -LiteralPath $RestartRequestPath) {
     if ($DryRun) {
         Write-Output "restart_requested"
@@ -198,7 +220,7 @@ if (Test-Path -LiteralPath $RestartRequestPath) {
     try {
         Wait-CodexThreadsQuietForRestart
     } catch {
-        Remove-Item -LiteralPath $claimedRestartPath -Force -ErrorAction SilentlyContinue
+        Restore-RestartRequest -ClaimPath $claimedRestartPath
         Write-LauncherLog "watchdog_restart_refused error=$($_.Exception.Message)"
         throw
     }

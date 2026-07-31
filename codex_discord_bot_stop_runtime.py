@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol, TypeAlias
 
 import codex_discord_stop_marker as discord_stop_marker
+
 ModuleValue: TypeAlias = object
 
 
@@ -24,7 +25,9 @@ class BotStopRuntimeDeps:
     get_poll_seconds: Callable[[], float]
     get_drain_timeout_seconds: Callable[[], float]
     get_close_timeout_seconds: Callable[[], float]
-    create_task: Callable[[Coroutine[ModuleValue, ModuleValue, None]], asyncio.Task[None]]
+    create_task: Callable[
+        [Coroutine[ModuleValue, ModuleValue, None]], asyncio.Task[None]
+    ]
     wait_for: Callable[[Awaitable[None], float], Awaitable[None]]
     sleep: Callable[[float], Awaitable[None]]
     set_delivery_stopping: discord_stop_marker.SetDeliveryStopping
@@ -42,21 +45,31 @@ class BotStopRuntime:
         if task and not task.done():
             self.deps.log("stop_marker_watcher_already_running")
             return
-        setattr(owner, "_stop_marker_task", self.deps.create_task(owner.stop_marker_loop()))
-        self.deps.log(f"stop_marker_watcher_started seconds={self.deps.get_poll_seconds():g}")
+        setattr(
+            owner, "_stop_marker_task", self.deps.create_task(owner.stop_marker_loop())
+        )
+        self.deps.log(
+            f"stop_marker_watcher_started seconds={self.deps.get_poll_seconds():g}"
+        )
 
     async def stop_marker_loop(self, owner: StopRuntimeOwner) -> None:
         close_timeout_seconds = self.deps.get_close_timeout_seconds()
+        stop_request_path = self.deps.get_stop_request_path()
         await discord_stop_marker.stop_marker_loop(
             discord_stop_marker.StopMarkerLoopDeps(
-                stop_request_path=self.deps.get_stop_request_path(),
+                stop_request_path=stop_request_path,
+                heartbeat_path=stop_request_path.with_name(
+                    ".codex_discord_bot.heartbeat"
+                ),
                 poll_seconds=self.deps.get_poll_seconds(),
                 drain_timeout_seconds=self.deps.get_drain_timeout_seconds(),
                 close_timeout_seconds=close_timeout_seconds,
                 is_closed=owner.is_closed,
                 set_delivery_stopping=self.deps.set_delivery_stopping,
                 wait_for_delivery_drain=self.deps.wait_for_delivery_drain,
-                close_with_timeout=lambda: self.deps.wait_for(owner.close(), close_timeout_seconds),
+                close_with_timeout=lambda: self.deps.wait_for(
+                    owner.close(), close_timeout_seconds
+                ),
                 sleep=self.deps.sleep,
                 exit_bot_process=self.deps.exit_bot_process,
                 log=self.deps.log,

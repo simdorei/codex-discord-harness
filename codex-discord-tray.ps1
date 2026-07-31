@@ -92,9 +92,12 @@ function Limit-TrayText {
 }
 
 function Request-BotRestart {
-    New-Item -ItemType File -LiteralPath $RestartRequestPath -Force | Out-Null
+    [System.IO.File]::WriteAllText($RestartRequestPath, '')
     $task = Get-ScheduledTask -TaskName 'Codex Discord Bot' -ErrorAction SilentlyContinue
     if ($task -ne $null) {
+        if (-not $task.Settings.Enabled) {
+            Enable-ScheduledTask -TaskName 'Codex Discord Bot' | Out-Null
+        }
         Start-ScheduledTask -TaskName 'Codex Discord Bot'
         Write-LauncherLog "tray_restart_requested task='Codex Discord Bot'"
         return
