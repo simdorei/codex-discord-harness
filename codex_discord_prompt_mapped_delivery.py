@@ -22,9 +22,16 @@ DiscordOriginPromptMarker = Callable[[str | None, str], None]
 class PromptPreprocessResult:
     prompt: str
     visible_line: str = ""
+    should_deliver: bool = True
+    error_message: str = ""
 
 
-PromptPreprocessor = Callable[[str, str | None], PromptPreprocessResult]
+class PromptPreprocessor(Protocol):
+    def __call__(
+        self,
+        prompt: str,
+        target_thread_id: str | None = None,
+    ) -> PromptPreprocessResult: ...
 
 
 def keep_prompt(
@@ -33,6 +40,15 @@ def keep_prompt(
 ) -> PromptPreprocessResult:
     _ = target_thread_id
     return PromptPreprocessResult(prompt=prompt)
+
+
+def block_prompt(reason: str) -> PromptPreprocessResult:
+    return PromptPreprocessResult(
+        prompt="",
+        visible_line=f"!pro unavailable: {reason}",
+        should_deliver=False,
+        error_message=reason,
+    )
 
 
 def ignore_discord_origin_prompt(target_thread_id: str | None, prompt: str) -> None:
@@ -154,6 +170,16 @@ async def handle_mapped_prompt_delivery(
         await deps.send_chunks(
             channel, preprocessed.visible_line, context="prompt_preprocess_visible_line"
         )
+    if not preprocessed.should_deliver:
+        deps.log(
+            "prompt_preprocess_blocked "
+            + f"error={preprocessed.error_message or 'unspecified'}"
+        )
+        return MappedPromptDeliveryResult(
+            handled=True,
+            error_message=preprocessed.error_message,
+        )
+    if preprocessed.visible_line:
         deps.mark_recent_discord_origin_prompt(target_thread_id, preprocessed.prompt)
 
     async with deps.channel_typing(channel, context="ask_transport_no_wait"):

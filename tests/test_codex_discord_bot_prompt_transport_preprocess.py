@@ -2,17 +2,31 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import ModuleType
+from typing import final
 import unittest
 
 import codex_discord_bot_prompt_transport_preprocess as preprocess
+from codex_pro_runtime_preflight import ProRuntimeStatus
+
+
+@final
+class FakePromptPreprocessModule(ModuleType):
+    SCRIPT_DIR = Path.cwd()
+    PRO_RUNTIME_PREFLIGHT = staticmethod(
+        lambda: ProRuntimeStatus(
+            remote_plugin_version="1.2.3",
+            browser_plugin_version="9.8.7",
+            resident_generation=7,
+        )
+    )
+
+    def log_line(self, message: str) -> None:
+        _ = message
 
 
 class PromptTransportPreprocessTests(unittest.TestCase):
     def make_module(self) -> ModuleType:
-        module = ModuleType("fake_bot_module")
-        module.SCRIPT_DIR = Path.cwd()
-        module.log_line = lambda message: None
-        return module
+        return FakePromptPreprocessModule("fake_bot_module")
 
     def test_preprocessor_expands_pro_command(self) -> None:
         preprocessor = preprocess.make_prompt_preprocessor(self.make_module())

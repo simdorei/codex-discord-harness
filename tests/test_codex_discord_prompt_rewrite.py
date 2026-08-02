@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import codex_discord_prompt_rewrite as prompt_rewrite
+from codex_pro_runtime_preflight import ProRuntimeStatus
 from codex_remote_mcp_bridge_config import ProjectTicket
 
 
@@ -15,6 +16,14 @@ def _skip_binding(
     log: prompt_rewrite.LogFunc,
 ) -> None:
     _ = thread_id, project_scope, root, log
+
+
+def _pass_preflight() -> ProRuntimeStatus:
+    return ProRuntimeStatus(
+        remote_plugin_version="1.2.3",
+        browser_plugin_version="9.8.7",
+        resident_generation=7,
+    )
 
 
 class PromptRewriteTests(unittest.TestCase):
@@ -54,6 +63,7 @@ class PromptRewriteTests(unittest.TestCase):
             cwd=Path.cwd(),
             log=lambda _: None,
             project_registrar=register,
+            runtime_preflight=_pass_preflight,
         )
 
         self.assertEqual(issued, [("thread-1", Path.cwd())])
@@ -88,6 +98,7 @@ class PromptRewriteTests(unittest.TestCase):
                 cwd=Path.cwd(),
                 log=lambda _: None,
                 project_registrar=register,
+                runtime_preflight=_pass_preflight,
             )
 
         self.assertEqual(len(issued), 2)
@@ -101,6 +112,7 @@ class PromptRewriteTests(unittest.TestCase):
             cwd=Path.cwd(),
             log=logs.append,
             project_registrar=_skip_binding,
+            runtime_preflight=_pass_preflight,
         )
 
         self.assertEqual(
@@ -122,6 +134,7 @@ class PromptRewriteTests(unittest.TestCase):
             cwd=Path.cwd(),
             log=logs.append,
             project_registrar=_skip_binding,
+            runtime_preflight=_pass_preflight,
         )
 
         self.assertEqual(

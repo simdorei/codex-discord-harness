@@ -7,6 +7,12 @@ from typing import cast
 
 import codex_discord_prompt_mapped_delivery as mapped_delivery
 import codex_discord_prompt_rewrite as prompt_rewrite
+import codex_pro_runtime_preflight as pro_preflight
+
+
+def _no_stored_cwd(target_thread_id: str | None) -> str | None:
+    _ = target_thread_id
+    return None
 
 
 def make_prompt_preprocessor(module: ModuleType) -> mapped_delivery.PromptPreprocessor:
@@ -14,7 +20,11 @@ def make_prompt_preprocessor(module: ModuleType) -> mapped_delivery.PromptPrepro
     log = cast(Callable[[str], None], module.log_line)
     get_thread_cwd = cast(
         Callable[[str | None], str | None],
-        getattr(module, "get_thread_cwd", lambda _: None),
+        getattr(module, "get_thread_cwd", _no_stored_cwd),
+    )
+    runtime_preflight = cast(
+        prompt_rewrite.RuntimePreflight,
+        getattr(module, "PRO_RUNTIME_PREFLIGHT", pro_preflight.run_pro_runtime_preflight),
     )
 
     def preprocess(
@@ -30,6 +40,7 @@ def make_prompt_preprocessor(module: ModuleType) -> mapped_delivery.PromptPrepro
             target_thread_id,
             cwd=cwd,
             log=log,
+            runtime_preflight=runtime_preflight,
         )
 
     return preprocess

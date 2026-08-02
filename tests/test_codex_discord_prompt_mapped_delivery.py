@@ -66,7 +66,7 @@ class DepsFixture:
     def preprocess(
         self,
         prompt: str,
-        target_thread_id: str | None,
+        target_thread_id: str | None = None,
     ) -> mapped_delivery.PromptPreprocessResult:
         _ = target_thread_id
         if self.preprocess_started is not None and self.preprocess_release is not None:
@@ -151,6 +151,35 @@ class DepsFixture:
 
 
 class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_blocked_preprocess_reports_reason_without_transport(self) -> None:
+        fixture = DepsFixture(
+            preprocess_result=mapped_delivery.PromptPreprocessResult(
+                prompt="",
+                visible_line="!pro unavailable: Browser plugin is disabled",
+                should_deliver=False,
+                error_message="Browser plugin is disabled",
+            )
+        )
+        channel = FakeChannel()
+
+        result = await mapped_delivery.handle_mapped_prompt_delivery(
+            channel,
+            "!pro inspect",
+            "thread-1",
+            deps=fixture.build(),
+        )
+
+        self.assertTrue(result.handled)
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.error_message, "Browser plugin is disabled")
+        self.assertEqual(
+            channel.messages,
+            ["!pro unavailable: Browser plugin is disabled"],
+        )
+        self.assertEqual(fixture.transport_calls, [])
+        self.assertEqual(fixture.marked_discord_origin_prompts, [])
+        self.assertEqual(channel.typing_events, [])
+
     async def test_blocking_preprocessor_does_not_block_discord_event_loop(
         self,
     ) -> None:
@@ -161,7 +190,7 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
             preprocess_release=release,
         )
         loop = asyncio.get_running_loop()
-        loop.call_later(0.05, release.set)
+        _ = loop.call_later(0.05, release.set)
 
         result = await mapped_delivery.handle_mapped_prompt_delivery(
             FakeChannel(),

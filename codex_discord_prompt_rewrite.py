@@ -3,15 +3,26 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
 import codex_discord_prompt_mapped_delivery as mapped_delivery
+from codex_pro_runtime_preflight import (
+    ProRuntimePreflightError,
+    ProRuntimeStatus,
+    run_pro_runtime_preflight,
+)
 from codex_remote_mcp_binding import register_remote_mcp_project
-from codex_remote_mcp_bridge_config import ProjectTicket
+from codex_remote_mcp_bridge_config import (
+    ProjectTicket,
+    RemoteMcpConfigurationError,
+)
+from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
 
 LogFunc = Callable[[str], None]
 ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
+RuntimePreflight = Callable[[], ProRuntimeStatus]
 PRO_SKILL_CALL: Final = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
 PRO_CONVERSATION_SCOPE_LENGTH: Final = 24
 PRO_REVIEW_MARKER: Final = "<pro-review>"
@@ -55,16 +66,37 @@ def rewrite_prompt(
     cwd: Path,
     log: LogFunc,
     project_registrar: ProjectRegistrar = register_remote_mcp_project,
+    runtime_preflight: RuntimePreflight = run_pro_runtime_preflight,
 ) -> mapped_delivery.PromptPreprocessResult:
     rewritten = _rewrite_pro_command(prompt)
     if rewritten is None:
         return mapped_delivery.keep_prompt(prompt)
+    try:
+        _ = runtime_preflight()
+    except ProRuntimePreflightError as exc:
+        return mapped_delivery.block_prompt(str(exc))
     if not target_thread_id:
         return mapped_delivery.keep_prompt(rewritten)
     project_scope = fresh_project_scope()
-    ticket = project_registrar(target_thread_id, project_scope, cwd, log)
+    try:
+        ticket = project_registrar(target_thread_id, project_scope, cwd, log)
+    except (
+        RemoteMcpBridgeError,
+        RemoteMcpConfigurationError,
+    ) as exc:
+        return mapped_delivery.block_prompt(str(exc))
     if ticket is None:
-        return mapped_delivery.keep_prompt(rewritten)
+        return mapped_delivery.block_prompt("remote MCP is not configured")
+    try:
+        expired = ticket.expires_at <= datetime.now(UTC)
+    except TypeError:
+        return mapped_delivery.block_prompt(
+            "remote MCP returned a project ticket without a timezone"
+        )
+    if expired:
+        return mapped_delivery.block_prompt(
+            "remote MCP returned a project ticket that is already expired"
+        )
     project_instruction = "\n".join(
         (
             "",
