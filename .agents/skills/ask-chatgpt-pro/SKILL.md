@@ -17,6 +17,35 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    Request user action only for login, OTP, CAPTCHA, or when the Browser runtime
    still explicitly reports the in-app Browser unavailable after its prescribed
    troubleshooting.
+   - Treat in-app Browser acquisition as a required, evidence-gated protocol.
+     Select browser type `iab` explicitly. If selection fails, follow the Browser
+     control skill's bootstrap troubleshooting once, rediscover its runtime tool,
+     and repeat the explicit `iab` selection.
+   - An empty tab list, stale tab binding, compacted context, new Codex session,
+     or missing live tab is not evidence that the in-app Browser is unavailable.
+     Login, page navigation, and composer failures are separate states too.
+   - You must not report the in-app Browser as unavailable unless that second
+     explicit selection fails with an actual runtime error. Preserve the failed
+     stage and exact public-safe error in the response. If the sequence or its
+     evidence is incomplete, say `Browser bootstrap was not verified` and keep
+     troubleshooting; do not call the Browser unavailable.
+   - Never switch to browser type `extension`, Chrome, or another browser as a
+     fallback for an invocation that explicitly requests `[@Browser]`.
+   - After initializing the Browser runtime, inspect `codex plugin list --json`,
+     find the installed and enabled `codex-discord-remote@codex-discord-remote`
+     entry, and take its `source.path`. Run
+     `<source.path>/hooks/browser_evidence_hook.py print-probe-code` with Python,
+     then submit the emitted code unchanged through the execution tool. Do not
+     use the skill file's source-tree path as a substitute. That trusted probe
+     calls the actual `iab` runtime itself; it accepts no caller-supplied status.
+     The plugin's PostToolUse hook verifies the exact call, probe hash, and real
+     result, then records evidence for this turn. A successful result with zero
+     tabs is still Browser available and means you should open a tab.
+   - The Stop hook rejects an affirmative Browser-unavailable response unless
+     this same turn produced verified `status: unavailable` evidence after the
+     required retry. Status `unverified` means keep troubleshooting and say only
+     `Browser bootstrap was not verified`. Report login, navigation, tab, or
+     composer trouble separately from Browser availability.
 2. Route the browser conversation before sending anything:
    - When `<local-project-mcp>` supplies `conversation_scope`, use the bundled
      `scripts/conversation_map.py` before opening or creating a chat. Run
