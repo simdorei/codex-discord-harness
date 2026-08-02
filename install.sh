@@ -12,6 +12,10 @@ skip_codex_plugin=0
 dry_run=0
 required_python_major=3
 required_python_minor=12
+plugin_manifest_path="$script_dir/plugins/codex-discord-remote/.codex-plugin/plugin.json"
+plugin_inventory_verifier_path="$script_dir/verify_codex_plugin_inventory.py"
+plugin_marketplace_name=codex-discord-remote
+plugin_ref=codex-discord-remote@codex-discord-remote
 
 usage() {
   echo "Usage: ./install.sh [--python-exe PATH] [--codex-exe PATH] [--codex-home PATH] [--skip-dependencies] [--skip-env-file] [--skip-steering-config] [--skip-codex-plugin] [--dry-run]" >&2
@@ -231,6 +235,45 @@ run_codex() {
   "$exe" "$@"
 }
 
+verify_codex_plugin_inventory() {
+  if [ "$dry_run" -eq 1 ]; then
+    echo "Would verify Codex marketplace and plugin inventory for $plugin_ref"
+    return 0
+  fi
+
+  marketplace_inventory_path=$(mktemp "${TMPDIR:-/tmp}/codex-marketplaces.XXXXXX") || {
+    echo "INSTALL_INCOMPLETE: could not create marketplace inventory file." >&2
+    return 1
+  }
+  plugin_inventory_path=$(mktemp "${TMPDIR:-/tmp}/codex-plugins.XXXXXX") || {
+    rm -f -- "$marketplace_inventory_path"
+    echo "INSTALL_INCOMPLETE: could not create plugin inventory file." >&2
+    return 1
+  }
+  trap 'rm -f -- "$marketplace_inventory_path" "$plugin_inventory_path"' 0 HUP INT TERM
+
+  if ! run_codex plugin marketplace list --json > "$marketplace_inventory_path"; then
+    echo "INSTALL_INCOMPLETE: Codex marketplace inventory query failed." >&2
+    return 1
+  fi
+  if ! run_codex plugin list --json > "$plugin_inventory_path"; then
+    echo "INSTALL_INCOMPLETE: Codex plugin inventory query failed." >&2
+    return 1
+  fi
+  if ! run_python "$plugin_inventory_verifier_path" \
+    --marketplace-inventory "$marketplace_inventory_path" \
+    --plugin-inventory "$plugin_inventory_path" \
+    --plugin-manifest "$plugin_manifest_path" \
+    --expected-root "$script_dir" \
+    --marketplace-name "$plugin_marketplace_name" \
+    --plugin-id "$plugin_ref"; then
+    return 1
+  fi
+
+  rm -f -- "$marketplace_inventory_path" "$plugin_inventory_path"
+  trap - 0 HUP INT TERM
+}
+
 if [ "$skip_dependencies" -eq 0 ]; then
   [ -f "$script_dir/requirements.txt" ] || { echo "requirements.txt was not found: $script_dir/requirements.txt" >&2; exit 1; }
   echo "Installing Python dependencies from requirements.txt"
@@ -282,15 +325,19 @@ if [ "$skip_codex_plugin" -eq 1 ]; then
   echo "Skipping Codex plugin install."
 else
   [ -f "$script_dir/.agents/plugins/marketplace.json" ] || { echo "Codex plugin marketplace was not found: $script_dir/.agents/plugins/marketplace.json" >&2; exit 1; }
+  [ -f "$plugin_manifest_path" ] || { echo "INSTALL_INCOMPLETE: Codex plugin manifest was not found: $plugin_manifest_path" >&2; exit 1; }
+  [ -f "$plugin_inventory_verifier_path" ] || { echo "INSTALL_INCOMPLETE: Codex plugin inventory verifier was not found: $plugin_inventory_verifier_path" >&2; exit 1; }
   echo "Installing Codex plugin marketplace from this repository."
-  if run_codex plugin marketplace add "$script_dir" && run_codex plugin add codex-discord-remote@codex-discord-remote; then
-    :
-  else
-    echo "Codex plugin install skipped."
-    echo "Bot setup can continue. Install the Codex plugin later after the codex command is available."
-  fi
+  run_codex plugin marketplace add "$script_dir" || { echo "INSTALL_INCOMPLETE: Codex plugin marketplace installation failed; !pro is not ready." >&2; exit 1; }
+  run_codex plugin add "$plugin_ref" || { echo "INSTALL_INCOMPLETE: Codex plugin installation failed; !pro is not ready." >&2; exit 1; }
+  verify_codex_plugin_inventory
 fi
 
-echo "Install complete."
-echo "Setup required: run ./setup-discord-bot.sh and paste the Discord bot token when prompted."
-echo "After setup, restart Codex so bundled skills reload, then run ./codex-discord-bot.sh or the platform launcher."
+if [ "$dry_run" -eq 1 ]; then
+  echo "Dry run complete."
+  echo "Plugin inventory was not verified."
+else
+  echo "Install complete."
+  echo "Setup required: run ./setup-discord-bot.sh and paste the Discord bot token when prompted."
+  echo "After setup, restart Codex so bundled skills reload, then run ./codex-discord-bot.sh or the platform launcher."
+fi

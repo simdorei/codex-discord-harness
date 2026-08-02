@@ -118,9 +118,23 @@ Installer behavior:
 - Installs Python dependencies from `requirements.txt`.
 - Creates `.env` from `.env.example` if `.env` does not exist.
 - Discovers Codex Desktop and writes `CODEX_DESKTOP_EXE` to `.env`, skipping CLI resource executables such as `app/resources/codex.exe`.
-- Registers the local Codex plugin marketplace when the `codex` command is available.
+- Registers the local Codex plugin marketplace and installs the bundled
+  `codex-discord-remote` plugin.
+- Re-reads `codex plugin marketplace list --json` and `codex plugin list
+  --json`, then verifies the marketplace root plus the plugin's installed,
+  enabled, and exact-version state before reporting success.
 
-If the `codex` command is not available, setup still continues. Install the plugin later or set `CODEX_EXE` in `.env`.
+The default install stops with `INSTALL_INCOMPLETE` when Codex or plugin
+installation or inventory verification is unavailable; this prevents a bot
+install from being reported as ready while `!pro` is missing or still using a
+stale skill. For an intentional bot-only install, use `-SkipCodexPlugin` on
+Windows or `--skip-codex-plugin` on macOS/Linux. In that mode, `!pro` is not
+ready until the installer is rerun without the skip and Codex is restarted so
+the installed skill reloads.
+
+Dry-run mode prints `Dry run complete` and explicitly reports that plugin
+inventory was not verified; only a non-dry-run verified install prints `Install
+complete`.
 
 ## Add Token And Invite Bot
 

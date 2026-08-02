@@ -17,6 +17,9 @@ $RequirementsPath = Join-Path $ScriptDir 'requirements.txt'
 $EnvExamplePath = Join-Path $ScriptDir '.env.example'
 $EnvPath = Join-Path $ScriptDir '.env'
 $PluginMarketplacePath = Join-Path $ScriptDir '.agents\plugins\marketplace.json'
+$PluginManifestPath = Join-Path $ScriptDir 'plugins\codex-discord-remote\.codex-plugin\plugin.json'
+$PluginInventoryVerifierPath = Join-Path $ScriptDir 'verify_codex_plugin_inventory.py'
+$PluginMarketplaceName = 'codex-discord-remote'
 $PluginRef = 'codex-discord-remote@codex-discord-remote'
 $RequiredPythonMajor = 3
 $RequiredPythonMinor = 12
@@ -314,6 +317,45 @@ function Invoke-Codex {
     }
 }
 
+function Test-CodexPluginInventory {
+    if ($DryRun) {
+        Write-Output "Would verify Codex marketplace and plugin inventory for $PluginRef"
+        return
+    }
+
+    $marketplaceInventoryPath = [System.IO.Path]::GetTempFileName()
+    $pluginInventoryPath = [System.IO.Path]::GetTempFileName()
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    try {
+        $marketplaceOutput = @(Invoke-Codex -Arguments @('plugin', 'marketplace', 'list', '--json'))
+        $pluginOutput = @(Invoke-Codex -Arguments @('plugin', 'list', '--json'))
+        [System.IO.File]::WriteAllText(
+            $marketplaceInventoryPath,
+            ($marketplaceOutput -join [Environment]::NewLine),
+            $utf8
+        )
+        [System.IO.File]::WriteAllText(
+            $pluginInventoryPath,
+            ($pluginOutput -join [Environment]::NewLine),
+            $utf8
+        )
+        Invoke-Python -Arguments @(
+            $PluginInventoryVerifierPath,
+            '--marketplace-inventory', $marketplaceInventoryPath,
+            '--plugin-inventory', $pluginInventoryPath,
+            '--plugin-manifest', $PluginManifestPath,
+            '--expected-root', $ScriptDir,
+            '--marketplace-name', $PluginMarketplaceName,
+            '--plugin-id', $PluginRef
+        )
+    } catch {
+        throw "INSTALL_INCOMPLETE: Codex plugin inventory verification failed. $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $marketplaceInventoryPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $pluginInventoryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if (-not $SkipDependencies) {
     if (-not (Test-Path -LiteralPath $RequirementsPath)) {
         throw "requirements.txt was not found: $RequirementsPath"
@@ -372,17 +414,28 @@ if ($SkipCodexPlugin) {
     if (-not (Test-Path -LiteralPath $PluginMarketplacePath)) {
         throw "Codex plugin marketplace was not found: $PluginMarketplacePath"
     }
+    if (-not (Test-Path -LiteralPath $PluginManifestPath)) {
+        throw "INSTALL_INCOMPLETE: Codex plugin manifest was not found: $PluginManifestPath"
+    }
+    if (-not (Test-Path -LiteralPath $PluginInventoryVerifierPath)) {
+        throw "INSTALL_INCOMPLETE: Codex plugin inventory verifier was not found: $PluginInventoryVerifierPath"
+    }
     try {
         Write-Output 'Installing Codex plugin marketplace from this repository.'
         Invoke-Codex -Arguments @('plugin', 'marketplace', 'add', $ScriptDir)
         Write-Output "Installing Codex plugin: $PluginRef"
         Invoke-Codex -Arguments @('plugin', 'add', $PluginRef)
     } catch {
-        Write-Output "Codex plugin install skipped: $($_.Exception.Message)"
-        Write-Output 'Bot setup can continue. Install the Codex plugin later after the codex command is available.'
+        throw "INSTALL_INCOMPLETE: Codex plugin installation failed; !pro is not ready. $($_.Exception.Message)"
     }
+    Test-CodexPluginInventory
 }
 
-Write-Output 'Install complete.'
-Write-Output 'Setup required: run .\setup-discord-bot.ps1 and paste the Discord bot token when prompted.'
-Write-Output 'After setup, restart Codex so bundled skills reload, then run .\codex-discord-bot.cmd'
+if ($DryRun) {
+    Write-Output 'Dry run complete.'
+    Write-Output 'Plugin inventory was not verified.'
+} else {
+    Write-Output 'Install complete.'
+    Write-Output 'Setup required: run .\setup-discord-bot.ps1 and paste the Discord bot token when prompted.'
+    Write-Output 'After setup, restart Codex so bundled skills reload, then run .\codex-discord-bot.cmd'
+}
