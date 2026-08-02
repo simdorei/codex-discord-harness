@@ -5,6 +5,10 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
+from remote_mcp_server.simdorei_mcp.capability_inventory import (
+    CapabilityInventoryOutput,
+    build_capability_inventory,
+)
 from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
     READ_AUTH_META,
@@ -29,12 +33,25 @@ from simdorei_mcp_common.messages import (
 
 def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     @mcp.tool(
+        title="Show MCP capability inventory",
+        annotations=READ_ONLY_ANNOTATIONS,
+        meta=READ_AUTH_META,
+        structured_output=True,
+    )
+    async def capability_inventory(  # pyright: ignore[reportUnusedFunction]
+        ctx: ToolContext,
+    ) -> CapabilityInventoryOutput:
+        """Compare the release manifest with tools registered by this server."""
+        _ = tool_identity(ctx, READ_SCOPE)
+        return build_capability_inventory(registered_tool_names(mcp))
+
+    @mcp.tool(
         title="Select local project",
         annotations=SELECT_ANNOTATIONS,
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def select_project(
+    async def select_project(  # pyright: ignore[reportUnusedFunction]
         project_scope: str,
         ctx: ToolContext,
     ) -> ProjectSelectionOutput:
@@ -55,7 +72,9 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def project_info(ctx: ToolContext) -> ProjectInfoOutput:
+    async def project_info(  # pyright: ignore[reportUnusedFunction]
+        ctx: ToolContext,
+    ) -> ProjectInfoOutput:
         """Show the project root and Codex thread bound to this conversation."""
         identity = tool_identity(ctx, READ_SCOPE)
         try:
@@ -69,7 +88,7 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def list_project_files(
+    async def list_project_files(  # pyright: ignore[reportUnusedFunction]
         ctx: ToolContext,
         pattern: str = "**/*",
         limit: int = 200,
@@ -92,7 +111,7 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def read_project_file(
+    async def read_project_file(  # pyright: ignore[reportUnusedFunction]
         ctx: ToolContext,
         path: str,
         start_line: int = 1,
@@ -122,7 +141,7 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=WRITE_AUTH_META,
         structured_output=True,
     )
-    async def write_project_file(
+    async def write_project_file(  # pyright: ignore[reportUnusedFunction]
         ctx: ToolContext,
         path: str,
         content: str,
@@ -161,3 +180,9 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     register_image_tools(mcp, broker)
     register_checkpoint_tools(mcp, broker)
     register_computer_tools(mcp, broker)
+
+
+def registered_tool_names(mcp: FastMCP) -> tuple[str, ...]:
+    # FastMCP 1.28.1 has no public synchronous inventory API.
+    manager = mcp._tool_manager  # pyright: ignore[reportPrivateUsage]
+    return tuple(tool.name for tool in manager.list_tools())

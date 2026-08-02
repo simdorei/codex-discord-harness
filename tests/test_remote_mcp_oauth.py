@@ -60,6 +60,7 @@ def test_mcp_initialize_and_tool_listing() -> None:
     names = {tool["name"] for tool in tools.json()["result"]["tools"]}
     assert names == {
         "activate_computer_window",
+        "capability_inventory",
         "checkpoint_list",
         "checkpoint_restore",
         "checkpoint_show",

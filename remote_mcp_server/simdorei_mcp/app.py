@@ -19,6 +19,9 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, ValidationError
 from remote_mcp_server.simdorei_mcp.bridge_sender import WebSocketBridgeSender
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
+from remote_mcp_server.simdorei_mcp.capability_inventory import (
+    require_complete_tool_inventory,
+)
 from remote_mcp_server.simdorei_mcp.oauth_approval import create_approval_router
 from remote_mcp_server.simdorei_mcp.oauth_provider import SingleUserOAuthProvider
 from remote_mcp_server.simdorei_mcp.oauth_scopes import (
@@ -28,7 +31,10 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
 )
 from remote_mcp_server.simdorei_mcp.oauth_store import OAuthStore
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
-from remote_mcp_server.simdorei_mcp.tools import register_tools
+from remote_mcp_server.simdorei_mcp.tools import (
+    register_tools,
+    registered_tool_names,
+)
 from simdorei_mcp_common.messages import (
     BridgeHello,
     GatewayHello,
@@ -123,6 +129,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         ),
     )
     register_tools(mcp, broker)
+    _ = require_complete_tool_inventory(registered_tool_names(mcp))
     mcp_app = mcp.streamable_http_app()
 
     @asynccontextmanager
