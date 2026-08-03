@@ -17,6 +17,8 @@ class FakePromptPreprocessModule(ModuleType):
             remote_plugin_version="1.2.3",
             browser_plugin_version="9.8.7",
             resident_generation=7,
+            resident_accepting_since=1.0,
+            resident_plugin_fingerprint="runtime-fingerprint",
         )
     )
 

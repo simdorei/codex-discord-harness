@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import codex_discord_prompt_rewrite as prompt_rewrite
+from codex_pro_runtime_observation_runtime import RuntimeObservationStartError
 from codex_pro_runtime_preflight import ProRuntimeStatus
 from codex_remote_mcp_bridge_config import ProjectTicket
 
@@ -23,7 +24,17 @@ def _pass_preflight() -> ProRuntimeStatus:
         remote_plugin_version="1.2.3",
         browser_plugin_version="9.8.7",
         resident_generation=7,
+        resident_accepting_since=1.0,
+        resident_plugin_fingerprint="runtime-fingerprint",
     )
+
+
+def _skip_runtime_cycle(
+    status: ProRuntimeStatus,
+    root: Path,
+    thread_id: str,
+) -> None:
+    _ = status, root, thread_id
 
 
 class PromptRewriteTests(unittest.TestCase):
@@ -64,6 +75,7 @@ class PromptRewriteTests(unittest.TestCase):
             log=lambda _: None,
             project_registrar=register,
             runtime_preflight=_pass_preflight,
+            runtime_cycle_starter=_skip_runtime_cycle,
         )
 
         self.assertEqual(issued, [("thread-1", Path.cwd())])
@@ -99,6 +111,7 @@ class PromptRewriteTests(unittest.TestCase):
                 log=lambda _: None,
                 project_registrar=register,
                 runtime_preflight=_pass_preflight,
+                runtime_cycle_starter=_skip_runtime_cycle,
             )
 
         self.assertEqual(len(issued), 2)
@@ -161,6 +174,72 @@ class PromptRewriteTests(unittest.TestCase):
         self.assertEqual(result.prompt, prompt)
         self.assertEqual(result.visible_line, "")
         self.assertEqual(logs, [])
+
+    def test_runtime_cycle_starts_only_after_a_valid_project_ticket(self) -> None:
+        calls: list[tuple[str, Path]] = []
+
+        def register(
+            thread_id: str,
+            project_scope: str,
+            root: Path,
+            log: prompt_rewrite.LogFunc,
+        ) -> ProjectTicket:
+            _ = thread_id, root, log
+            return ProjectTicket(
+                project_scope=project_scope,
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            )
+
+        result = prompt_rewrite.rewrite_prompt(
+            "!pro inspect",
+            target_thread_id="thread-1",
+            cwd=Path.cwd(),
+            log=lambda _: None,
+            project_registrar=register,
+            runtime_preflight=_pass_preflight,
+            runtime_cycle_starter=lambda status, root, thread_id: calls.append(
+                (thread_id, root)
+            ),
+        )
+
+        self.assertTrue(result.should_deliver)
+        self.assertEqual(calls, [("thread-1", Path.cwd())])
+
+    def test_runtime_cycle_failure_blocks_pro_delivery(self) -> None:
+        def register(
+            thread_id: str,
+            project_scope: str,
+            root: Path,
+            log: prompt_rewrite.LogFunc,
+        ) -> ProjectTicket:
+            _ = thread_id, root, log
+            return ProjectTicket(
+                project_scope=project_scope,
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            )
+
+        def fail_cycle(
+            status: ProRuntimeStatus,
+            root: Path,
+            thread_id: str,
+        ) -> None:
+            _ = status, root, thread_id
+            raise RuntimeObservationStartError("generation changed")
+
+        result = prompt_rewrite.rewrite_prompt(
+            "!pro inspect",
+            target_thread_id="thread-1",
+            cwd=Path.cwd(),
+            log=lambda _: None,
+            project_registrar=register,
+            runtime_preflight=_pass_preflight,
+            runtime_cycle_starter=fail_cycle,
+        )
+
+        self.assertFalse(result.should_deliver)
+        self.assertEqual(result.diagnostic_code, "runtime_observation_start_failed")
+        self.assertNotIn("generation changed", result.visible_line)
+        self.assertIn("generation changed", result.error_message)
 
     def test_rewrite_prompt_keeps_dollar_prefixed_prompt(self) -> None:
         for prompt in [

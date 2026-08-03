@@ -69,6 +69,10 @@ def complete_runtime_receipts(
                 remote_plugin_version=PLUGIN_VERSION,
                 browser_plugin_version="26.721.41059",
                 resident_generation=7,
+                resident_accepting_since=(
+                    restart_time - timedelta(seconds=2)
+                ).timestamp(),
+                resident_plugin_fingerprint="f" * 64,
             ),
             resident_started_at=restart_time - timedelta(seconds=2),
             plugin_fingerprint_sha256="f" * 64,

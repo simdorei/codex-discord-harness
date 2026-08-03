@@ -145,6 +145,8 @@ def test_restart_builder_rejects_a_stale_installed_plugin_version() -> None:
                 remote_plugin_version="stale-plugin",
                 browser_plugin_version="browser-version",
                 resident_generation=2,
+                resident_accepting_since=now.timestamp(),
+                resident_plugin_fingerprint="f" * 64,
             ),
             resident_started_at=now,
             plugin_fingerprint_sha256="f" * 64,

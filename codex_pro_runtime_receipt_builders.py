@@ -142,14 +142,15 @@ def post_restart_receipt(
         raise RuntimeReceiptBuildError(
             "resident plugin version differs from the receipt context"
         )
-    evidence_sha256 = _sha256(
-        {
-            "resident_generation": runtime_status.resident_generation,
-            "resident_started_at": resident_started_at.isoformat(),
-            "plugin_fingerprint_sha256": plugin_fingerprint_sha256,
-            "browser_plugin_version": runtime_status.browser_plugin_version,
-            "healthy": True,
-        }
+    if runtime_status.resident_plugin_fingerprint != plugin_fingerprint_sha256:
+        raise RuntimeReceiptBuildError(
+            "resident plugin fingerprint differs from the runtime status"
+        )
+    evidence_sha256 = post_restart_evidence_sha256(
+        resident_generation=runtime_status.resident_generation,
+        resident_started_at=resident_started_at,
+        plugin_fingerprint_sha256=plugin_fingerprint_sha256,
+        browser_plugin_version=runtime_status.browser_plugin_version,
     )
     bindings = (
         str(runtime_status.resident_generation),
@@ -175,6 +176,22 @@ def post_restart_receipt(
     )
 
 
+def post_restart_evidence_sha256(
+    *,
+    resident_generation: int,
+    resident_started_at: datetime,
+    plugin_fingerprint_sha256: str,
+    browser_plugin_version: str,
+) -> str:
+    return _sha256(
+        {
+            "resident_generation": resident_generation,
+            "resident_started_at": resident_started_at.isoformat(),
+            "plugin_fingerprint_sha256": plugin_fingerprint_sha256,
+            "browser_plugin_version": browser_plugin_version,
+            "healthy": True,
+        }
+    )
 def _require_release_inventory(inventory: CapabilityInventoryOutput) -> None:
     if (
         not inventory.ready
@@ -244,6 +261,7 @@ __all__ = [
     "browser_receipt",
     "capability_inventory_sha256",
     "post_restart_receipt",
+    "post_restart_evidence_sha256",
     "runtime_receipt_context",
     "terminal_tool_call_receipt",
     "tool_exposure_receipt",
