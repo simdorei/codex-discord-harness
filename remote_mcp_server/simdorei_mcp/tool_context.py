@@ -23,7 +23,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
 )
 from simdorei_mcp_common.operation_base import OperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
-from simdorei_mcp_common.messages import RequestId
+from simdorei_mcp_common.messages import ProjectCommand, RequestId
 
 READ_AUTH_META: Final = {
     "securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE]}]
@@ -65,6 +65,7 @@ TERMINAL_INTERACT_AUTH_META: Final = {
 }
 ToolContext = Context[ServerSession, None, object]
 OutputT = TypeVar("OutputT", bound=OperationOutput)
+CommandT = TypeVar("CommandT", bound=ProjectCommand)
 READ_ONLY_ANNOTATIONS: Final = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
@@ -164,12 +165,41 @@ def tool_identity(
     return ToolIdentity(session=session.session, subject=principal)
 
 
-def tool_request_id(ctx: ToolContext, identity: ToolIdentity) -> RequestId:
+def tool_request_id(
+    ctx: ToolContext,
+    identity: ToolIdentity,
+    command_fingerprint: str,
+) -> RequestId:
+    upstream_request_id = str(ctx.request_id)
+    command_digest = hashlib.sha256(command_fingerprint.encode("utf-8")).hexdigest()
     source = (
         f"{len(identity.session)}:{identity.session}"
-        + f"{identity.subject}:{ctx.request_id}"
+        + f"{len(identity.subject)}:{identity.subject}"
+        + f"{len(upstream_request_id)}:{upstream_request_id}"
+        + command_digest
     )
     return RequestId(hashlib.sha256(source.encode("utf-8")).hexdigest())
+
+
+def bind_tool_request_id(
+    ctx: ToolContext,
+    identity: ToolIdentity,
+    command: CommandT,
+) -> CommandT:
+    fingerprint = command.model_dump_json(
+        exclude={
+            "request_id",
+            "deadline_at",
+            "thread_id",
+            "computer_session_id",
+            "runtime_provenance",
+        }
+    )
+    return command.model_copy(
+        update={
+            "request_id": tool_request_id(ctx, identity, fingerprint),
+        }
+    )
 
 
 async def execute_operation(
@@ -186,7 +216,11 @@ async def execute_operation(
             identity.session,
             identity.subject,
             operation,
-            request_id=tool_request_id(ctx, identity),
+            request_id=tool_request_id(
+                ctx,
+                identity,
+                f"project_operation:{operation.model_dump_json()}",
+            ),
         )
     except BrokerError as exc:
         raise ToolError(str(exc)) from exc

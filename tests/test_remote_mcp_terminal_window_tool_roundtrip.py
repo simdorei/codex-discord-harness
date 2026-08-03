@@ -63,7 +63,16 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
                 client,
                 socket,
                 headers,
-                3,
+                2,
+                "terminal_window_list",
+                {},
+                TerminalWindowListOutput(windows=(entry,)),
+            )
+            listed_again, _ = _round_trip(
+                client,
+                socket,
+                headers,
+                2,
                 "terminal_window_list",
                 {},
                 TerminalWindowListOutput(windows=(entry,)),
@@ -72,7 +81,7 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
                 client,
                 socket,
                 headers,
-                4,
+                2,
                 "terminal_window_close",
                 {"terminal_window_id": WINDOW_ID},
                 TerminalWindowCloseOutput(terminal_window_id=WINDOW_ID),
@@ -84,6 +93,8 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
     assert isinstance(listed.operation, TerminalWindowListRequest)
     assert isinstance(closed.operation, TerminalWindowCloseRequest)
     assert closed.operation.terminal_window_id == WINDOW_ID
+    assert len({opened.request_id, listed.request_id, closed.request_id}) == 3
+    assert listed_again.request_id == listed.request_id
     assert _structured(open_result)["window"] == entry.model_dump(mode="json")
     assert _structured(list_result)["windows"] == [entry.model_dump(mode="json")]
     assert _structured(close_result)["closed"] is True

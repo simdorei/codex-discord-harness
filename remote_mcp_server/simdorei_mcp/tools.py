@@ -18,8 +18,8 @@ from remote_mcp_server.simdorei_mcp.tool_context import (
     WRITE_ANNOTATIONS,
     WRITE_AUTH_META,
     ToolContext,
+    bind_tool_request_id,
     tool_identity,
-    tool_request_id,
 )
 from simdorei_mcp_common.messages import (
     ListFilesOutput,
@@ -27,6 +27,7 @@ from simdorei_mcp_common.messages import (
     ProjectSelectionOutput,
     ReadFileCommand,
     ReadFileOutput,
+    RequestId,
     WriteFileCommand,
     WriteFileOutput,
 )
@@ -150,18 +151,22 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> ReadFileOutput:
         """Read a bounded UTF-8 section from a non-sensitive project file."""
         identity = tool_identity(ctx, READ_SCOPE)
-        request_id = tool_request_id(ctx, identity)
+        command = bind_tool_request_id(
+            ctx,
+            identity,
+            ReadFileCommand(
+                request_id=RequestId("pending-tool-request"),
+                thread_id="pending-route",
+                path=path,
+                start_line=start_line,
+                max_lines=max_lines,
+            ),
+        )
         try:
             return await broker.read_file(
                 identity.session,
                 identity.subject,
-                ReadFileCommand(
-                    request_id=request_id,
-                    thread_id="pending-route",
-                    path=path,
-                    start_line=start_line,
-                    max_lines=max_lines,
-                ),
+                command,
             )
         except BrokerError as exc:
             raise ToolError(str(exc)) from exc
@@ -180,18 +185,22 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> WriteFileOutput:
         """Write UTF-8 text with optimistic conflict protection inside the bound project."""
         identity = tool_identity(ctx, WRITE_SCOPE)
-        request_id = tool_request_id(ctx, identity)
+        command = bind_tool_request_id(
+            ctx,
+            identity,
+            WriteFileCommand(
+                request_id=RequestId("pending-tool-request"),
+                thread_id="pending-route",
+                path=path,
+                content=content,
+                expected_sha256=expected_sha256,
+            ),
+        )
         try:
             return await broker.write_file(
                 identity.session,
                 identity.subject,
-                WriteFileCommand(
-                    request_id=request_id,
-                    thread_id="pending-route",
-                    path=path,
-                    content=content,
-                    expected_sha256=expected_sha256,
-                ),
+                command,
             )
         except BrokerError as exc:
             raise ToolError(str(exc)) from exc

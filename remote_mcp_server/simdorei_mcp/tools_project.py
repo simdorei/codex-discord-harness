@@ -12,11 +12,11 @@ from remote_mcp_server.simdorei_mcp.tool_context import (
     WRITE_ANNOTATIONS,
     WRITE_AUTH_META,
     ToolContext,
+    bind_tool_request_id,
     execute_operation,
     tool_identity,
-    tool_request_id,
 )
-from simdorei_mcp_common.messages import ReadFileCommand, ReadFileOutput
+from simdorei_mcp_common.messages import ReadFileCommand, ReadFileOutput, RequestId
 from simdorei_mcp_common.operation_outputs import (
     CodeSearchOutput,
     FileApplyPatchOutput,
@@ -40,7 +40,9 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def project_rules(ctx: ToolContext) -> ProjectRulesOutput:
+    async def project_rules(  # pyright: ignore[reportUnusedFunction]
+        ctx: ToolContext,
+    ) -> ProjectRulesOutput:
         """Read bounded AGENTS.md, CLAUDE.md, and Codex project rules."""
         return await execute_operation(
             ctx,
@@ -56,7 +58,9 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def project_status(ctx: ToolContext) -> ProjectStatusOutput:
+    async def project_status(  # pyright: ignore[reportUnusedFunction]
+        ctx: ToolContext,
+    ) -> ProjectStatusOutput:
         """Show Git state, project rules, and safe commands at a glance."""
         return await execute_operation(
             ctx,
@@ -72,7 +76,7 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def code_search(
+    async def code_search(  # pyright: ignore[reportUnusedFunction]
         query: str,
         ctx: ToolContext,
         max_results: int = 100,
@@ -92,7 +96,7 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=READ_AUTH_META,
         structured_output=True,
     )
-    async def file_read_slice(
+    async def file_read_slice(  # pyright: ignore[reportUnusedFunction]
         path: str,
         ctx: ToolContext,
         start_line: int = 1,
@@ -100,18 +104,22 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> ReadFileOutput:
         """Read a bounded UTF-8 line range from one project file."""
         identity = tool_identity(ctx, READ_SCOPE)
-        request_id = tool_request_id(ctx, identity)
+        command = bind_tool_request_id(
+            ctx,
+            identity,
+            ReadFileCommand(
+                request_id=RequestId("pending-tool-request"),
+                thread_id="pending-route",
+                path=path,
+                start_line=start_line,
+                max_lines=max_lines,
+            ),
+        )
         try:
             return await broker.read_file(
                 identity.session,
                 identity.subject,
-                ReadFileCommand(
-                    request_id=request_id,
-                    thread_id="pending-route",
-                    path=path,
-                    start_line=start_line,
-                    max_lines=max_lines,
-                ),
+                command,
             )
         except BrokerError as exc:
             raise ToolError(str(exc)) from exc
@@ -122,7 +130,7 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=WRITE_AUTH_META,
         structured_output=True,
     )
-    async def file_create(
+    async def file_create(  # pyright: ignore[reportUnusedFunction]
         path: str,
         content: str,
         ctx: ToolContext,
@@ -143,7 +151,7 @@ def register_project_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         meta=WRITE_AUTH_META,
         structured_output=True,
     )
-    async def file_apply_patch(
+    async def file_apply_patch(  # pyright: ignore[reportUnusedFunction]
         patch: str,
         ctx: ToolContext,
         precondition_hashes: dict[str, str] | None = None,
