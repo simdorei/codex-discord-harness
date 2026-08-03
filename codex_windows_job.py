@@ -11,13 +11,12 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: Final = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: Final = 0x00002000
 _PROCESS_TERMINATE: Final = 0x0001
 _PROCESS_SET_QUOTA: Final = 0x0100
-_TH32CS_SNAPTHREAD: Final = 0x00000004
-_THREAD_SUSPEND_RESUME: Final = 0x0002
+_PROCESS_SUSPEND_RESUME: Final = 0x0800
 _WAIT_OBJECT_0: Final = 0
 _WAIT_TIMEOUT: Final = 0x00000102
 _WAIT_FAILED: Final = 0xFFFFFFFF
-_INFINITE_FAILURE: Final = 0xFFFFFFFF
 _JOB_TERMINATION_TIMEOUT_MS: Final = 5000
+WINDOWS_CREATE_SUSPENDED: Final = 0x00000004
 
 
 @final
@@ -60,19 +59,6 @@ class _JobObjectExtendedLimitInformation(ctypes.Structure):
 
 
 @final
-class _ThreadEntry32(ctypes.Structure):
-    _fields_ = [
-        ("dwSize", ctypes.c_uint32),
-        ("cntUsage", ctypes.c_uint32),
-        ("th32ThreadID", ctypes.c_uint32),
-        ("th32OwnerProcessID", ctypes.c_uint32),
-        ("tpBasePri", ctypes.c_long),
-        ("tpDeltaPri", ctypes.c_long),
-        ("dwFlags", ctypes.c_uint32),
-    ]
-
-
-@final
 class WindowsKillOnCloseJob:
     """Own one Windows process tree until termination is confirmed."""
 
@@ -85,7 +71,7 @@ class WindowsKillOnCloseJob:
     def closed(self) -> bool:
         return self._handle is None
 
-    def terminate_and_close(self) -> None:
+    def terminate_and_close(self, *, timeout_seconds: float = 5.0) -> None:
         handle = self._handle
         if handle is None:
             return
@@ -96,21 +82,49 @@ class WindowsKillOnCloseJob:
         kernel32.WaitForSingleObject.restype = ctypes.c_uint32
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         kernel32.CloseHandle.restype = ctypes.c_int
-        if not kernel32.TerminateJobObject(handle, 1):
-            raise _windows_error("TerminateJobObject failed")
-        wait_result = int(kernel32.WaitForSingleObject(handle, _JOB_TERMINATION_TIMEOUT_MS))
-        if wait_result == _WAIT_TIMEOUT:
-            raise TimeoutError("Timed out waiting for the app-server Windows Job Object to empty.")
-        if wait_result == _WAIT_FAILED:
-            raise _windows_error("WaitForSingleObject failed for app-server job")
-        if wait_result != _WAIT_OBJECT_0:
-            raise OSError(f"Unexpected app-server job wait result: {wait_result}")
-        if not kernel32.CloseHandle(handle):
-            raise _windows_error("CloseHandle failed for app-server job")
-        self._handle = None
+        primary: BaseException | None = None
+        try:
+            if not kernel32.TerminateJobObject(handle, 1):
+                raise _windows_error("TerminateJobObject failed")
+            wait_result = int(
+                kernel32.WaitForSingleObject(
+                    handle,
+                    min(
+                        _JOB_TERMINATION_TIMEOUT_MS,
+                        max(0, int(timeout_seconds * 1_000)),
+                    ),
+                )
+            )
+            if wait_result == _WAIT_TIMEOUT:
+                raise TimeoutError(
+                    "Timed out waiting for the owned Windows Job Object to empty."
+                )
+            if wait_result == _WAIT_FAILED:
+                raise _windows_error("WaitForSingleObject failed for owned job")
+            if wait_result != _WAIT_OBJECT_0:
+                raise OSError(f"Unexpected owned job wait result: {wait_result}")
+        except BaseException as exc:
+            primary = exc
+        finally:
+            close_error = (
+                None
+                if kernel32.CloseHandle(handle)
+                else _windows_error("CloseHandle failed for owned job")
+            )
+            self._handle = None
+        if primary is not None:
+            if close_error is not None:
+                primary.add_note(
+                    f"secondary handle-close failure: {type(close_error).__name__}"
+                )
+            raise primary
+        if close_error is not None:
+            raise close_error
 
 
-def create_kill_on_close_job_for_suspended_process(process_id: int) -> WindowsKillOnCloseJob:
+def create_kill_on_close_job_for_suspended_process(
+    process_id: int,
+) -> WindowsKillOnCloseJob:
     if os.name != "nt":
         raise OSError("Windows Job Objects are only available on Windows.")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -146,21 +160,23 @@ def create_kill_on_close_job_for_suspended_process(process_id: int) -> WindowsKi
         ):
             raise _windows_error("SetInformationJobObject failed")
         process_handle = kernel32.OpenProcess(
-            _PROCESS_TERMINATE | _PROCESS_SET_QUOTA,
+            _PROCESS_TERMINATE | _PROCESS_SET_QUOTA | _PROCESS_SUSPEND_RESUME,
             False,
             process_id,
         )
         if not process_handle:
-            raise _windows_error(f"OpenProcess failed for suspended app-server PID {process_id}")
+            raise _windows_error(
+                f"OpenProcess failed for suspended owned PID {process_id}"
+            )
         try:
             if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
                 raise _windows_error(
-                    f"AssignProcessToJobObject failed for app-server PID {process_id}"
+                    f"AssignProcessToJobObject failed for owned PID {process_id}"
                 )
             assigned = True
+            _resume_suspended_process(process_handle, process_id)
         finally:
             _ = kernel32.CloseHandle(process_handle)
-        _resume_suspended_process(process_id)
         return WindowsKillOnCloseJob(job_handle)
     except (OSError, TimeoutError):
         if assigned:
@@ -171,55 +187,16 @@ def create_kill_on_close_job_for_suspended_process(process_id: int) -> WindowsKi
         raise
 
 
-def _resume_suspended_process(process_id: int) -> None:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
-    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-    kernel32.Thread32First.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ThreadEntry32)]
-    kernel32.Thread32First.restype = ctypes.c_int
-    kernel32.Thread32Next.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ThreadEntry32)]
-    kernel32.Thread32Next.restype = ctypes.c_int
-    kernel32.OpenThread.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-    kernel32.OpenThread.restype = ctypes.c_void_p
-    kernel32.ResumeThread.argtypes = [ctypes.c_void_p]
-    kernel32.ResumeThread.restype = ctypes.c_uint32
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_int
-
-    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
-    invalid_handle = ctypes.c_void_p(-1).value
-    if snapshot in (None, 0, invalid_handle):
-        raise _windows_error("Thread snapshot failed for suspended app-server")
-    entry = _ThreadEntry32()
-    entry.dwSize = ctypes.sizeof(entry)
-    resumed = False
-    try:
-        has_entry = bool(kernel32.Thread32First(snapshot, ctypes.byref(entry)))
-        while has_entry:
-            if int(entry.th32OwnerProcessID) == process_id:
-                thread_handle = kernel32.OpenThread(
-                    _THREAD_SUSPEND_RESUME,
-                    False,
-                    int(entry.th32ThreadID),
-                )
-                if not thread_handle:
-                    raise _windows_error(
-                        f"OpenThread failed for suspended app-server PID {process_id}"
-                    )
-                try:
-                    if int(kernel32.ResumeThread(thread_handle)) == _INFINITE_FAILURE:
-                        raise _windows_error(
-                            f"ResumeThread failed for suspended app-server PID {process_id}"
-                        )
-                    resumed = True
-                finally:
-                    _ = kernel32.CloseHandle(thread_handle)
-                break
-            has_entry = bool(kernel32.Thread32Next(snapshot, ctypes.byref(entry)))
-    finally:
-        _ = kernel32.CloseHandle(snapshot)
-    if not resumed:
-        raise OSError(f"No primary thread found for suspended app-server PID {process_id}.")
+def _resume_suspended_process(process_handle: int, process_id: int) -> None:
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    ntdll.NtResumeProcess.argtypes = [ctypes.c_void_p]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    status = int(ntdll.NtResumeProcess(process_handle))
+    if status != 0:
+        unsigned_status = status & 0xFFFFFFFF
+        message = f"NtResumeProcess failed for suspended PID {process_id}; "
+        message += f"NTSTATUS=0x{unsigned_status:08x}"
+        raise OSError(message)
 
 
 def _windows_error(message: str) -> OSError:

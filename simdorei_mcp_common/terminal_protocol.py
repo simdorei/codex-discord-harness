@@ -20,6 +20,11 @@ EnvironmentValue = Annotated[
     Field(max_length=32_767, pattern=r"^[^\x00]*$"),
 ]
 TerminalShell = Literal["auto", "powershell", "cmd", "sh", "bash"]
+TerminalCwdScope = Literal[
+    "project_root",
+    "project_relative",
+    "external_absolute",
+]
 
 
 class TerminalExecRequest(OperationRequest):
@@ -43,7 +48,7 @@ class TerminalExecutionReceipt(BaseModel):
     terminal_id: TerminalId
     command_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     shell: TerminalShell
-    cwd_scope: Literal["project_root", "project_relative"]
+    cwd_scope: TerminalCwdScope
     exit_code: int | None
     stdout_bytes: int = Field(ge=0)
     stderr_bytes: int = Field(ge=0)
