@@ -127,17 +127,28 @@ class RuntimeObservationIngress:
             session_binding_sha256=session_binding_sha256,
         )
         snapshot = self._collector.snapshot()
+        capability_matches = (
+            inventory_sha256 == cycle.release.inventory_sha256
+            and tool_count == 47
+            and terminal_execute_present
+            and terminal_interact_present
+        )
+        if snapshot.phase in (
+            RuntimeObservationPhase.WAITING_TERMINAL,
+            RuntimeObservationPhase.READY_TO_EMIT,
+        ):
+            if not capability_matches:
+                raise self._failure("runtime capability inventory changed")
+            return CapabilityIngressResult(
+                RuntimeIngressStatus.ACCEPTED,
+                cycle.cycle_binding_sha256,
+            )
         if (
             snapshot.phase is not RuntimeObservationPhase.WAITING_BROWSER
             or snapshot.last_recorded_at is None
         ):
             raise self._failure("runtime is not waiting for capability evidence")
-        if (
-            inventory_sha256 != cycle.release.inventory_sha256
-            or tool_count != 47
-            or not terminal_execute_present
-            or not terminal_interact_present
-        ):
+        if not capability_matches:
             raise self._failure("runtime capability inventory is incomplete")
         proof = read_latest_browser_evidence(
             self._evidence_dir,

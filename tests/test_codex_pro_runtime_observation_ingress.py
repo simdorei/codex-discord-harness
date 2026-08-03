@@ -4,18 +4,28 @@ import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import os
 
 from codex_app_server_transport_lifecycle import AppServerLifecycleSnapshot
 from codex_pro_runtime_observation_ingress import (
     RuntimeIngressStatus,
     TerminalIngressEvidence,
 )
-from codex_pro_runtime_observation_runtime import RuntimeObservationRuntime
+from codex_pro_runtime_observation_runtime import (
+    ReceiptPublisher,
+    ReceiptRemover,
+    RuntimeObservationRuntime,
+)
 from codex_pro_runtime_preflight import ProRuntimeStatus
+from codex_process_runtime_identity import current_process_identity
 from remote_mcp_server.simdorei_mcp.capability_inventory import (
     EXPECTED_TOOL_NAMES,
     build_capability_inventory,
     capability_inventory_sha256,
+)
+from codex_pro_runtime_receipt_io import (
+    publish_runtime_receipts,
+    remove_runtime_receipts,
 )
 from simdorei_mcp_common.runtime_provenance import ObservedTerminalTool
 from tests.test_browser_evidence_hook import load_hook, post_payload
@@ -88,6 +98,30 @@ def test_wrong_route_invalidates_the_active_release_cycle() -> None:
 
         assert status is RuntimeIngressStatus.REJECTED
         assert runtime.snapshot().phase == "invalid"
+
+
+def test_capability_retry_returns_the_same_cycle_without_reusing_browser_proof() -> None:
+    with tempfile.TemporaryDirectory() as raw_dir:
+        root = Path(raw_dir)
+        current = [_NOW]
+        runtime = _runtime(root, current)
+        cycle_binding = _advance_to_terminal(runtime, root, current)
+        before = runtime.snapshot()
+        inventory = build_capability_inventory(EXPECTED_TOOL_NAMES)
+
+        retry = runtime.commit_capability(
+            thread_id="session-a",
+            computer_session_id="computer-a",
+            session_binding_sha256=_SESSION_BINDING,
+            inventory_sha256=capability_inventory_sha256(inventory),
+            tool_count=47,
+            terminal_execute_present=True,
+            terminal_interact_present=True,
+        )
+
+        assert retry.status is RuntimeIngressStatus.ACCEPTED
+        assert retry.cycle_binding_sha256 == cycle_binding
+        assert runtime.snapshot() == before
 
 
 def test_terminal_action_must_consume_the_immediately_preceding_capture() -> None:
@@ -213,10 +247,18 @@ def _status() -> ProRuntimeStatus:
         resident_generation=7,
         resident_accepting_since=(_NOW - timedelta(seconds=10)).timestamp(),
         resident_plugin_fingerprint=_FINGERPRINT,
+        resident_process_id=os.getpid(),
+        resident_process_identity=current_process_identity(),
     )
 
 
-def _runtime(root: Path, current: list[datetime]) -> RuntimeObservationRuntime:
+def _runtime(
+    root: Path,
+    current: list[datetime],
+    *,
+    receipt_publisher: ReceiptPublisher = publish_runtime_receipts,
+    receipt_remover: ReceiptRemover = remove_runtime_receipts,
+) -> RuntimeObservationRuntime:
     common = (root / ".git-common").resolve()
 
     def git_runner(command: Sequence[str], cwd: Path) -> tuple[int, str]:
@@ -233,6 +275,8 @@ def _runtime(root: Path, current: list[datetime]) -> RuntimeObservationRuntime:
             healthy=True,
             accepting_since=(_NOW - timedelta(seconds=10)).timestamp(),
             plugin_runtime_fingerprint=_FINGERPRINT,
+            process_id=os.getpid(),
+            process_identity=current_process_identity(),
         )
 
     return RuntimeObservationRuntime(
@@ -241,4 +285,6 @@ def _runtime(root: Path, current: list[datetime]) -> RuntimeObservationRuntime:
         evidence_dir=root / "plugin-data" / "browser-evidence",
         clock=lambda: current[0],
         git_runner=git_runner,
+        receipt_publisher=receipt_publisher,
+        receipt_remover=receipt_remover,
     )

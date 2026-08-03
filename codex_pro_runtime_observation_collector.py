@@ -60,6 +60,15 @@ class RuntimeObservationCollector:  # MUTABLE_OK: synchronized state machine.
         with self._lock:
             return self._snapshot_locked()
 
+    def finalized_observations(self) -> tuple[RuntimeObservation, ...]:
+        with self._lock:
+            if self._phase is not RuntimeObservationPhase.READY_TO_EMIT:
+                raise RuntimeError("runtime observations are not ready to emit")
+            observations = tuple(self._observations.values())
+            if len(observations) != 9:
+                raise RuntimeError("runtime observation cycle is incomplete")
+            return observations
+
     def invalidate(self, failure_code: str) -> RuntimeObservationSnapshot:
         with self._lock:
             if self._phase is RuntimeObservationPhase.INVALID:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from codex_pro_release_evidence import (
     REQUIRED_CHECK_IDS,
@@ -9,6 +11,15 @@ from codex_pro_release_evidence import (
     ProReleaseEvidence,
 )
 from codex_pro_runtime_preflight import ProRuntimeStatus
+from codex_process_runtime_identity import current_process_identity
+from codex_pro_resident_identity import (
+    DEFAULT_RESIDENT_IDENTITY_KEY_PATH,
+    DEFAULT_RESIDENT_IDENTITY_PATH,
+    ResidentRuntimeIdentity,
+    build_resident_identity,
+    load_or_create_identity_key,
+    publish_resident_identity,
+)
 from codex_pro_runtime_receipt_builders import (
     RuntimeReceiptContext,
     browser_receipt,
@@ -39,9 +50,14 @@ REVISION = "a" * 40
 PLUGIN_VERSION = "0.1.0-test"
 WINDOW_ID = "termwin_0123456789abcdef"
 INVENTORY = build_capability_inventory(EXPECTED_TOOL_NAMES)
+_RESIDENT_STARTED_AT = datetime(2020, 1, 1, 0, 0, tzinfo=UTC)
+_IDENTITY_KEY = b"test-resident-identity-key-0001"
 
 
-def ready_release_evidence() -> ProReleaseEvidence:
+def ready_release_evidence(
+    now: datetime | None = None,
+) -> ProReleaseEvidence:
+    evaluated_at = now or datetime.now(UTC)
     return ProReleaseEvidence(
         repository_revision=REVISION,
         workspace_state="clean",
@@ -50,6 +66,11 @@ def ready_release_evidence() -> ProReleaseEvidence:
         checks=tuple(
             EvidenceCheck(check_id, "source", EvidenceStatus.PASSED)
             for check_id in REQUIRED_CHECK_IDS
+        ),
+        resident_identity=build_resident_identity(
+            _runtime_status(),
+            recorded_at=evaluated_at,
+            key=_IDENTITY_KEY,
         ),
     )
 
@@ -65,16 +86,8 @@ def complete_runtime_receipts(
     receipts: list[RuntimeEvidenceReceipt] = [
         post_restart_receipt(
             restart_context,
-            runtime_status=ProRuntimeStatus(
-                remote_plugin_version=PLUGIN_VERSION,
-                browser_plugin_version="26.721.41059",
-                resident_generation=7,
-                resident_accepting_since=(
-                    restart_time - timedelta(seconds=2)
-                ).timestamp(),
-                resident_plugin_fingerprint="f" * 64,
-            ),
-            resident_started_at=restart_time - timedelta(seconds=2),
+            runtime_status=_runtime_status(),
+            resident_started_at=_RESIDENT_STARTED_AT,
             plugin_fingerprint_sha256="f" * 64,
         )
     ]
@@ -111,6 +124,46 @@ def complete_runtime_receipts(
         context = _context(evaluated_at - timedelta(minutes=2, seconds=-offset))
         receipts.append(terminal_tool_call_receipt(context, tool_name, output))
     return RuntimeReceiptSet(receipts=tuple(receipts))
+
+
+def current_resident_identity(
+    now: datetime | None = None,
+) -> ResidentRuntimeIdentity:
+    return build_resident_identity(
+        _runtime_status(),
+        recorded_at=now or datetime.now(UTC),
+        key=_IDENTITY_KEY,
+    )
+
+
+def publish_current_resident_identity(
+    root: Path,
+    now: datetime | None = None,
+) -> ResidentRuntimeIdentity:
+    key_path = root / DEFAULT_RESIDENT_IDENTITY_KEY_PATH
+    identity = build_resident_identity(
+        _runtime_status(),
+        recorded_at=now or datetime.now(UTC),
+        key=load_or_create_identity_key(key_path),
+    )
+    _ = publish_resident_identity(
+        identity,
+        root / DEFAULT_RESIDENT_IDENTITY_PATH,
+        key_path,
+    )
+    return identity
+
+
+def _runtime_status() -> ProRuntimeStatus:
+    return ProRuntimeStatus(
+        remote_plugin_version=PLUGIN_VERSION,
+        browser_plugin_version="26.721.41059",
+        resident_generation=7,
+        resident_accepting_since=_RESIDENT_STARTED_AT.timestamp(),
+        resident_plugin_fingerprint="f" * 64,
+        resident_process_id=os.getpid(),
+        resident_process_identity=current_process_identity(),
+    )
 
 
 def _context(recorded_at: datetime) -> RuntimeReceiptContext:
@@ -177,5 +230,7 @@ __all__ = [
     "PLUGIN_VERSION",
     "REVISION",
     "complete_runtime_receipts",
+    "current_resident_identity",
+    "publish_current_resident_identity",
     "ready_release_evidence",
 ]

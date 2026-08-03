@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
+
 from codex_pro_runtime_receipt_io import (
+    RuntimeReceiptError,
+    publish_runtime_receipts,
     read_runtime_receipts,
     write_runtime_receipts,
 )
@@ -38,6 +44,22 @@ def test_complete_receipts_derive_release_readiness_and_round_trip() -> None:
     assert payload["release_ready"] is True
     assert payload["deferred_check_ids"] == []
     assert restored == receipts
+
+
+def test_receipt_publication_is_idempotent_and_rejects_cycle_conflicts(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    first = complete_runtime_receipts(now)
+    conflicting = complete_runtime_receipts(now + timedelta(minutes=1))
+    path = tmp_path / "runtime-receipts.json"
+
+    assert publish_runtime_receipts(first, path) == path
+    assert publish_runtime_receipts(first, path) == path
+    with pytest.raises(RuntimeReceiptError, match="different observation cycle"):
+        _ = publish_runtime_receipts(conflicting, path)
+
+    assert read_runtime_receipts(path) == first
 
 
 def test_receipts_persist_hashes_without_raw_browser_or_terminal_data() -> None:
@@ -221,3 +243,47 @@ def test_plugin_and_inventory_binding_fail_closed() -> None:
     assert "capability_inventory_mismatch" in blockers
     assert PLUGIN_VERSION != "stale"
     assert REVISION == evidence.repository_revision
+
+
+def test_current_resident_identity_is_required_and_exactly_bound() -> None:
+    now = datetime.now(UTC)
+    receipts = complete_runtime_receipts(now)
+    evidence = ready_release_evidence(now)
+    resident = evidence.resident_identity
+    assert resident is not None
+    cases = (
+        (None, "resident_identity_missing"),
+        (
+            resident.model_copy(
+                update={"resident_generation": resident.resident_generation + 1}
+            ),
+            "resident_generation_mismatch",
+        ),
+        (
+            resident.model_copy(
+                update={
+                    "resident_started_at": resident.resident_started_at
+                    + timedelta(seconds=1)
+                }
+            ),
+            "resident_started_at_mismatch",
+        ),
+        (
+            resident.model_copy(
+                update={"plugin_fingerprint_sha256": "e" * 64}
+            ),
+            "resident_plugin_fingerprint_mismatch",
+        ),
+        (
+            resident.model_copy(update={"browser_plugin_version": "drifted"}),
+            "browser_plugin_version_mismatch",
+        ),
+    )
+
+    for current, expected in cases:
+        candidate = replace(evidence, resident_identity=current)
+        blockers = candidate.release_readiness(
+            receipts,
+            evaluated_at=now,
+        ).blockers
+        assert expected in blockers

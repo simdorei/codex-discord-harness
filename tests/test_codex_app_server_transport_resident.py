@@ -226,6 +226,10 @@ class ResidentTransportStartTests(unittest.TestCase):
     def test_reader_exit_marks_current_generation_unhealthy(self) -> None:
         process = _process()
         transport = _StartProbeTransport(executable="codex.exe", wall_time_func=lambda: 1_234.5)
+        invalidations: list[str] = []
+        transport.add_resident_invalidation_observer(
+            lambda: invalidations.append("invalidated")
+        )
 
         with (
             mock.patch.object(resident_mod, "start_resident_app_server_process", return_value=process),
@@ -233,12 +237,14 @@ class ResidentTransportStartTests(unittest.TestCase):
         ):
             transport.start()
 
+        invalidations.clear()
         transport.drain_process(process)
 
         snapshot = transport.lifecycle_snapshot()
         self.assertEqual(snapshot.generation, 1)
         self.assertFalse(snapshot.healthy)
         self.assertIsNone(snapshot.accepting_since)
+        self.assertEqual(invalidations, ["invalidated"])
 
     def test_start_closes_process_when_stdio_is_unavailable(self) -> None:
         process = _FakeProcess(stdin=None, stdout=io.StringIO())
@@ -342,6 +348,10 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
         transport = _RequestBoundaryProbe()
         process = _process()
         restarted = threading.Event()
+        invalidations: list[str] = []
+        transport.add_resident_invalidation_observer(
+            lambda: invalidations.append("invalidated")
+        )
         transport.install_lifecycle(process, generation=1)
         transport.seed_active_turn()
 
@@ -362,6 +372,7 @@ class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
             self.assertFalse(snapshot.healthy)
             self.assertTrue(snapshot.quarantined)
             self.assertTrue(snapshot.restart_pending)
+            self.assertEqual(invalidations, ["invalidated"])
             self.assertIs(transport.process, process)
             self.assertIsNone(process.poll())
             self.assertFalse(restarted.wait(timeout=0.05))
@@ -937,6 +948,7 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
             wall_time_func=wall_time_func,
             generation_seed_func=generation_seed_func,
             plugin_runtime_fingerprint_reader=plugin_runtime_fingerprint_reader,
+            process_identity_reader=lambda pid: f"{pid}|test-process",
         )
         self.requests: list[tuple[str, JsonMapping, float]] = []
         self.notifications: list[tuple[str, JsonMapping]] = []
@@ -991,7 +1003,6 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
         self.notifications.append((method, dict(params or {})))
 
 
-@final
 class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
     def __init__(self, *, log_func: Callable[[str], None] | None = None) -> None:
         super().__init__(executable_resolver=lambda: "codex.exe", log_func=log_func)

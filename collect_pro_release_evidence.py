@@ -13,6 +13,13 @@ from codex_pro_runtime_receipt_io import (
     read_runtime_receipts,
 )
 from codex_pro_runtime_receipt_models import RuntimeReceiptSet
+from codex_pro_resident_identity import (
+    DEFAULT_RESIDENT_IDENTITY_KEY_PATH,
+    DEFAULT_RESIDENT_IDENTITY_PATH,
+    ResidentIdentityError,
+    ResidentRuntimeIdentity,
+    read_current_resident_identity,
+)
 
 
 DEFAULT_OUTPUT = Path(".release-evidence/pro-release-evidence.json")
@@ -45,6 +52,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not output.is_absolute():
         output = repo_root / output
     runtime_receipts: RuntimeReceiptSet | None = None
+    current_resident: ResidentRuntimeIdentity | None = None
     if args.runtime_receipts is not None:
         receipt_path = args.runtime_receipts
         if not receipt_path.is_absolute():
@@ -54,7 +62,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         except RuntimeReceiptError as exc:
             print(f"Runtime receipts invalid: {exc}", file=sys.stderr)
             return 2
-    evidence = collect_current_release_evidence(repo_root)
+        try:
+            current_resident = read_current_resident_identity(
+                repo_root / DEFAULT_RESIDENT_IDENTITY_PATH,
+                repo_root / DEFAULT_RESIDENT_IDENTITY_KEY_PATH,
+            )
+        except ResidentIdentityError as exc:
+            print(f"Resident identity invalid: {exc}", file=sys.stderr)
+            return 2
+    evidence = collect_current_release_evidence(
+        repo_root,
+        current_resident=current_resident,
+    )
     json_path, summary_path = write_evidence_artifacts(
         evidence,
         output,

@@ -87,7 +87,7 @@ def test_dispatch_connects_session_capability_and_terminal_provenance(
     assert duplicate == terminal
     assert len(observer.bound) == 1
     assert len(observer.capabilities) == 1
-    assert len(observer.terminals) == 1
+    assert len(observer.terminals) == 2
 
 
 def test_terminal_observer_failure_does_not_hide_a_successful_side_effect(

@@ -34,10 +34,37 @@ from codex_pro_runtime_observation_release import (
     RuntimeReleaseContextResolver,
 )
 from codex_pro_runtime_preflight import ProRuntimeStatus
+from codex_pro_runtime_observation_receipts import (
+    build_observed_runtime_receipts,
+)
 from codex_pro_runtime_receipt_builders import post_restart_evidence_sha256
+from codex_pro_runtime_receipt_io import (
+    DEFAULT_RUNTIME_RECEIPT_PATH,
+    RuntimeReceiptError,
+    publish_runtime_receipts,
+    remove_runtime_receipts,
+)
+from codex_pro_runtime_receipt_models import RuntimeReceiptSet
+from codex_pro_resident_identity import (
+    DEFAULT_RESIDENT_IDENTITY_KEY_PATH,
+    DEFAULT_RESIDENT_IDENTITY_PATH,
+    ResidentIdentityError,
+    ResidentRuntimeIdentity,
+    build_resident_identity,
+    load_or_create_identity_key,
+    publish_resident_identity,
+    remove_resident_identity,
+)
 
 SnapshotReader = Callable[[], AppServerLifecycleSnapshot]
 Clock = Callable[[], datetime]
+ReceiptPublisher = Callable[[RuntimeReceiptSet, Path], Path]
+ReceiptRemover = Callable[[Path], None]
+ResidentIdentityPublisher = Callable[
+    [ResidentRuntimeIdentity, Path, Path], Path
+]
+ResidentIdentityRemover = Callable[[Path], None]
+ResidentIdentityKeyLoader = Callable[[Path], bytes]
 
 
 @unique
@@ -62,6 +89,20 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
         evidence_dir: Path,
         clock: Clock = lambda: datetime.now(UTC),
         git_runner: GitRunner | None = None,
+        receipt_path: Path | None = None,
+        receipt_publisher: ReceiptPublisher = publish_runtime_receipts,
+        receipt_remover: ReceiptRemover = remove_runtime_receipts,
+        resident_identity_path: Path | None = None,
+        resident_identity_key_path: Path | None = None,
+        resident_identity_publisher: ResidentIdentityPublisher = (
+            publish_resident_identity
+        ),
+        resident_identity_remover: ResidentIdentityRemover = (
+            remove_resident_identity
+        ),
+        resident_identity_key_loader: ResidentIdentityKeyLoader = (
+            load_or_create_identity_key
+        ),
     ) -> None:
         self._release_resolver = RuntimeReleaseContextResolver(
             release_repo_root,
@@ -70,6 +111,20 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
         self._snapshot_reader = snapshot_reader
         self._evidence_dir = evidence_dir
         self._clock = clock
+        self._receipt_path = receipt_path or (
+            release_repo_root / DEFAULT_RUNTIME_RECEIPT_PATH
+        )
+        self._receipt_publisher = receipt_publisher
+        self._receipt_remover = receipt_remover
+        self._resident_identity_path = resident_identity_path or (
+            release_repo_root / DEFAULT_RESIDENT_IDENTITY_PATH
+        )
+        self._resident_identity_key_path = resident_identity_key_path or (
+            release_repo_root / DEFAULT_RESIDENT_IDENTITY_KEY_PATH
+        )
+        self._resident_identity_publisher = resident_identity_publisher
+        self._resident_identity_remover = resident_identity_remover
+        self._resident_identity_key_loader = resident_identity_key_loader
         self._authority = RuntimeObservationAuthority()
         self._collector = RuntimeObservationCollector(self._authority)
         self._ingress = RuntimeObservationIngress(
@@ -79,6 +134,9 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
         )
         self._lock = threading.Lock()
         self._active_cycle: ActiveRuntimeCycle | None = None
+        self._active_runtime_status: ProRuntimeStatus | None = None
+        self._receipt_emitted = False
+        self._receipt_error: str | None = None
 
     def start_cycle(
         self,
@@ -150,8 +208,24 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
                 plugin_fingerprint_sha256=snapshot.plugin_runtime_fingerprint,
                 browser_plugin_version=runtime_status.browser_plugin_version,
             )
+            try:
+                self._receipt_remover(self._receipt_path)
+                self._resident_identity_remover(
+                    self._resident_identity_path
+                )
+            except (
+                OSError,
+                ResidentIdentityError,
+                RuntimeReceiptError,
+            ) as exc:
+                raise RuntimeObservationStartError(
+                    "previous runtime receipts could not be invalidated"
+                ) from exc
             _ = self._collector.reset()
             self._active_cycle = None
+            self._active_runtime_status = None
+            self._receipt_emitted = False
+            self._receipt_error = None
             observation = self._authority.post_restart(
                 release,
                 evidence_sha256=evidence_sha256,
@@ -173,6 +247,7 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
                 ),
                 cycle_binding_sha256=self._authority.cycle_binding_sha256(),
             )
+            self._active_runtime_status = runtime_status
             return RuntimeCycleStart.STARTED
 
     def bind_route(
@@ -243,7 +318,9 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
         with self._lock:
             if self._active_cycle is None:
                 return RuntimeIngressStatus.NOT_APPLICABLE
-            return self._ingress.observe_terminal(
+            if self._receipt_emitted:
+                return RuntimeIngressStatus.NOT_APPLICABLE
+            result = self._ingress.observe_terminal(
                 self._active_cycle,
                 thread_id=thread_id,
                 computer_session_id=computer_session_id,
@@ -251,10 +328,16 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
                 cycle_binding_sha256=cycle_binding_sha256,
                 evidence=evidence,
             )
+            if (
+                result is RuntimeIngressStatus.ACCEPTED
+                and self._collector.snapshot().ready
+            ):
+                self._publish_ready_receipts_locked()
+            return result
 
     def invalidate_active(self, failure_code: str) -> None:
         with self._lock:
-            if self._active_cycle is not None:
+            if self._active_cycle is not None and not self._receipt_emitted:
                 _ = self._collector.invalidate(failure_code)
 
     def read_browser_proof(self) -> BrowserEvidenceProof:
@@ -279,7 +362,67 @@ class RuntimeObservationRuntime:  # MUTABLE_OK: synchronized process singleton.
             )
 
     def snapshot(self) -> RuntimeObservationSnapshot:
-        return self._collector.snapshot()
+        with self._lock:
+            return self._collector.snapshot().model_copy(
+                update={
+                    "receipt_emitted": self._receipt_emitted,
+                    "receipt_error": self._receipt_error,
+                }
+            )
+
+    def _publish_ready_receipts_locked(self) -> None:
+        if self._receipt_emitted:
+            return
+        try:
+            observations = self._collector.finalized_observations()
+            runtime_status = self._active_runtime_status
+            if runtime_status is None:
+                raise RuntimeError("resident runtime identity is unavailable")
+            snapshot = self._snapshot_reader()
+            if (
+                not snapshot.healthy
+                or snapshot.generation != runtime_status.resident_generation
+                or snapshot.accepting_since
+                != runtime_status.resident_accepting_since
+                or snapshot.plugin_runtime_fingerprint
+                != runtime_status.resident_plugin_fingerprint
+                or snapshot.process_id != runtime_status.resident_process_id
+                or snapshot.process_identity
+                != runtime_status.resident_process_identity
+            ):
+                raise RuntimeError("resident runtime changed before publication")
+            key = self._resident_identity_key_loader(
+                self._resident_identity_key_path
+            )
+            identity = build_resident_identity(
+                runtime_status,
+                recorded_at=self._clock(),
+                key=key,
+            )
+            receipts = build_observed_runtime_receipts(
+                observations,
+                current_resident=identity,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._receipt_error = type(exc).__name__
+            _ = self._collector.invalidate("runtime_receipt_build_invalid")
+            return
+        try:
+            _ = self._resident_identity_publisher(
+                identity,
+                self._resident_identity_path,
+                self._resident_identity_key_path,
+            )
+            _ = self._receipt_publisher(receipts, self._receipt_path)
+        except (
+            OSError,
+            ResidentIdentityError,
+            RuntimeReceiptError,
+        ) as exc:
+            self._receipt_error = type(exc).__name__
+            return
+        self._receipt_emitted = True
+        self._receipt_error = None
 
 def _codex_home() -> Path:
     raw = os.environ.get("CODEX_HOME")
@@ -293,6 +436,17 @@ _DEFAULT_RUNTIME = RuntimeObservationRuntime(
         _codex_home()
         / "plugins/data/codex-discord-remote-codex-discord-remote/browser-evidence"
     ),
+)
+
+
+def _invalidate_persisted_runtime_evidence() -> None:
+    root = Path(__file__).resolve().parent
+    remove_runtime_receipts(root / DEFAULT_RUNTIME_RECEIPT_PATH)
+    remove_resident_identity(root / DEFAULT_RESIDENT_IDENTITY_PATH)
+
+
+app_server_transport.DEFAULT_CLIENT.add_resident_invalidation_observer(
+    _invalidate_persisted_runtime_evidence
 )
 
 

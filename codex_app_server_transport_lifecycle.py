@@ -17,6 +17,8 @@ class AppServerLifecycleSnapshot:
     consecutive_read_timeouts: int = 0
     plugin_runtime_fingerprint: str | None = None
     plugin_runtime_error: str | None = None
+    process_id: int | None = None
+    process_identity: str | None = None
 
 
 class AppServerGenerationExpiredError(CodexAppServerTransportError):

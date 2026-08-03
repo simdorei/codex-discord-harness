@@ -119,6 +119,8 @@ class RuntimeObservationSnapshot(BaseModel):
     ready: bool
     failure_code: str | None = Field(default=None, max_length=100)
     last_recorded_at: datetime | None = None
+    receipt_emitted: bool = False
+    receipt_error: str | None = Field(default=None, max_length=100)
 
 
 __all__ = [

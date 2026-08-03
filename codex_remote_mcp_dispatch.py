@@ -125,10 +125,16 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
             command,
             (WriteFileCommand, ProjectOperationCommand, RuntimeCapabilityCommand),
         ):
-            return project.result_cache.execute_once(
+            result = project.result_cache.execute_once(
                 command,
                 lambda: self._execute_admitted(command, project),
             )
+            if isinstance(command, ProjectOperationCommand) and isinstance(
+                result,
+                ProjectOperationResult,
+            ):
+                self._observe_runtime_terminal(command, result)
+            return result
         return self._execute_admitted(command, project)
 
     def _execute_admitted(
@@ -304,21 +310,6 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     terminal=terminal,
                     terminal_windows=terminal_windows,
                 )
-            if isinstance(command, ProjectOperationCommand) and isinstance(
-                result,
-                ProjectOperationResult,
-            ):
-                try:
-                    self._runtime_provenance.terminal(command, result.output)
-                except (OSError, OverflowError, RuntimeError, ValueError):
-                    # The terminal side effect already succeeded. Provenance failure
-                    # must fail the release cycle without hiding that success.
-                    try:
-                        self._runtime_provenance.invalidate(
-                            "terminal_runtime_observer_failed"
-                        )
-                    except (OSError, OverflowError, RuntimeError, ValueError):
-                        pass
             return result
         except ProjectFileError as exc:
             return OperationErrorResult(
@@ -326,6 +317,23 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
+
+    def _observe_runtime_terminal(
+        self,
+        command: ProjectOperationCommand,
+        result: ProjectOperationResult,
+    ) -> None:
+        try:
+            self._runtime_provenance.terminal(command, result.output)
+        except (OSError, OverflowError, RuntimeError, ValueError):
+            # The terminal side effect already succeeded. Provenance failure
+            # must fail the release cycle without hiding that success.
+            try:
+                self._runtime_provenance.invalidate(
+                    "terminal_runtime_observer_failed"
+                )
+            except (OSError, OverflowError, RuntimeError, ValueError):
+                pass
 
     def _computer_for(
         self,

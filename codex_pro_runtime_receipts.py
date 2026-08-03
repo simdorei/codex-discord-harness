@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from codex_pro_runtime_receipt_builders import capability_inventory_sha256
+from codex_pro_resident_identity import ResidentRuntimeIdentity
 from codex_pro_runtime_receipt_models import (
     ChatGptToolExposureReceipt,
     InAppBrowserReceipt,
@@ -63,6 +64,7 @@ def evaluate_runtime_receipts(
     repository_revision: str,
     plugin_version: str,
     pre_restart_ready: bool,
+    current_resident: ResidentRuntimeIdentity | None = None,
     evaluated_at: datetime | None = None,
 ) -> RuntimeReceiptEvaluation:
     if receipts is None:
@@ -133,6 +135,12 @@ def evaluate_runtime_receipts(
     _validate_observation_chain(blockers, calls)
     if len(restarts) == 1:
         restart = restarts[0]
+        _validate_current_resident(
+            blockers,
+            restart,
+            current_resident,
+            plugin_version=plugin_version,
+        )
         later_receipts = (*browsers, *exposures, *calls)
         if any(receipt.recorded_at <= restart.recorded_at for receipt in later_receipts):
             blockers.append("live_evidence_predates_restart")
@@ -147,6 +155,33 @@ def evaluate_runtime_receipts(
         missing_check_ids=missing,
         receipt_set_sha256=_receipt_set_sha256(receipts),
     )
+
+
+def _validate_current_resident(
+    blockers: list[str],
+    restart: PostRestartRuntimeReceipt,
+    current: ResidentRuntimeIdentity | None,
+    *,
+    plugin_version: str,
+) -> None:
+    if current is None:
+        blockers.append("resident_identity_missing")
+        return
+    if current.resident_generation != restart.resident_generation:
+        blockers.append("resident_generation_mismatch")
+    if current.resident_started_at != restart.resident_started_at:
+        blockers.append("resident_started_at_mismatch")
+    if (
+        current.plugin_fingerprint_sha256
+        != restart.plugin_fingerprint_sha256
+    ):
+        blockers.append("resident_plugin_fingerprint_mismatch")
+    if current.browser_plugin_version != restart.browser_plugin_version:
+        blockers.append("browser_plugin_version_mismatch")
+    if current.remote_plugin_version != plugin_version:
+        blockers.append("resident_plugin_version_mismatch")
+    if current.protocol_version != restart.protocol_version:
+        blockers.append("resident_protocol_version_mismatch")
 
 
 def _require_exactly_one(blockers: list[str], label: str, count: int) -> None:

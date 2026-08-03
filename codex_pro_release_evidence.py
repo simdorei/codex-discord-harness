@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from codex_pro_runtime_receipt_models import RuntimeReceiptSet
+from codex_pro_resident_identity import ResidentRuntimeIdentity
 from codex_pro_runtime_receipts import (
     NOT_APPLICABLE_CHECK_IDS,
     RUNTIME_CHECK_IDS,
@@ -55,6 +56,7 @@ class ProReleaseEvidence:
     host_platform: str
     plugin_version: str
     checks: tuple[EvidenceCheck, ...]
+    resident_identity: ResidentRuntimeIdentity | None = None
 
     @property
     def pre_restart_ready(self) -> bool:
@@ -71,6 +73,7 @@ class ProReleaseEvidence:
             repository_revision=self.repository_revision,
             plugin_version=self.plugin_version,
             pre_restart_ready=self.pre_restart_ready,
+            current_resident=self.resident_identity,
             evaluated_at=evaluated_at,
         )
 
