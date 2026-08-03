@@ -90,11 +90,20 @@ class _ToolMetadata(BaseModel):
     security_schemes: tuple[_SecurityScheme, ...] = Field(alias="securitySchemes")
 
 
+class _ToolAnnotations(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    read_only: bool = Field(alias="readOnlyHint")
+    destructive: bool = Field(alias="destructiveHint")
+    open_world: bool = Field(alias="openWorldHint")
+
+
 class _ListedTool(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     name: str
     metadata: _ToolMetadata = Field(alias="_meta")
+    annotations: _ToolAnnotations
 
 
 class _ToolListResult(BaseModel):
@@ -145,6 +154,26 @@ def test_mcp_registered_tool_inventory_matches_release_manifest() -> None:
     for tool in envelope.result.tools:
         assert len(tool.metadata.security_schemes) == 1
         assert tool.metadata.security_schemes[0].scopes == manifest_scopes[tool.name]
+    terminal_annotations = {
+        tool.name: (
+            tool.annotations.read_only,
+            tool.annotations.destructive,
+            tool.annotations.open_world,
+        )
+        for tool in envelope.result.tools
+        if tool.name.startswith("terminal_")
+    }
+    assert terminal_annotations == {
+        "terminal_exec": (False, True, True),
+        "terminal_window_activate": (False, False, False),
+        "terminal_window_capture": (True, False, False),
+        "terminal_window_close": (False, True, False),
+        "terminal_window_interrupt": (False, True, False),
+        "terminal_window_keys": (False, True, True),
+        "terminal_window_list": (True, False, False),
+        "terminal_window_open": (False, False, False),
+        "terminal_window_type": (False, True, True),
+    }
 
 
 def test_capability_inventory_tool_reports_grouped_runtime_registration(

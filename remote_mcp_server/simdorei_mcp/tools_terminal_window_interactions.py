@@ -9,6 +9,9 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
 from remote_mcp_server.simdorei_mcp.tool_context import (
     OPEN_WORLD_ANNOTATIONS,
     TERMINAL_INTERACT_AUTH_META,
+    TERMINAL_LOCAL_DESTRUCTIVE_ANNOTATIONS,
+    TERMINAL_LOCAL_STATE_ANNOTATIONS,
+    TERMINAL_OBSERVE_ANNOTATIONS,
     ToolContext,
     execute_operation,
 )
@@ -31,7 +34,7 @@ def register_terminal_window_interaction_tools(
 ) -> None:
     @mcp.tool(
         title="Capture a session-owned terminal window",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_OBSERVE_ANNOTATIONS,
         meta=TERMINAL_INTERACT_AUTH_META,
         structured_output=True,
     )
@@ -49,7 +52,7 @@ def register_terminal_window_interaction_tools(
 
     @mcp.tool(
         title="Activate a session-owned terminal window",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_LOCAL_STATE_ANNOTATIONS,
         meta=TERMINAL_INTERACT_AUTH_META,
         structured_output=True,
     )
@@ -115,7 +118,7 @@ def register_terminal_window_interaction_tools(
 
     @mcp.tool(
         title="Interrupt a captured session-owned terminal process",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_LOCAL_DESTRUCTIVE_ANNOTATIONS,
         meta=TERMINAL_INTERACT_AUTH_META,
         structured_output=True,
     )

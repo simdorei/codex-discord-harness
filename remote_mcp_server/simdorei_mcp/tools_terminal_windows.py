@@ -7,8 +7,10 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     TERMINAL_EXECUTE_REQUIRED_SCOPES,
 )
 from remote_mcp_server.simdorei_mcp.tool_context import (
-    OPEN_WORLD_ANNOTATIONS,
     TERMINAL_EXECUTE_AUTH_META,
+    TERMINAL_LOCAL_DESTRUCTIVE_ANNOTATIONS,
+    TERMINAL_LOCAL_STATE_ANNOTATIONS,
+    TERMINAL_OBSERVE_ANNOTATIONS,
     ToolContext,
     execute_operation,
 )
@@ -27,7 +29,7 @@ from simdorei_mcp_common.terminal_window_protocol import (
 def register_terminal_window_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     @mcp.tool(
         title="Open a session-owned terminal window",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_LOCAL_STATE_ANNOTATIONS,
         meta=TERMINAL_EXECUTE_AUTH_META,
         structured_output=True,
     )
@@ -46,7 +48,7 @@ def register_terminal_window_tools(mcp: FastMCP, broker: BindingBroker) -> None:
 
     @mcp.tool(
         title="List session-owned terminal windows",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_OBSERVE_ANNOTATIONS,
         meta=TERMINAL_EXECUTE_AUTH_META,
         structured_output=True,
     )
@@ -63,7 +65,7 @@ def register_terminal_window_tools(mcp: FastMCP, broker: BindingBroker) -> None:
 
     @mcp.tool(
         title="Close a session-owned terminal window",
-        annotations=OPEN_WORLD_ANNOTATIONS,
+        annotations=TERMINAL_LOCAL_DESTRUCTIVE_ANNOTATIONS,
         meta=TERMINAL_EXECUTE_AUTH_META,
         structured_output=True,
     )

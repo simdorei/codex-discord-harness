@@ -80,6 +80,13 @@ OPEN_WORLD_ANNOTATIONS: Final = ToolAnnotations(
     destructiveHint=True,
     openWorldHint=True,
 )
+TERMINAL_OBSERVE_ANNOTATIONS: Final = READ_ONLY_ANNOTATIONS
+TERMINAL_LOCAL_STATE_ANNOTATIONS: Final = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    openWorldHint=False,
+)
+TERMINAL_LOCAL_DESTRUCTIVE_ANNOTATIONS: Final = WRITE_ANNOTATIONS
 COMPUTER_OBSERVE_ANNOTATIONS: Final = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
