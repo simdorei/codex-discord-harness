@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from remote_mcp_server.simdorei_mcp.app import create_app
 from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     READ_SCOPE,
-    TERMINAL_EXECUTE_SCOPE,
     WRITE_SCOPE,
 )
 from simdorei_mcp_common.messages import (
@@ -121,13 +120,10 @@ def test_interaction_tools_round_trip_all_five_operations() -> None:
                 assert result["isError"] is False
 
 
-def test_interaction_tools_require_terminal_interact_scope() -> None:
+def test_interaction_tools_require_write_scope() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        token = authorize(
-            client,
-            scopes=(READ_SCOPE, WRITE_SCOPE, TERMINAL_EXECUTE_SCOPE),
-        )
+        token = authorize(client, scopes=(READ_SCOPE,))
         response = client.post(
             "/mcp",
             headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
@@ -140,7 +136,7 @@ def test_interaction_tools_require_terminal_interact_scope() -> None:
 
     result = cast(dict[str, object], response.json()["result"])
     assert result["isError"] is True
-    assert "terminal:interact" in str(result["content"])
+    assert "files:write" in str(result["content"])
 
 
 def _activate(client: TestClient, socket: BridgeSocket) -> dict[str, str]:
@@ -158,7 +154,7 @@ def _activate(client: TestClient, socket: BridgeSocket) -> dict[str, str]:
         ).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
-    token = authorize(client)
+    token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
     headers = {**MCP_HEADERS, "Authorization": f"Bearer {token}"}
     with ThreadPoolExecutor(max_workers=1) as executor:
         pending = executor.submit(

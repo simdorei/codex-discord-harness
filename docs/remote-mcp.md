@@ -50,12 +50,12 @@ running because a hosted server cannot directly read files that remain on a PC.
   network destinations.
 - Git status, diff, commit, and push use the project's existing Git
   configuration and credentials. Credentials are never sent through the MCP.
-- Only fixed test/check commands discovered from supported project manifests are
-  exposed. JavaScript package scripts are currently accepted only when their
-  literal command is `node --test ...`; Python, Cargo, Go, and Flutter standard
-  test commands are also recognized. They run in a workspace-confined,
-  network-disabled sandbox. Network, deployment, destructive, and arbitrary
-  shell commands are rejected.
+- Fixed test/check commands remain available as the bounded `command_run` path.
+  A connector with both file read and file write authority can also use
+  `terminal_exec` for unrestricted shell text with the local bot process's host
+  permissions. Terminal execution is bound to the selected project and ChatGPT
+  session, returns a public-safe receipt, and does not prompt for per-command
+  approval.
 - During an active project binding, ChatGPT can launch, list, and activate an
   isolated Chrome or blank Notepad window owned by that selection. Notepad can
   return native screenshots, click, drag, scroll, type Unicode text, press
@@ -66,11 +66,12 @@ running because a hosted server cannot directly read files that remain on a PC.
   one action, so stale coordinates cannot be replayed.
 - Selecting the project from a new ChatGPT conversation or OAuth connector
   revokes screenshot tokens issued to the previous selection for that thread.
-- Terminals, password managers, ChatGPT/Codex, remote-desktop apps, Windows
-  security surfaces, sign-in/password/OTP windows, Windows-key shortcuts, and
-  unrestricted shell control remain blocked. Clipboard contents cannot be read,
-  and `Ctrl+V` is rejected so pre-existing clipboard text cannot be exposed by
-  pasting it into Notepad and taking a screenshot.
+- The selected ChatGPT session can open, list, capture, activate, type into,
+  send keys to, interrupt, and close terminal windows that it owns. Every
+  state-changing terminal-window action is bound to a fresh capture observation.
+  Password managers, ChatGPT/Codex, remote-desktop apps, Windows security
+  surfaces, sign-in/password/OTP windows, and credential extraction remain
+  outside the supported surface. Clipboard contents cannot be read.
 - `stop_computer_control` disables computer tools for that Codex thread until a
   new `!pro` binding renews it. Binding expiry or bridge disconnection also
   revokes computer control. Rebinding or stopping also closes every app process
@@ -90,6 +91,11 @@ running because a hosted server cannot directly read files that remain on a PC.
 - Computer observation and computer control use dedicated OAuth scopes. A
   connector authorized before these scopes were added must be reconnected and
   approved again; an old file-only token cannot acquire desktop authority.
+- Terminal execution and terminal-window interaction deliberately reuse the
+  existing `files:read` plus `files:write` authority. This lets an already
+  authorized project connector use the session-owned terminal surface without
+  a second OAuth approval while preserving project, route, session, cycle, and
+  runtime-provenance checks.
 - Window screenshots are captured from the selected window handle, not from the
   desktop underneath overlays. Keyboard and pointer actions are sent to the
   verified Notepad editor control rather than global Windows input. Input is
@@ -172,14 +178,14 @@ The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed
 tokens persist in the Docker volume mounted at `/data`.
 
-### Protocol 6 rollout
+### Protocol 11 rollout
 
 The expanded project-operation protocol intentionally rejects old bridge or
 gateway processes instead of mixing message formats. Upgrade in one coordinated
 maintenance window:
 
 1. Stop the local bridge.
-2. Deploy the gateway that reports bridge protocol 6.
+2. Deploy the gateway that reports bridge protocol 11.
 3. Restart the updated local bridge immediately.
 4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
    `project_status` round trip before allowing write tools.

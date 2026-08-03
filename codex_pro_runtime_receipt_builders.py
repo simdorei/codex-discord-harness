@@ -23,6 +23,7 @@ from remote_mcp_server.simdorei_mcp.capability_inventory import (
     CapabilitySurface,
     capability_inventory_sha256 as _capability_inventory_sha256,
 )
+from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from simdorei_mcp_common.runtime_provenance import terminal_observation_sha256
 from simdorei_mcp_common.terminal_window_interaction_protocol import (
     TerminalWindowActionOutput,
@@ -209,10 +210,17 @@ def _require_release_inventory(inventory: CapabilityInventoryOutput) -> None:
     if len(EXPECTED_TOOL_NAMES) != 47:
         raise RuntimeReceiptBuildError("source capability manifest is not 47 tools")
     groups = {group.surface: group for group in inventory.groups}
+    expected_terminal_scopes = (READ_SCOPE, WRITE_SCOPE)
+    execution = groups.get(CapabilitySurface.TERMINAL_EXECUTE)
     interaction = groups.get(CapabilitySurface.TERMINAL_INTERACT)
-    if interaction is None or "terminal:interact" not in interaction.oauth_scopes:
+    if (
+        execution is None
+        or interaction is None
+        or execution.oauth_scopes != expected_terminal_scopes
+        or interaction.oauth_scopes != expected_terminal_scopes
+    ):
         raise RuntimeReceiptBuildError(
-            "MCP capability inventory does not expose terminal:interact"
+            "MCP capability inventory does not expose reviewed file-write terminal authority"
         )
 
 

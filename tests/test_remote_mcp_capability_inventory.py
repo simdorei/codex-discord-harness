@@ -237,7 +237,6 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration(
     assert groups[CapabilitySurface.TERMINAL_EXECUTE].oauth_scopes == (
         "files:read",
         "files:write",
-        "terminal:execute",
     )
     assert groups[CapabilitySurface.TERMINAL_EXECUTE].tools == (
         "terminal_exec",
@@ -248,8 +247,6 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration(
     assert groups[CapabilitySurface.TERMINAL_INTERACT].oauth_scopes == (
         "files:read",
         "files:write",
-        "terminal:execute",
-        "terminal:interact",
     )
     assert groups[CapabilitySurface.TERMINAL_INTERACT].tools == (
         "terminal_window_activate",

@@ -17,6 +17,7 @@ from codex_pro_runtime_receipt_builders import (
 from codex_pro_runtime_receipt_io import RuntimeReceiptError, read_runtime_receipts
 from codex_pro_runtime_preflight import ProRuntimeStatus
 from codex_pro_runtime_receipt_models import RuntimeReceiptSet, runtime_receipt_id
+from remote_mcp_server.simdorei_mcp.capability_inventory import CapabilitySurface
 from tests.pro_runtime_receipt_support import (
     INVENTORY,
     PLUGIN_VERSION,
@@ -126,6 +127,24 @@ def test_browser_builder_rejects_unavailable_or_unverified_evidence() -> None:
                 "status": "unavailable",
                 "can_report_unavailable": True,
             },
+        )
+
+
+def test_release_inventory_rejects_terminal_scope_drift() -> None:
+    groups = tuple(
+        group.model_copy(update={"oauth_scopes": ("terminal:interact",)})
+        if group.surface is CapabilitySurface.TERMINAL_INTERACT
+        else group
+        for group in INVENTORY.groups
+    )
+    drifted_inventory = INVENTORY.model_copy(update={"groups": groups})
+
+    with pytest.raises(RuntimeReceiptBuildError, match="file-write terminal authority"):
+        _ = runtime_receipt_context(
+            REVISION,
+            PLUGIN_VERSION,
+            drifted_inventory,
+            datetime.now(UTC),
         )
 
 

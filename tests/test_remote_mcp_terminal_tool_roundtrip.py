@@ -58,7 +58,7 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
                 ).model_dump_json()
             )
             _ = parse_gateway_message(socket.receive_text())
-            access_token = authorize(client)
+            access_token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
             headers = {**MCP_HEADERS, "Authorization": f"Bearer {access_token}"}
             _select_project(client, socket, headers)
 
@@ -93,10 +93,10 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
     assert receipt["command_digest"] == "a" * 64
 
 
-def test_terminal_tool_requires_distinct_terminal_oauth_scope() -> None:
+def test_terminal_tool_requires_write_scope() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
+        token = authorize(client, scopes=(READ_SCOPE,))
         response = client.post(
             "/mcp",
             headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
@@ -108,7 +108,7 @@ def test_terminal_tool_requires_distinct_terminal_oauth_scope() -> None:
     result = cast(dict[str, object], payload["result"])
     assert result["isError"] is True
     content = cast(list[dict[str, object]], result["content"])
-    assert "terminal:execute" in str(content[0]["text"])
+    assert "files:write" in str(content[0]["text"])
 
 
 def _select_project(

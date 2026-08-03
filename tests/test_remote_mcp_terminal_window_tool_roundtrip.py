@@ -89,10 +89,10 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
     assert _structured(close_result)["closed"] is True
 
 
-def test_terminal_window_tools_require_terminal_execute_scope() -> None:
+def test_terminal_window_tools_require_write_scope() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
+        token = authorize(client, scopes=(READ_SCOPE,))
         response = client.post(
             "/mcp",
             headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
@@ -102,7 +102,7 @@ def test_terminal_window_tools_require_terminal_execute_scope() -> None:
     assert response.status_code == 200, response.text
     result = cast(dict[str, object], response.json()["result"])
     assert result["isError"] is True
-    assert "terminal:execute" in str(result["content"])
+    assert "files:write" in str(result["content"])
 
 
 def _activate(
@@ -123,7 +123,7 @@ def _activate(
         ).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
-    token = authorize(client)
+    token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
     headers = {**MCP_HEADERS, "Authorization": f"Bearer {token}"}
     with ThreadPoolExecutor(max_workers=1) as executor:
         pending = executor.submit(
