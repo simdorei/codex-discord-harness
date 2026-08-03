@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import final, override
+from typing import Literal, final, override
 from uuid import uuid4
 
 import anyio
@@ -30,6 +30,7 @@ from remote_mcp_server.simdorei_mcp.broker_registration import (
 )
 from remote_mcp_server.simdorei_mcp.broker_requests import BrokerRequestsMixin
 from remote_mcp_server.simdorei_mcp.broker_results import require_project_session_result
+from remote_mcp_server.simdorei_mcp.broker_results import runtime_capability_result
 from remote_mcp_server.simdorei_mcp.broker_routes import BrokerRouteRegistry
 from simdorei_mcp_common.messages import (
     BridgeResult,
@@ -39,6 +40,12 @@ from simdorei_mcp_common.messages import (
     ProjectSessionCommand,
     ProjectUpsert,
     RequestId,
+    RuntimeCapabilityCommand,
+    RuntimeCapabilityResult,
+)
+from simdorei_mcp_common.runtime_provenance import (
+    RuntimeProvenanceEnvelope,
+    runtime_session_binding_sha256,
 )
 from simdorei_mcp_common.request_deadlines import (
     GATEWAY_REQUEST_TIMEOUT_SECONDS,
@@ -62,10 +69,12 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         self._sessions: dict[str, SessionRoute] = {}
         self._thread_sessions: dict[tuple[DeviceId, str], str] = {}
         self._pending: dict[RequestId, PendingCall] = {}
+        self._runtime_cycle_bindings: dict[str, str] = {}
         self._routes = BrokerRouteRegistry(
             self._sessions,
             self._thread_sessions,
             self._pending,
+            self._runtime_cycle_bindings,
         )
 
     @property
@@ -154,6 +163,12 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                         request_id=RequestId(uuid4().hex),
                         thread_id=route.thread_id,
                         computer_session_id=route.computer_session_id,
+                        runtime_provenance=RuntimeProvenanceEnvelope(
+                            session_binding_sha256=runtime_session_binding_sha256(
+                                session,
+                                subject,
+                            )
+                        ),
                     ),
                 )
                 require_project_session_result(result)
@@ -169,6 +184,63 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 thread_id=route.thread_id,
                 expires_at=route.expires_at,
             )
+
+    async def observe_runtime_capability(
+        self,
+        session: str,
+        subject: str,
+        *,
+        inventory_sha256: str,
+        tool_count: Literal[47],
+        terminal_execute_present: Literal[True],
+        terminal_interact_present: Literal[True],
+    ) -> RuntimeCapabilityResult:
+        route, sender = await self._route(session, subject)
+        result = runtime_capability_result(
+            await self._dispatch(
+                route,
+                sender,
+                RuntimeCapabilityCommand(
+                    request_id=RequestId(uuid4().hex),
+                    thread_id=route.thread_id,
+                    computer_session_id=route.computer_session_id,
+                    runtime_provenance=RuntimeProvenanceEnvelope(
+                        session_binding_sha256=runtime_session_binding_sha256(
+                            session,
+                            subject,
+                        )
+                    ),
+                    inventory_sha256=inventory_sha256,
+                    tool_count=tool_count,
+                    terminal_execute_present=terminal_execute_present,
+                    terminal_interact_present=terminal_interact_present,
+                ),
+            )
+        )
+        async with self._lock:
+            if self._sessions.get(session) is not route:
+                raise ActiveBindingMissingError(
+                    "ChatGPT project selection changed during capability proof"
+                )
+            if result.cycle_binding_sha256 is None:
+                _ = self._runtime_cycle_bindings.pop(
+                    route.computer_session_id,
+                    None,
+                )
+            else:
+                self._runtime_cycle_bindings[route.computer_session_id] = (
+                    result.cycle_binding_sha256
+                )
+        return result
+
+    @override
+    async def _runtime_cycle_binding(self, route: SessionRoute) -> str | None:
+        async with self._lock:
+            if self._sessions.get(route.session) is not route:
+                raise ActiveBindingMissingError(
+                    "ChatGPT session has no active project selection"
+                )
+            return self._runtime_cycle_bindings.get(route.computer_session_id)
 
     async def complete(
         self,
@@ -200,6 +272,10 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             del self._projects[scope]
         for route in stale_routes:
             del self._sessions[route.session]
+            _ = self._runtime_cycle_bindings.pop(
+                route.computer_session_id,
+                None,
+            )
             self._routes.cancel(
                 route,
                 BridgeUnavailableError("selected local bridge is disconnected"),

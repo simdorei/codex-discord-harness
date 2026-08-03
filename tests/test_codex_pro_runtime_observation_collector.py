@@ -50,7 +50,14 @@ def test_complete_observation_sequence_stays_in_memory_and_release_fails_closed(
         )
     ).phase == "waiting_terminal"
     snapshot = collector.snapshot()
+    pending_observation_sha256: str | None = None
     for index, (tool_name, action, bound) in enumerate(_SEQUENCE, start=4):
+        observation_sha256 = (
+            f"{index + 6:x}" * 64
+            if action == "capture"
+            else pending_observation_sha256
+        )
+        assert observation_sha256 is not None
         snapshot = collector.observe_terminal(
             authority.terminal(
                 release,
@@ -60,8 +67,11 @@ def test_complete_observation_sequence_stays_in_memory_and_release_fails_closed(
                 tool_name=tool_name,
                 action=action,
                 observation_bound=bound,
-                observation_sha256=f"{index + 6:x}" * 64,
+                observation_sha256=observation_sha256,
             )
+        )
+        pending_observation_sha256 = (
+            observation_sha256 if action == "capture" else None
         )
     assert snapshot.phase is RuntimeObservationPhase.READY_TO_EMIT
     assert snapshot.ready
@@ -189,7 +199,7 @@ def _runtime() -> tuple[
     release = RuntimeObservationRelease(
         repository_revision=_REVISION,
         plugin_version="remote-1",
-        protocol_version=10,
+        protocol_version=11,
         inventory_sha256=_SHA_A,
     )
     return authority, RuntimeObservationCollector(authority), release

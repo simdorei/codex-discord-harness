@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from collections.abc import Iterable
 from enum import StrEnum, unique
@@ -167,6 +169,16 @@ def build_capability_inventory(
         manifest_duplicate_tools=manifest_duplicates,
         groups=CAPABILITY_GROUPS,
     )
+
+
+def capability_inventory_sha256(inventory: CapabilityInventoryOutput) -> str:
+    canonical = json.dumps(
+        inventory.model_dump(mode="json"),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def require_complete_tool_inventory(

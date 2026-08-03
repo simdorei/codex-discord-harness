@@ -26,6 +26,7 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ProjectUpsert,
     ReadFileCommand,
+    RuntimeCapabilityCommand,
     WriteFileCommand,
 )
 
@@ -55,6 +56,7 @@ class ProjectInfoSender(BridgeSender):
             case (
                 ListFilesCommand()
                 | ReadFileCommand()
+                | RuntimeCapabilityCommand()
                 | WriteFileCommand()
                 | ProjectOperationCommand()
             ):

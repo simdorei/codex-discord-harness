@@ -60,6 +60,12 @@ class RuntimeObservationCollector:  # MUTABLE_OK: synchronized state machine.
         with self._lock:
             return self._snapshot_locked()
 
+    def invalidate(self, failure_code: str) -> RuntimeObservationSnapshot:
+        with self._lock:
+            if self._phase is RuntimeObservationPhase.INVALID:
+                return self._snapshot_locked()
+            return self._invalidate_locked(failure_code)
+
     def reset(self) -> RuntimeObservationSnapshot:
         with self._lock:
             self._authority.begin_cycle()
@@ -99,10 +105,19 @@ class RuntimeObservationCollector:  # MUTABLE_OK: synchronized state machine.
         if self._phase is RuntimeObservationPhase.WAITING_TOOL_EXPOSURE:
             return isinstance(observation, ToolExposureObservation)
         if self._phase is RuntimeObservationPhase.WAITING_TERMINAL:
+            if (
+                not isinstance(observation, TerminalObservation)
+                or observation.session_binding_sha256 != self._session_binding
+                or observation.tool_name
+                != _TERMINAL_SEQUENCE[self._terminal_progress]
+            ):
+                return False
+            if observation.tool_name == "terminal_window_capture":
+                return self._pending_terminal_observation is None
             return (
-                isinstance(observation, TerminalObservation)
-                and observation.session_binding_sha256 == self._session_binding
-                and observation.tool_name == _TERMINAL_SEQUENCE[self._terminal_progress]
+                self._pending_terminal_observation is not None
+                and observation.observation_sha256
+                == self._pending_terminal_observation
             )
         return False
 
@@ -116,6 +131,10 @@ class RuntimeObservationCollector:  # MUTABLE_OK: synchronized state machine.
             self._session_binding = observation.session_binding_sha256
             self._phase = RuntimeObservationPhase.WAITING_TERMINAL
         else:
+            if observation.tool_name == "terminal_window_capture":
+                self._pending_terminal_observation = observation.observation_sha256
+            else:
+                self._pending_terminal_observation = None
             self._terminal_progress += 1
             if self._terminal_progress == len(_TERMINAL_SEQUENCE):
                 self._phase = RuntimeObservationPhase.READY_TO_EMIT
@@ -143,6 +162,7 @@ class RuntimeObservationCollector:  # MUTABLE_OK: synchronized state machine.
         self._release: RuntimeObservationRelease | None = None
         self._session_binding: str | None = None
         self._terminal_progress = 0
+        self._pending_terminal_observation: str | None = None
         self._failure_code: str | None = None
         self._last_recorded_at: datetime | None = None
         self._observations: dict[str, RuntimeObservation] = {}

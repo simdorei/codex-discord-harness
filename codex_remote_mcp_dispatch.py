@@ -18,6 +18,10 @@ from codex_remote_mcp_dispatch_errors import project_error_code
 from codex_remote_mcp_dispatch_state import ActiveProject, ProjectDispatchState
 from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
+from codex_remote_mcp_runtime_provenance import (
+    DEFAULT_RUNTIME_PROVENANCE_OBSERVER,
+    RuntimeProvenanceObserver,
+)
 from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
 from codex_remote_mcp_terminal_sessions import TerminalSessionRegistry
 from codex_remote_mcp_terminal_windows import TerminalWindowManager
@@ -35,6 +39,8 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ReadFileCommand,
     ReadFileResult,
+    RuntimeCapabilityCommand,
+    RuntimeCapabilityResult,
     WriteFileCommand,
     WriteFileResult,
 )
@@ -55,10 +61,14 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         self,
         *,
         computer_factory: Callable[[], ComputerController] = new_computer_controller,
+        runtime_provenance: RuntimeProvenanceObserver = (
+            DEFAULT_RUNTIME_PROVENANCE_OBSERVER
+        ),
     ) -> None:
         self._state = ProjectDispatchState(computer_factory)
         self._terminal_lifecycle_lock = threading.RLock()
         self._terminals = TerminalSessionRegistry()
+        self._runtime_provenance = runtime_provenance
 
     def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
         with self._terminal_lifecycle_lock:
@@ -96,6 +106,11 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
     ) -> ProjectOperationResult | OperationErrorResult: ...
 
     @overload
+    def execute(
+        self, command: RuntimeCapabilityCommand
+    ) -> RuntimeCapabilityResult | OperationErrorResult: ...
+
+    @overload
     def execute(self, command: GatewayCommand) -> BridgeResult: ...
 
     def execute(self, command: GatewayCommand) -> BridgeResult:
@@ -106,7 +121,10 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code="binding_missing",
                 message="The Codex thread is not bound on this device.",
             )
-        if isinstance(command, (WriteFileCommand, ProjectOperationCommand)):
+        if isinstance(
+            command,
+            (WriteFileCommand, ProjectOperationCommand, RuntimeCapabilityCommand),
+        ):
             return project.result_cache.execute_once(
                 command,
                 lambda: self._execute_admitted(command, project),
@@ -198,6 +216,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     error_code=project_error_code(exc),
                     message=redact(str(exc)),
                 )
+            self._runtime_provenance.bind_route(command)
             return ProjectSessionResult(request_id=command.request_id)
         try:
             self._require_project_session(
@@ -211,6 +230,18 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
+        if isinstance(command, RuntimeCapabilityCommand):
+            try:
+                return self._runtime_provenance.capability(command)
+            except RuntimeError as exc:
+                return OperationErrorResult(
+                    request_id=command.request_id,
+                    error_code="runtime_observation_failed",
+                    message=(
+                        "Runtime capability evidence was rejected: "
+                        + type(exc).__name__
+                    ),
+                )
         if isinstance(command, ProjectOperationCommand) and is_computer_operation(
             command.operation
         ):
@@ -260,14 +291,35 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     command.computer_session_id,
                 )
             if terminal is None and terminal_windows is None:
-                return execute_bound_project_command(command, project.access, computer)
-            return execute_bound_project_command(
-                command,
-                project.access,
-                computer,
-                terminal=terminal,
-                terminal_windows=terminal_windows,
-            )
+                result = execute_bound_project_command(
+                    command,
+                    project.access,
+                    computer,
+                )
+            else:
+                result = execute_bound_project_command(
+                    command,
+                    project.access,
+                    computer,
+                    terminal=terminal,
+                    terminal_windows=terminal_windows,
+                )
+            if isinstance(command, ProjectOperationCommand) and isinstance(
+                result,
+                ProjectOperationResult,
+            ):
+                try:
+                    self._runtime_provenance.terminal(command, result.output)
+                except (OSError, OverflowError, RuntimeError, ValueError):
+                    # The terminal side effect already succeeded. Provenance failure
+                    # must fail the release cycle without hiding that success.
+                    try:
+                        self._runtime_provenance.invalidate(
+                            "terminal_runtime_observer_failed"
+                        )
+                    except (OSError, OverflowError, RuntimeError, ValueError):
+                        pass
+            return result
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,

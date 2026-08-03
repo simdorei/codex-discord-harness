@@ -145,7 +145,7 @@ def test_interaction_tools_require_terminal_interact_scope() -> None:
 
 def _activate(client: TestClient, socket: BridgeSocket) -> dict[str, str]:
     socket.send_text(
-        BridgeHello(protocol_version=10, device_id=DeviceId("device-a")).model_dump_json()
+        BridgeHello(protocol_version=11, device_id=DeviceId("device-a")).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
     socket.send_text(

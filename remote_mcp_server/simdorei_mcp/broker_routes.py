@@ -23,10 +23,12 @@ class BrokerRouteRegistry:  # MUTABLE_OK: caller serializes access with broker l
         sessions: dict[str, SessionRoute],
         thread_sessions: dict[tuple[DeviceId, str], str],
         pending: dict[RequestId, PendingCall],
+        runtime_cycle_bindings: dict[str, str],
     ) -> None:
         self._sessions = sessions
         self._thread_sessions = thread_sessions
         self._pending = pending
+        self._runtime_cycle_bindings = runtime_cycle_bindings
 
     def require_compatible(self, route: SessionRoute) -> None:
         current = self._sessions.get(route.session)
@@ -57,6 +59,7 @@ class BrokerRouteRegistry:  # MUTABLE_OK: caller serializes access with broker l
         self._thread_sessions[(route.device_id, route.thread_id)] = route.session
 
     def remove(self, route: SessionRoute) -> None:
+        _ = self._runtime_cycle_bindings.pop(route.computer_session_id, None)
         if self._sessions.get(route.session) is route:
             del self._sessions[route.session]
         key = (route.device_id, route.thread_id)

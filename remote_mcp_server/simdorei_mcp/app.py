@@ -46,6 +46,7 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ProjectUpsert,
     ReadFileResult,
+    RuntimeCapabilityResult,
     WriteFileResult,
     parse_bridge_message,
 )
@@ -186,6 +187,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                     | ReadFileResult()
                     | WriteFileResult()
                     | ProjectOperationResult()
+                    | RuntimeCapabilityResult()
                     | ProjectSessionResult()
                     | OperationErrorResult()
                 ):
@@ -213,6 +215,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                         | ReadFileResult()
                         | WriteFileResult()
                         | ProjectOperationResult()
+                        | RuntimeCapabilityResult()
                         | ProjectSessionResult()
                         | OperationErrorResult()
                     ):

@@ -46,7 +46,7 @@ def test_retrieve_image_returns_native_mcp_image_content() -> None:
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=10,
+                    protocol_version=11,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

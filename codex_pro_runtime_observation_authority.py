@@ -34,6 +34,15 @@ class RuntimeObservationAuthority:
         with self.__lock:
             self.__key = secrets.token_bytes(32)
 
+    def cycle_binding_sha256(self) -> str:
+        """Return an opaque binding without exposing the process-only cycle key."""
+        with self.__lock:
+            return hmac.new(
+                self.__key,
+                b"runtime-observation-cycle-v1",
+                hashlib.sha256,
+            ).hexdigest()
+
     def post_restart(
         self,
         release: RuntimeObservationRelease,

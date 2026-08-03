@@ -28,6 +28,10 @@ from simdorei_mcp_common.messages import (
 from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
 from simdorei_mcp_common.request_deadlines import operation_request_deadline
+from simdorei_mcp_common.runtime_provenance import (
+    RuntimeProvenanceEnvelope,
+    runtime_session_binding_sha256,
+)
 
 
 class BrokerTransport(Protocol):
@@ -43,6 +47,8 @@ class BrokerTransport(Protocol):
         sender: BridgeSender,
         command: GatewayCommand,
     ) -> BridgeResult: ...
+
+    async def _runtime_cycle_binding(self, route: SessionRoute) -> str | None: ...
 
 
 class BrokerRequestsMixin:
@@ -61,6 +67,9 @@ class BrokerRequestsMixin:
         sender: BridgeSender,
         command: GatewayCommand,
     ) -> BridgeResult:
+        raise NotImplementedError
+
+    async def _runtime_cycle_binding(self, route: SessionRoute) -> str | None:
         raise NotImplementedError
 
     def _transport(self) -> BrokerTransport:
@@ -200,6 +209,8 @@ async def project_operation(
     request_id: RequestId | None = None,
 ) -> ProjectOperationOutput:
     route, sender = await broker._route(session, subject)
+    session_binding = runtime_session_binding_sha256(session, subject)
+    cycle_binding = await broker._runtime_cycle_binding(route)
     result = await broker._dispatch(
         route,
         sender,
@@ -207,6 +218,10 @@ async def project_operation(
             request_id=request_id or RequestId(uuid4().hex),
             thread_id=route.thread_id,
             computer_session_id=route.computer_session_id,
+            runtime_provenance=RuntimeProvenanceEnvelope(
+                session_binding_sha256=session_binding,
+                cycle_binding_sha256=cycle_binding,
+            ),
             deadline_at=operation_request_deadline(operation),
             operation=operation,
         ),

@@ -9,6 +9,10 @@ from pydantic_core import PydanticCustomError
 from simdorei_mcp_common.operation_outputs import ProjectOperationOutput
 from simdorei_mcp_common.operation_requests import ProjectOperation
 from simdorei_mcp_common.request_deadlines import default_request_deadline
+from simdorei_mcp_common.runtime_provenance import (
+    RuntimeProvenanceEnvelope,
+    Sha256Digest,
+)
 
 DeviceId = NewType("DeviceId", str)
 RequestId = NewType("RequestId", str)
@@ -79,6 +83,7 @@ class ProjectCommand(ProtocolModel):
         min_length=16,
         max_length=64,
     )
+    runtime_provenance: RuntimeProvenanceEnvelope | None = None
 
 
 class ProjectInfoCommand(ProjectCommand):
@@ -108,6 +113,31 @@ class WriteFileCommand(ProjectCommand):
 class ProjectOperationCommand(ProjectCommand):
     type: Literal["project_operation"] = "project_operation"
     operation: ProjectOperation
+
+
+class RuntimeCapabilityCommand(ProjectCommand):
+    """Internal proof that the gateway exposed the expected public tools."""
+
+    type: Literal["runtime_capability"] = "runtime_capability"
+    inventory_sha256: Sha256Digest
+    tool_count: Literal[47] = 47
+    terminal_execute_present: Literal[True] = True
+    terminal_interact_present: Literal[True] = True
+
+    @model_validator(mode="after")
+    def require_unbound_runtime_provenance(self) -> Self:
+        provenance = self.runtime_provenance
+        if provenance is None:
+            raise PydanticCustomError(
+                "runtime_provenance",
+                "runtime provenance is required",
+            )
+        if provenance.cycle_binding_sha256 is not None:
+            raise PydanticCustomError(
+                "cycle_binding_sha256",
+                "capability discovery cannot claim a cycle binding",
+            )
+        return self
 
 
 class ProjectSessionCommand(ProjectCommand):
@@ -155,6 +185,22 @@ class ProjectOperationResult(ProtocolModel):
     output: ProjectOperationOutput
 
 
+class RuntimeCapabilityResult(ProtocolModel):
+    type: Literal["runtime_capability_result"] = "runtime_capability_result"
+    request_id: RequestId
+    status: Literal["accepted", "not_applicable"]
+    cycle_binding_sha256: Sha256Digest | None = None
+
+    @model_validator(mode="after")
+    def require_status_binding(self) -> Self:
+        if (self.status == "accepted") != (self.cycle_binding_sha256 is not None):
+            raise PydanticCustomError(
+                "cycle_binding_sha256",
+                "accepted runtime capability results require a cycle binding",
+            )
+        return self
+
+
 class ProjectSessionResult(ProtocolModel):
     type: Literal["project_session_result"] = "project_session_result"
     request_id: RequestId
@@ -169,13 +215,13 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[10]
+    protocol_version: Literal[11]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[10] = 10
+    protocol_version: Literal[11] = 11
 
 
 class ProjectAck(ProtocolModel):
@@ -190,6 +236,7 @@ GatewayCommand = Annotated[
     | ReadFileCommand
     | WriteFileCommand
     | ProjectOperationCommand
+    | RuntimeCapabilityCommand
     | ProjectSessionCommand,
     Field(discriminator="type"),
 ]
@@ -199,6 +246,7 @@ BridgeResult = Annotated[
     | ReadFileResult
     | WriteFileResult
     | ProjectOperationResult
+    | RuntimeCapabilityResult
     | ProjectSessionResult
     | OperationErrorResult,
     Field(discriminator="type"),
@@ -211,6 +259,7 @@ BridgeInboundMessage = Annotated[
     | ReadFileResult
     | WriteFileResult
     | ProjectOperationResult
+    | RuntimeCapabilityResult
     | ProjectSessionResult
     | OperationErrorResult,
     Field(discriminator="type"),
@@ -223,6 +272,7 @@ GatewayInboundMessage = Annotated[
     | ReadFileCommand
     | WriteFileCommand
     | ProjectOperationCommand
+    | RuntimeCapabilityCommand
     | ProjectSessionCommand,
     Field(discriminator="type"),
 ]

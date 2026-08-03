@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 RUNTIME_RECEIPT_SCHEMA_VERSION = 1
-EXPECTED_BRIDGE_PROTOCOL_VERSION = 10
+EXPECTED_BRIDGE_PROTOCOL_VERSION = 11
 EXPECTED_MCP_TOOL_COUNT = 47
 REQUIRED_TERMINAL_TOOL_CALLS = (
     "terminal_window_capture",
@@ -49,7 +49,7 @@ class RuntimeReceiptBase(BaseModel):
     receipt_id: RuntimeReceiptId
     repository_revision: RepositoryRevision
     plugin_version: str = Field(min_length=1, max_length=100)
-    protocol_version: Literal[10] = EXPECTED_BRIDGE_PROTOCOL_VERSION
+    protocol_version: Literal[11] = EXPECTED_BRIDGE_PROTOCOL_VERSION
     inventory_sha256: Sha256Digest
     evidence_sha256: Sha256Digest
     recorded_at: AwareDatetime

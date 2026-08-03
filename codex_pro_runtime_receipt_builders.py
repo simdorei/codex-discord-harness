@@ -21,7 +21,9 @@ from remote_mcp_server.simdorei_mcp.capability_inventory import (
     EXPECTED_TOOL_NAMES,
     CapabilityInventoryOutput,
     CapabilitySurface,
+    capability_inventory_sha256 as _capability_inventory_sha256,
 )
+from simdorei_mcp_common.runtime_provenance import terminal_observation_sha256
 from simdorei_mcp_common.terminal_window_interaction_protocol import (
     TerminalWindowActionOutput,
     TerminalWindowCaptureOutput,
@@ -37,7 +39,7 @@ class RuntimeReceiptBuildError(ValueError):
 
 
 def capability_inventory_sha256(inventory: CapabilityInventoryOutput) -> str:
-    return _sha256(inventory.model_dump(mode="json"))
+    return _capability_inventory_sha256(inventory)
 
 
 def runtime_receipt_context(
@@ -118,7 +120,7 @@ def terminal_tool_call_receipt(
                 "terminal action output has no observation binding"
             )
     evidence_sha256 = _sha256(output.model_dump(mode="json"))
-    observation_sha256 = _sha256({"observation_id": observation_id})
+    observation_sha256 = terminal_observation_sha256(observation_id)
     bindings = (action, str(observation_bound), observation_sha256)
     return TerminalToolCallReceipt.model_validate(
         {
@@ -226,7 +228,7 @@ def _common(
         context.recorded_at,
         repository_revision=context.repository_revision,
         plugin_version=context.plugin_version,
-        protocol_version=10,
+        protocol_version=11,
         inventory_sha256=context.inventory_sha256,
         bindings=bindings,
     )

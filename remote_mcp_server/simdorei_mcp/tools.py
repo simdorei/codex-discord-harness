@@ -8,6 +8,7 @@ from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
 from remote_mcp_server.simdorei_mcp.capability_inventory import (
     CapabilityInventoryOutput,
     build_capability_inventory,
+    capability_inventory_sha256,
 )
 from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
@@ -42,8 +43,38 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         ctx: ToolContext,
     ) -> CapabilityInventoryOutput:
         """Compare the release manifest with tools registered by this server."""
-        _ = tool_identity(ctx, READ_SCOPE)
-        return build_capability_inventory(registered_tool_names(mcp))
+        identity = tool_identity(ctx, READ_SCOPE)
+        registered = registered_tool_names(mcp)
+        inventory = build_capability_inventory(registered)
+        tool_count = inventory.registered_tool_count
+        terminal_execute_present = "terminal_exec" in registered
+        terminal_interact_present = all(
+            name in registered
+            for name in (
+                "terminal_window_capture",
+                "terminal_window_type",
+                "terminal_window_keys",
+                "terminal_window_interrupt",
+            )
+        )
+        if (
+            tool_count != 47
+            or not terminal_execute_present
+            or not terminal_interact_present
+        ):
+            raise ToolError("The MCP capability inventory is incomplete.")
+        try:
+            _ = await broker.observe_runtime_capability(
+                identity.session,
+                identity.subject,
+                inventory_sha256=capability_inventory_sha256(inventory),
+                tool_count=tool_count,
+                terminal_execute_present=terminal_execute_present,
+                terminal_interact_present=terminal_interact_present,
+            )
+        except BrokerError as exc:
+            raise ToolError(str(exc)) from exc
+        return inventory
 
     @mcp.tool(
         title="Select local project",

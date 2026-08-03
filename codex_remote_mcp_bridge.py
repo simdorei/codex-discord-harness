@@ -40,6 +40,7 @@ from simdorei_mcp_common.messages import (
     ProjectInfoCommand,
     ProjectOperationCommand,
     ProjectSessionCommand,
+    RuntimeCapabilityCommand,
     ProjectUpsert,
     ReadFileCommand,
     WriteFileCommand,
@@ -305,7 +306,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=10,
+                protocol_version=11,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )
@@ -361,6 +362,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                     | ReadFileCommand()
                     | WriteFileCommand()
                     | ProjectOperationCommand()
+                    | RuntimeCapabilityCommand()
                     | ProjectSessionCommand()
                 ):
                     rejected = self._workers.submit(generation, message)
