@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+from typing import ClassVar
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -15,6 +16,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     COMPUTER_CONTROL_SCOPE,
     COMPUTER_OBSERVE_SCOPE,
     READ_SCOPE,
+    TERMINAL_EXECUTE_SCOPE,
     WRITE_SCOPE,
 )
 
@@ -31,7 +33,7 @@ SECURITY_HEADERS = {
 
 
 class ApprovalSubmission(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     request_id: str = Field(min_length=20, max_length=200)
     owner_token: str = Field(min_length=1, max_length=500)
@@ -41,14 +43,18 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
     router = APIRouter()
 
     @router.get("/oauth/approve", response_class=HTMLResponse)
-    async def approval_page(request_id: str) -> HTMLResponse:
+    async def approval_page(  # pyright: ignore[reportUnusedFunction]
+        request_id: str,
+    ) -> HTMLResponse:
         scopes = await provider.pending_scopes(request_id)
         if scopes is None:
             return _page("This authorization request expired.", status_code=400)
         return _page(_approval_form(request_id, scopes))
 
     @router.post("/oauth/approve")
-    async def approve(request: Request) -> Response:
+    async def approve(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
+    ) -> Response:
         try:
             submission = ApprovalSubmission.model_validate(dict(await request.form()))
         except ValidationError:
@@ -115,6 +121,10 @@ def _scope_description(scope: str) -> str:
     descriptions = {
         READ_SCOPE: "Read non-sensitive files in the selected local project.",
         WRITE_SCOPE: "Create, update, delete, and run allowed project operations.",
+        TERMINAL_EXECUTE_SCOPE: (
+            "Run unrestricted local terminal commands with the selected session's "
+            "host permissions. Commands do not require per-run approval."
+        ),
         COMPUTER_OBSERVE_SCOPE: (
             "List launched app windows and capture screenshots only from the blank "
             "Notepad owned by the selected chat session."

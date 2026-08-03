@@ -5,6 +5,7 @@ from typing import assert_never
 
 from codex_remote_mcp_computer import ComputerController
 from codex_remote_mcp_files import ProjectFileAccess
+from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
 from codex_remote_mcp_operations import (
     execute_project_operation,
     write_file_with_checkpoint,
@@ -36,6 +37,8 @@ def execute_bound_project_command(
     command: BoundProjectCommand,
     access: ProjectFileAccess,
     computer: ComputerController | None,
+    *,
+    terminal: TerminalExecutionEngine | None = None,
 ) -> BridgeResult:
     access.verify_root()
     match command:
@@ -79,6 +82,7 @@ def execute_bound_project_command(
                     access.root,
                     operation,
                     computer=computer,
+                    terminal=terminal,
                 ),
             )
         case unreachable:

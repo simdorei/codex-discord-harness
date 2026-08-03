@@ -11,6 +11,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     COMPUTER_CONTROL_REQUIRED_SCOPES,
     COMPUTER_OBSERVE_REQUIRED_SCOPES,
     READ_SCOPE,
+    TERMINAL_EXECUTE_REQUIRED_SCOPES,
     WRITE_SCOPE,
 )
 
@@ -22,6 +23,7 @@ class CapabilitySurface(StrEnum):
     GIT = "git"
     COMPUTER_OBSERVE = "computer_observe"
     COMPUTER_CONTROL = "computer_control"
+    TERMINAL_EXECUTE = "terminal_execute"
 
 
 class CapabilityGroup(BaseModel):
@@ -89,6 +91,11 @@ CAPABILITY_GROUPS = (
         surface=CapabilitySurface.GIT,
         oauth_scopes=(READ_SCOPE, WRITE_SCOPE),
         tools=("git_commit", "git_push"),
+    ),
+    CapabilityGroup(
+        surface=CapabilitySurface.TERMINAL_EXECUTE,
+        oauth_scopes=TERMINAL_EXECUTE_REQUIRED_SCOPES,
+        tools=("terminal_exec",),
     ),
     CapabilityGroup(
         surface=CapabilitySurface.COMPUTER_OBSERVE,

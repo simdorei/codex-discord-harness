@@ -229,8 +229,8 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             if not owns_bridge:
                 self._fail_terminal(
                     RemoteMcpBridgeError(
-                        "Another process already owns the remote MCP connection "
-                        "for this device."
+                        "Another process already owns the remote MCP connection for "
+                        + "this device."
                     ),
                     "remote_mcp_bridge_owner_conflict",
                 )
@@ -305,7 +305,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=6,
+                protocol_version=8,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )

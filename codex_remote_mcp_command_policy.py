@@ -23,6 +23,7 @@ from simdorei_mcp_common.operation_requests import (
     RepoStatusRequest,
     RetrieveImageRequest,
 )
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 
 
 READ_ONLY_OPERATIONS = (
@@ -44,11 +45,12 @@ def requires_execution_lock(command: GatewayCommand) -> bool:
         case ProjectInfoCommand() | ListFilesCommand() | ReadFileCommand():
             return False
         case ProjectOperationCommand(operation=operation):
+            if isinstance(operation, TerminalExecRequest):
+                return False
             return not isinstance(operation, READ_ONLY_OPERATIONS)
         case WriteFileCommand() | ProjectSessionCommand():
             return True
-        case unreachable:
-            assert_never(unreachable)
+    assert_never(command)
 
 
 __all__ = ["requires_execution_lock"]

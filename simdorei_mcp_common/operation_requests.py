@@ -5,6 +5,7 @@ from typing import Annotated, Literal, Self
 from pydantic import Field, HttpUrl, model_validator
 
 from simdorei_mcp_common.operation_base import OperationRequest
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 
 
 class ProjectRulesRequest(OperationRequest):
@@ -246,6 +247,7 @@ ProjectOperation = Annotated[
     | ComputerPressKeysRequest
     | ComputerCloseRequest
     | ComputerSetClipboardRequest
-    | ComputerStopRequest,
+    | ComputerStopRequest
+    | TerminalExecRequest,
     Field(discriminator="kind"),
 ]

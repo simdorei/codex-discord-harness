@@ -6,14 +6,14 @@ from pydantic import ValidationError
 from simdorei_mcp_common.messages import BridgeHello, DeviceId, parse_bridge_message
 
 
-def test_protocol_six_rejects_an_old_protocol_five_bridge() -> None:
+def test_protocol_eight_rejects_an_old_protocol_seven_bridge() -> None:
     current = BridgeHello(
-        protocol_version=6,
+        protocol_version=8,
         device_id=DeviceId("device-a"),
     ).model_dump_json()
     assert isinstance(parse_bridge_message(current), BridgeHello)
 
     with pytest.raises(ValidationError):
-        parse_bridge_message(
-            '{"type":"hello","protocol_version":5,"device_id":"device-a"}'
+        _ = parse_bridge_message(
+            '{"type":"hello","protocol_version":7,"device_id":"device-a"}'
         )

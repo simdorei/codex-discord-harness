@@ -23,6 +23,8 @@ from simdorei_mcp_common.messages import (
 )
 from simdorei_mcp_common.operation_outputs import CommandRunOutput
 from simdorei_mcp_common.operation_requests import CommandRunRequest
+from simdorei_mcp_common.request_deadlines import operation_request_deadline
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 from tests.remote_mcp_oauth_support import oauth_settings
 
 
@@ -64,10 +66,21 @@ class CommandRunSender(BridgeSender):
         return None
 
 
-def test_gateway_default_covers_the_longest_safe_command() -> None:
+def test_gateway_default_covers_the_longest_terminal_command() -> None:
     settings = oauth_settings()
 
-    assert settings.request_timeout_seconds >= 315
+    assert settings.request_timeout_seconds >= 3_630
+
+
+def test_terminal_deadline_covers_the_longest_bounded_local_work() -> None:
+    before = datetime.now(UTC)
+    deadline = operation_request_deadline(
+        TerminalExecRequest(command="echo qa", timeout_seconds=3_600)
+    )
+    after = datetime.now(UTC)
+
+    assert deadline >= before + timedelta(seconds=3_614.9)
+    assert deadline <= after + timedelta(seconds=3_615.1)
 
 
 def test_command_deadline_and_external_request_id_cross_the_bridge() -> None:

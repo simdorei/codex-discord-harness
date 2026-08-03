@@ -57,7 +57,10 @@ def test_terminal_request_rejects_invalid_bounds_and_ids() -> None:
         {"command": ""},
         {"command": "echo ok", "terminal_id": "not-a-terminal"},
         {"command": "echo ok", "timeout_seconds": 0},
-        {"command": "echo ok", "environment": {str(index): "x" for index in range(101)}},
+        {
+            "command": "echo ok",
+            "environment": {str(index): "x" for index in range(101)},
+        },
         {"command": "echo ok", "environment": {"": "x"}},
         {"command": "echo ok", "environment": {"BAD=NAME": "x"}},
         {"command": "echo ok", "environment": {"BAD\x00NAME": "x"}},
@@ -123,10 +126,11 @@ def test_terminal_receipt_requires_exit_or_single_stop_reason() -> None:
     assert timed_out.timed_out is True
 
 
-def test_terminal_models_are_not_advertised_before_execution_is_wired() -> None:
+def test_terminal_models_are_advertised_after_execution_is_wired() -> None:
     adapter: TypeAdapter[ProjectOperation] = TypeAdapter(ProjectOperation)
 
-    with pytest.raises(ValidationError):
-        _ = adapter.validate_json(
-            json.dumps({"kind": "terminal_exec", "command": "echo not-wired"})
-        )
+    operation = adapter.validate_json(
+        json.dumps({"kind": "terminal_exec", "command": "echo wired"})
+    )
+
+    assert isinstance(operation, TerminalExecRequest)

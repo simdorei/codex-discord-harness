@@ -30,6 +30,7 @@ from codex_remote_mcp_images import (
     save_image_from_url,
 )
 from codex_remote_mcp_patch import apply_project_patch
+from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
 from simdorei_mcp_common.messages import WriteFileOutput
 from simdorei_mcp_common.operation_outputs import (
     CheckpointListOutput,
@@ -72,6 +73,7 @@ from simdorei_mcp_common.operation_requests import (
     SaveImageFromUrlRequest,
     SaveImageRequest,
 )
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 
 
 class ProjectCapabilityError(ProjectFileError):
@@ -83,9 +85,17 @@ def execute_project_operation(
     operation: ProjectOperation,
     *,
     computer: ComputerController | None = None,
+    terminal: TerminalExecutionEngine | None = None,
 ) -> ProjectOperationOutput:
     """Execute one typed capability inside a validated project root."""
     match operation:
+        case TerminalExecRequest():
+            if terminal is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal execution is unavailable for this project session",
+                )
+            return terminal.execute(operation)
         case (
             ComputerListWindowsRequest()
             | ComputerActivateRequest()

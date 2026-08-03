@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from simdorei_mcp_common.operation_base import OperationOutput
+from simdorei_mcp_common.terminal_protocol import TerminalExecOutput
 
 
 class RuleFile(OperationOutput):
@@ -237,6 +238,7 @@ ProjectOperationOutput = Annotated[
     | ComputerWindowsOutput
     | ComputerScreenshotOutput
     | ComputerActionOutput
-    | ComputerStopOutput,
+    | ComputerStopOutput
+    | TerminalExecOutput,
     Field(discriminator="kind"),
 ]

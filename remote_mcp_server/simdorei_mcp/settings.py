@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import Field, HttpUrl, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +18,7 @@ class GatewaySettingsError(RuntimeError):
 
 
 class GatewaySettings(BaseSettings):
-    model_config = SettingsConfigDict(
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
         env_prefix="SIMDOREI_MCP_",
         frozen=True,
         extra="ignore",
@@ -44,7 +44,7 @@ class GatewaySettings(BaseSettings):
     request_timeout_seconds: float = Field(
         default=GATEWAY_REQUEST_TIMEOUT_SECONDS,
         ge=GATEWAY_REQUEST_TIMEOUT_SECONDS,
-        le=600,
+        le=7_200,
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 

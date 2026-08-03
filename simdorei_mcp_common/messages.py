@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, NewType, Self
+from typing import Annotated, ClassVar, Literal, NewType, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from pydantic_core import PydanticCustomError
@@ -17,7 +17,7 @@ RequestId = NewType("RequestId", str)
 class ProtocolModel(BaseModel):
     """Immutable base for values crossing the bridge boundary."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
 
 class ProjectUpsert(ProtocolModel):
@@ -169,13 +169,13 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[6]
+    protocol_version: Literal[8]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[6] = 6
+    protocol_version: Literal[8] = 8
 
 
 class ProjectAck(ProtocolModel):

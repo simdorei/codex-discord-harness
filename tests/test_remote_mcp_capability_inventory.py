@@ -59,6 +59,7 @@ EXPECTED_TOOL_NAMES = (
     "set_computer_clipboard",
     "show_changes",
     "stop_computer_control",
+    "terminal_exec",
     "type_computer_text",
     "write_project_file",
 )
@@ -172,6 +173,7 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         CapabilitySurface.READ,
         CapabilitySurface.WRITE,
         CapabilitySurface.GIT,
+        CapabilitySurface.TERMINAL_EXECUTE,
         CapabilitySurface.COMPUTER_OBSERVE,
         CapabilitySurface.COMPUTER_CONTROL,
     }
@@ -184,10 +186,14 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         "files:read",
         "files:write",
     )
-    assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
-    assert (
-        "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
+    assert groups[CapabilitySurface.TERMINAL_EXECUTE].oauth_scopes == (
+        "files:read",
+        "files:write",
+        "terminal:execute",
     )
+    assert groups[CapabilitySurface.TERMINAL_EXECUTE].tools == ("terminal_exec",)
+    assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
+    assert "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
 
 
 def test_release_blocker_rejects_missing_and_unexpected_tools() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+import threading
 from typing import final, overload
 
 from codex_remote_mcp_computer import (
@@ -17,6 +18,8 @@ from codex_remote_mcp_dispatch_errors import project_error_code
 from codex_remote_mcp_dispatch_state import ActiveProject, ProjectDispatchState
 from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
+from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
+from codex_remote_mcp_terminal_sessions import TerminalSessionRegistry
 from simdorei_mcp_common.messages import (
     BridgeResult,
     GatewayCommand,
@@ -36,6 +39,7 @@ from simdorei_mcp_common.messages import (
 )
 from simdorei_mcp_common.operation_outputs import ComputerStopOutput
 from simdorei_mcp_common.operation_requests import ComputerStopRequest
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 
 
 @final
@@ -48,9 +52,13 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         computer_factory: Callable[[], ComputerController] = new_computer_controller,
     ) -> None:
         self._state = ProjectDispatchState(computer_factory)
+        self._terminal_lifecycle_lock = threading.RLock()
+        self._terminals = TerminalSessionRegistry()
 
     def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
-        self._state.upsert(thread_id, root, expires_at)
+        with self._terminal_lifecycle_lock:
+            self._state.upsert(thread_id, root, expires_at)
+            self._terminals.close_thread(thread_id)
 
     @overload
     def execute(
@@ -156,6 +164,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         project: ActiveProject,
     ) -> BridgeResult:
         computer: ComputerController | None = None
+        terminal: TerminalExecutionEngine | None = None
         if project.expires_at <= datetime.now(UTC):
             self._stop_computer(command.thread_id)
             return OperationErrorResult(
@@ -224,7 +233,23 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     message="Computer control is stopped. Run !pro again to renew it.",
                 )
         try:
-            return execute_bound_project_command(command, project.access, computer)
+            if isinstance(command, ProjectOperationCommand) and isinstance(
+                command.operation,
+                TerminalExecRequest,
+            ):
+                terminal = self._terminal_for(
+                    command.thread_id,
+                    project,
+                    command.computer_session_id,
+                )
+            if terminal is None:
+                return execute_bound_project_command(command, project.access, computer)
+            return execute_bound_project_command(
+                command,
+                project.access,
+                computer,
+                terminal=terminal,
+            )
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,
@@ -250,11 +275,36 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         expected_project: ActiveProject,
         computer_session_id: str,
     ) -> None:
-        self._state.activate(
-            thread_id,
-            expected_project,
-            computer_session_id,
-        )
+        with self._terminal_lifecycle_lock:
+            self._state.activate(
+                thread_id,
+                expected_project,
+                computer_session_id,
+            )
+            _ = self._terminals.for_session(
+                thread_id,
+                expected_project.access.root,
+                computer_session_id,
+            )
+
+    def _terminal_for(
+        self,
+        thread_id: str,
+        expected_project: ActiveProject,
+        session_id: str | None,
+    ) -> TerminalExecutionEngine:
+        with self._terminal_lifecycle_lock:
+            self._state.require(thread_id, expected_project, session_id)
+            if session_id is None:
+                raise ProjectFileError(
+                    "terminal",
+                    "terminal session identity is missing",
+                )
+            return self._terminals.for_session(
+                thread_id,
+                expected_project.access.root,
+                session_id,
+            )
 
     def _require_project_session(
         self,
@@ -265,7 +315,11 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         self._state.require(thread_id, expected_project, computer_session_id)
 
     def invalidate_computer_sessions(self) -> None:
-        self._state.invalidate_sessions()
+        with self._terminal_lifecycle_lock:
+            self._state.invalidate_sessions()
+            self._terminals.close_all()
 
     def _stop_computer(self, thread_id: str) -> None:
-        self._state.stop_computer(thread_id)
+        with self._terminal_lifecycle_lock:
+            self._terminals.close_thread(thread_id)
+            self._state.stop_computer(thread_id)
