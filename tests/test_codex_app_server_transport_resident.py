@@ -20,6 +20,7 @@ from codex_app_server_transport_replies import (
 )
 from codex_app_server_transport_resident import ResidentCodexAppServerTransport
 from codex_app_server_transport_turn_outcomes import TurnCompletionPending
+from codex_plugin_runtime_fingerprint import PluginRuntimeFingerprintError
 
 
 class ResidentAppServerProcessHelperTests(unittest.TestCase):
@@ -130,6 +131,7 @@ class ResidentTransportStartTests(unittest.TestCase):
         self.assertEqual(snapshot.generation, 0)
         self.assertFalse(snapshot.healthy)
         self.assertIsNone(snapshot.accepting_since)
+        self.assertIsNone(snapshot.plugin_runtime_fingerprint)
         self.assertEqual(resolver_calls, [])
 
     def test_start_preserves_state_reset_handshake_thread_and_log(self) -> None:
@@ -183,12 +185,43 @@ class ResidentTransportStartTests(unittest.TestCase):
         self.assertEqual(snapshot.generation, 1)
         self.assertTrue(snapshot.healthy)
         self.assertEqual(snapshot.accepting_since, 1_234.5)
+        self.assertEqual(snapshot.plugin_runtime_fingerprint, "test-fingerprint")
+        self.assertIsNone(snapshot.plugin_runtime_error)
 
         transport.close()
         closed_snapshot = transport.lifecycle_snapshot()
         self.assertEqual(closed_snapshot.generation, 1)
         self.assertFalse(closed_snapshot.healthy)
         self.assertIsNone(closed_snapshot.accepting_since)
+
+    def test_fingerprint_failure_is_preserved_for_fail_closed_pro_preflight(
+        self,
+    ) -> None:
+        def fail_fingerprint() -> str:
+            raise PluginRuntimeFingerprintError("inventory query failed")
+
+        logs: list[str] = []
+        process = _process()
+        transport = _StartProbeTransport(
+            executable="codex.exe",
+            log_func=logs.append,
+            plugin_runtime_fingerprint_reader=fail_fingerprint,
+        )
+        with (
+            mock.patch.object(
+                resident_mod, "start_resident_app_server_process", return_value=process
+            ),
+            mock.patch.object(threading, "Thread", _FakeThread),
+        ):
+            transport.start()
+
+        snapshot = transport.lifecycle_snapshot()
+        self.assertTrue(snapshot.healthy)
+        self.assertIsNone(snapshot.plugin_runtime_fingerprint)
+        self.assertEqual(snapshot.plugin_runtime_error, "inventory query failed")
+        self.assertTrue(
+            any("plugin_runtime_fingerprint_failed" in line for line in logs)
+        )
 
     def test_reader_exit_marks_current_generation_unhealthy(self) -> None:
         process = _process()
@@ -894,12 +927,16 @@ class _StartProbeTransport(ResidentCodexAppServerTransport):
         log_func: Callable[[str], None] | None = None,
         wall_time_func: Callable[[], float] = time.time,
         generation_seed_func: Callable[[], int] = lambda: 1,
+        plugin_runtime_fingerprint_reader: Callable[[], str] = (
+            lambda: "test-fingerprint"
+        ),
     ) -> None:
         super().__init__(
             executable_resolver=lambda: executable,
             log_func=log_func,
             wall_time_func=wall_time_func,
             generation_seed_func=generation_seed_func,
+            plugin_runtime_fingerprint_reader=plugin_runtime_fingerprint_reader,
         )
         self.requests: list[tuple[str, JsonMapping, float]] = []
         self.notifications: list[tuple[str, JsonMapping]] = []

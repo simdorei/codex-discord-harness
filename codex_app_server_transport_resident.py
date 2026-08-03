@@ -9,6 +9,11 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Callable, IO
 
+from codex_plugin_runtime_fingerprint import (
+    PluginRuntimeFingerprintError,
+    capture_required_plugin_fingerprint,
+)
+
 from codex_app_server_stderr_log import (
     APP_SERVER_STDERR_LOG_NAME,
     AppServerStderrRecorder,
@@ -58,6 +63,7 @@ MonotonicFunc = Callable[[], float]
 WallTimeFunc = Callable[[], float]
 ExternalWorkGuard = Callable[[], bool]
 GenerationSeedFunc = Callable[[], int]
+PluginRuntimeFingerprintReader = Callable[[], str]
 _decode_json_value: Callable[[str], JsonValue] = json.loads
 _MAX_FRESH_READ_RETRY_SECONDS = 25.0
 _AMBIGUOUS_TURN_START_GRACE_SECONDS = 25.0
@@ -78,16 +84,22 @@ class ResidentCodexAppServerTransport:
         monotonic_func: MonotonicFunc = time.monotonic,
         wall_time_func: WallTimeFunc = time.time,
         generation_seed_func: GenerationSeedFunc = _new_generation_seed,
+        plugin_runtime_fingerprint_reader: PluginRuntimeFingerprintReader = (
+            capture_required_plugin_fingerprint
+        ),
         stderr_log_path: Path | None = None,
     ) -> None:
         self.executable_resolver: Callable[[], str] = executable_resolver
         self.log_func: LogFunc | None = log_func
         self.monotonic_func: MonotonicFunc = monotonic_func
         self.wall_time_func: WallTimeFunc = wall_time_func
+        self.plugin_runtime_fingerprint_reader: PluginRuntimeFingerprintReader = (
+            plugin_runtime_fingerprint_reader
+        )
         self.process: ResidentProcess | None = None
         self._stdout_thread: threading.Thread | None = None
         self._stderr_recorder: AppServerStderrRecorder | None = None
-        self._stderr_log_path = (
+        self._stderr_log_path: Path = (
             stderr_log_path
             if stderr_log_path is not None
             else Path(__file__).resolve().parent / APP_SERVER_STDERR_LOG_NAME
@@ -106,7 +118,7 @@ class ResidentCodexAppServerTransport:
         self._recycle_lock: threading.Lock = threading.Lock()
         self._external_work_guard: ExternalWorkGuard | None = None
         self._active_deliveries: int = 0
-        self._delivery_local = threading.local()
+        self._delivery_local: threading.local = threading.local()
         self._draining: bool = False
         self._closing: bool = False
         self._quarantined_generation: int | None = None
@@ -122,11 +134,13 @@ class ResidentCodexAppServerTransport:
         self._generation: int = 0
         self._generation_seed: int = max(1, int(generation_seed_func()))
         self._accepting_since: float | None = None
+        self._plugin_runtime_fingerprint: str | None = None
+        self._plugin_runtime_error: str | None = None
         self._cleanup_retry: ChildCleanupRetryCoordinator = ChildCleanupRetryCoordinator(
             retry=self._retry_child_cleanup_once,
             log=self._log,
         )
-        self._restart_retry = RestartPendingRetryCoordinator(
+        self._restart_retry: RestartPendingRetryCoordinator = RestartPendingRetryCoordinator(
             retry=self._retry_restart_pending_once,
             log=self._log,
         )
@@ -151,6 +165,7 @@ class ResidentCodexAppServerTransport:
                 return
             self.close_locked()
             executable = self.executable_resolver()
+            plugin_fingerprint, plugin_error = self._capture_plugin_runtime_fingerprint()
             self.process = start_resident_app_server_process(executable)
             if not has_resident_app_server_stdio(self.process):
                 self.close_locked()
@@ -195,6 +210,8 @@ class ResidentCodexAppServerTransport:
                 self._generation_seed if self._generation == 0 else self._generation + 1
             )
             self._accepting_since = self.wall_time_func()
+            self._plugin_runtime_fingerprint = plugin_fingerprint
+            self._plugin_runtime_error = plugin_error
             self._children.reset(self._generation)
             self._draining = False
             self._quarantined_generation = None
@@ -204,6 +221,16 @@ class ResidentCodexAppServerTransport:
             self._ambiguous_turn_start_deadline = None
             self._clear_timed_out_thread_reads()
         self._log(f"app_server_transport_started executable={executable}")
+
+    def _capture_plugin_runtime_fingerprint(self) -> tuple[str | None, str | None]:
+        try:
+            return self.plugin_runtime_fingerprint_reader(), None
+        except PluginRuntimeFingerprintError as exc:
+            error = str(exc)
+            self._log(
+                "app_server_plugin_runtime_fingerprint_failed " + f"error={error}"
+            )
+            return None, error
 
     def _is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -232,6 +259,8 @@ class ResidentCodexAppServerTransport:
                     self._consecutive_read_timeouts >= _READ_TIMEOUT_DEGRADED_THRESHOLD
                 ),
                 consecutive_read_timeouts=self._consecutive_read_timeouts,
+                plugin_runtime_fingerprint=self._plugin_runtime_fingerprint,
+                plugin_runtime_error=self._plugin_runtime_error,
             )
 
     def _raise_for_generation_mismatch(self, expected_generation: int) -> None:

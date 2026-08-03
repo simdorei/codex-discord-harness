@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,9 +8,14 @@ from typing import cast, override
 
 import codex_app_server_transport as app_server_transport
 from codex_app_server_transport_lifecycle import AppServerLifecycleSnapshot
+from codex_plugin_runtime_fingerprint import (
+    BROWSER_PLUGIN_ID,
+    REMOTE_PLUGIN_ID,
+    PluginRuntimeFingerprintError,
+    fingerprint_required_plugins,
+    read_codex_plugin_inventory,
+)
 
-REMOTE_PLUGIN_ID = "codex-discord-remote@codex-discord-remote"
-BROWSER_PLUGIN_ID = "browser@openai-bundled"
 PLUGIN_MANIFEST_PATH = (
     Path(__file__).resolve().parent
     / "plugins/codex-discord-remote/.codex-plugin/plugin.json"
@@ -38,33 +41,6 @@ class ProRuntimeStatus:
     resident_generation: int
 
 
-def read_codex_plugin_inventory() -> str:
-    executable = shutil.which("codex")
-    if executable is None:
-        raise ProRuntimePreflightError("Codex executable was not found on PATH")
-    try:
-        completed = subprocess.run(
-            [executable, "plugin", "list", "--json"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10.0,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ProRuntimePreflightError(
-            f"Codex plugin inventory query failed: {exc}"
-        ) from exc
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or "no output"
-        raise ProRuntimePreflightError(
-            "Codex plugin inventory query failed "
-            + f"(exit {completed.returncode}): {detail}"
-        )
-    return completed.stdout
-
-
 def expected_remote_plugin_version(path: Path = PLUGIN_MANIFEST_PATH) -> str:
     try:
         raw = cast(object, json.loads(path.read_text(encoding="utf-8-sig")))
@@ -87,6 +63,7 @@ def verify_pro_runtime(
     inventory_json: str,
     expected_remote_version: str,
     resident_snapshot: AppServerLifecycleSnapshot,
+    current_plugin_fingerprint: str,
 ) -> ProRuntimeStatus:
     inventory = _inventory_object(inventory_json)
     plugins = _plugin_records(inventory.get("installed"))
@@ -104,6 +81,22 @@ def verify_pro_runtime(
             "resident Codex app-server is not healthy "
             + f"(generation {resident_snapshot.generation})"
         )
+    if resident_snapshot.plugin_runtime_error is not None:
+        raise ProRuntimePreflightError(
+            "resident Codex app-server plugin snapshot failed: "
+            + resident_snapshot.plugin_runtime_error
+        )
+    resident_fingerprint = resident_snapshot.plugin_runtime_fingerprint
+    if resident_fingerprint is None:
+        raise ProRuntimePreflightError(
+            "resident Codex app-server has no plugin snapshot "
+            + f"(generation {resident_snapshot.generation})"
+        )
+    if resident_fingerprint != current_plugin_fingerprint:
+        raise ProRuntimePreflightError(
+            "resident Codex app-server plugin snapshot is stale "
+            + f"(generation {resident_snapshot.generation}); restart the remote bot"
+        )
     return ProRuntimeStatus(
         remote_plugin_version=remote_version,
         browser_plugin_version=browser_version,
@@ -119,10 +112,18 @@ def run_pro_runtime_preflight(
     ),
     manifest_path: Path = PLUGIN_MANIFEST_PATH,
 ) -> ProRuntimeStatus:
+    inventory_json = inventory_reader()
+    try:
+        current_fingerprint = fingerprint_required_plugins(inventory_json)
+    except PluginRuntimeFingerprintError as exc:
+        raise ProRuntimePreflightError(
+            f"current Codex plugin fingerprint failed: {exc}"
+        ) from exc
     return verify_pro_runtime(
-        inventory_json=inventory_reader(),
+        inventory_json=inventory_json,
         expected_remote_version=expected_remote_plugin_version(manifest_path),
         resident_snapshot=resident_snapshot_reader(),
+        current_plugin_fingerprint=current_fingerprint,
     )
 
 

@@ -15,6 +15,8 @@ class AppServerLifecycleSnapshot:
     restart_pending: bool = False
     read_degraded: bool = False
     consecutive_read_timeouts: int = 0
+    plugin_runtime_fingerprint: str | None = None
+    plugin_runtime_error: str | None = None
 
 
 class AppServerGenerationExpiredError(CodexAppServerTransportError):

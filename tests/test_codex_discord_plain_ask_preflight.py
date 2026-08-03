@@ -52,6 +52,7 @@ def _healthy_resident() -> AppServerLifecycleSnapshot:
         generation=7,
         healthy=True,
         accepting_since=1.0,
+        plugin_runtime_fingerprint="runtime-fingerprint",
     )
 
 
@@ -95,6 +96,7 @@ class ProRuntimePreflightTests(unittest.TestCase):
             inventory_json=_inventory(),
             expected_remote_version=EXPECTED_VERSION,
             resident_snapshot=_healthy_resident(),
+            current_plugin_fingerprint="runtime-fingerprint",
         )
 
         self.assertEqual(status.remote_plugin_version, EXPECTED_VERSION)
@@ -139,6 +141,7 @@ class ProRuntimePreflightTests(unittest.TestCase):
                         inventory_json=inventory_json,
                         expected_remote_version=EXPECTED_VERSION,
                         resident_snapshot=_healthy_resident(),
+                        current_plugin_fingerprint="runtime-fingerprint",
                     )
 
     def test_rejects_malformed_inventory_and_unhealthy_resident(self) -> None:
@@ -150,6 +153,7 @@ class ProRuntimePreflightTests(unittest.TestCase):
                 inventory_json="{bad-json",
                 expected_remote_version=EXPECTED_VERSION,
                 resident_snapshot=_healthy_resident(),
+                current_plugin_fingerprint="runtime-fingerprint",
             )
 
         with self.assertRaisesRegex(
@@ -165,7 +169,47 @@ class ProRuntimePreflightTests(unittest.TestCase):
                     accepting_since=None,
                     restart_pending=True,
                 ),
+                current_plugin_fingerprint="runtime-fingerprint",
             )
+
+    def test_rejects_stale_or_missing_resident_plugin_fingerprint(self) -> None:
+        cases = (
+            (
+                _healthy_resident(),
+                "changed-fingerprint",
+                "resident Codex app-server plugin snapshot is stale",
+            ),
+            (
+                AppServerLifecycleSnapshot(
+                    generation=7,
+                    healthy=True,
+                    accepting_since=1.0,
+                    plugin_runtime_error="inventory query failed",
+                ),
+                "runtime-fingerprint",
+                "inventory query failed",
+            ),
+            (
+                AppServerLifecycleSnapshot(
+                    generation=7,
+                    healthy=True,
+                    accepting_since=1.0,
+                ),
+                "runtime-fingerprint",
+                "has no plugin snapshot",
+            ),
+        )
+        for resident, current, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(
+                    pro_preflight.ProRuntimePreflightError, expected
+                ):
+                    _ = pro_preflight.verify_pro_runtime(
+                        inventory_json=_inventory(),
+                        expected_remote_version=EXPECTED_VERSION,
+                        resident_snapshot=resident,
+                        current_plugin_fingerprint=current,
+                    )
 
 
 class ProPromptPreflightTests(unittest.TestCase):
