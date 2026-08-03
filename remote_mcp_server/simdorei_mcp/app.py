@@ -22,6 +22,7 @@ from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
 from remote_mcp_server.simdorei_mcp.capability_inventory import (
     require_complete_tool_inventory,
 )
+from remote_mcp_server.simdorei_mcp.mcp_instructions import MCP_INSTRUCTIONS
 from remote_mcp_server.simdorei_mcp.oauth_approval import create_approval_router
 from remote_mcp_server.simdorei_mcp.oauth_provider import SingleUserOAuthProvider
 from remote_mcp_server.simdorei_mcp.oauth_scopes import (
@@ -86,24 +87,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
     )
     mcp = FastMCP(
         "simdorei-local-project",
-        instructions=(
-            "Call select_project once with the project scope supplied by Codex. "
-            "Then inspect or edit only that local project. Read existing files "
-            "before changing them and pass their SHA-256 values to file_apply_patch. "
-            "Use retrieve_image when visual inspection is needed. Run only commands "
-            "returned by command_list. Review repo_status and show_changes before "
-            "git_commit or git_push. For computer use, first launch an isolated "
-            "Chrome or blank Notepad window, list and activate that session-owned "
-            "window. Only Notepad can be captured. Spend each Notepad "
-            "observation ID on exactly one action within 30 seconds. Take a new "
-            "screenshot after every action. Chrome allows launch, listing, "
-            "activation, and emergency stop only because web pixels can contain "
-            "unverifiable secret surfaces. Clipboard "
-            "writes also require a fresh Notepad observation. Never operate "
-            "ChatGPT, Codex, terminals, "
-            "password managers, remote desktop, security/privacy, sign-in, password, "
-            "OTP, UAC, or CAPTCHA surfaces; leave those steps to the user."
-        ),
+        instructions=MCP_INSTRUCTIONS,
         auth_server_provider=oauth_provider,
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(str(settings.public_base_url)),
