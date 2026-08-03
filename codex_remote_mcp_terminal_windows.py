@@ -8,6 +8,13 @@ from typing import final, override
 
 from codex_remote_mcp_terminal_engine import TerminalExecutionError
 from codex_remote_mcp_terminal_runtime import resolve_terminal_cwd
+from codex_remote_mcp_terminal_window_interaction_types import (
+    TerminalWindowInteractionBackend,
+)
+from codex_remote_mcp_terminal_window_interactions import (
+    TerminalWindowInteractionController,
+    default_terminal_window_interaction_backend,
+)
 from codex_remote_mcp_terminal_window_types import (
     OwnedTerminalWindow,
     TerminalWindowBackend,
@@ -20,6 +27,15 @@ from simdorei_mcp_common.terminal_window_protocol import (
     TerminalWindowOpenRequest,
     TerminalWindowEntry,
     TerminalWindowShell,
+)
+from simdorei_mcp_common.terminal_window_interaction_protocol import (
+    TerminalWindowActionOutput,
+    TerminalWindowActivateRequest,
+    TerminalWindowCaptureOutput,
+    TerminalWindowCaptureRequest,
+    TerminalWindowInterruptRequest,
+    TerminalWindowKeysRequest,
+    TerminalWindowTypeRequest,
 )
 
 
@@ -64,11 +80,18 @@ class TerminalWindowManager:
         root: Path,
         *,
         backend: TerminalWindowBackend | None = None,
+        interaction_backend: TerminalWindowInteractionBackend | None = None,
     ) -> None:
         self._root = root.resolve(strict=True)
         self._backend = backend or _default_backend()
         self._lock = threading.RLock()
         self._windows: dict[str, OwnedTerminalWindow] = {}
+        self._interactions = TerminalWindowInteractionController(
+            self._lock,
+            self._windows,
+            self._backend,
+            interaction_backend or default_terminal_window_interaction_backend(),
+        )
         self._closed = False
 
     def open(self, request: TerminalWindowOpenRequest) -> TerminalWindowOpenOutput:
@@ -110,7 +133,10 @@ class TerminalWindowManager:
                 raise TerminalExecutionError(
                     "terminal window does not belong to this session"
                 )
-            self._backend.close(owned)
+            try:
+                self._backend.close(owned)
+            finally:
+                self._interactions.drop(request.terminal_window_id)
             del self._windows[request.terminal_window_id]
             return TerminalWindowCloseOutput(
                 terminal_window_id=request.terminal_window_id
@@ -127,8 +153,51 @@ class TerminalWindowManager:
                     failures.append(exc)
                 else:
                     del self._windows[terminal_window_id]
+                finally:
+                    self._interactions.drop(terminal_window_id)
+            self._interactions.clear()
             if failures:
                 raise failures[0]
+
+    def capture(
+        self,
+        request: TerminalWindowCaptureRequest,
+    ) -> TerminalWindowCaptureOutput:
+        with self._lock:
+            self._require_open()
+            return self._interactions.capture(request)
+
+    def activate(
+        self,
+        request: TerminalWindowActivateRequest,
+    ) -> TerminalWindowActionOutput:
+        with self._lock:
+            self._require_open()
+            return self._interactions.activate(request)
+
+    def type_text(
+        self,
+        request: TerminalWindowTypeRequest,
+    ) -> TerminalWindowActionOutput:
+        with self._lock:
+            self._require_open()
+            return self._interactions.type_text(request)
+
+    def press_keys(
+        self,
+        request: TerminalWindowKeysRequest,
+    ) -> TerminalWindowActionOutput:
+        with self._lock:
+            self._require_open()
+            return self._interactions.press_keys(request)
+
+    def interrupt(
+        self,
+        request: TerminalWindowInterruptRequest,
+    ) -> TerminalWindowActionOutput:
+        with self._lock:
+            self._require_open()
+            return self._interactions.interrupt(request)
 
     def _prune_and_list_locked(self) -> list[TerminalWindowEntry]:
         entries: list[TerminalWindowEntry] = []
@@ -137,7 +206,10 @@ class TerminalWindowManager:
             if entry is not None:
                 entries.append(entry)
                 continue
-            self._backend.close(owned)
+            try:
+                self._backend.close(owned)
+            finally:
+                self._interactions.drop(terminal_window_id)
             del self._windows[terminal_window_id]
         return entries
 

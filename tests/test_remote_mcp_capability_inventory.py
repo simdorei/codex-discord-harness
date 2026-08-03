@@ -60,9 +60,14 @@ EXPECTED_TOOL_NAMES = (
     "show_changes",
     "stop_computer_control",
     "terminal_exec",
+    "terminal_window_activate",
+    "terminal_window_capture",
     "terminal_window_close",
+    "terminal_window_interrupt",
+    "terminal_window_keys",
     "terminal_window_list",
     "terminal_window_open",
+    "terminal_window_type",
     "type_computer_text",
     "write_project_file",
 )
@@ -177,6 +182,7 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         CapabilitySurface.WRITE,
         CapabilitySurface.GIT,
         CapabilitySurface.TERMINAL_EXECUTE,
+        CapabilitySurface.TERMINAL_INTERACT,
         CapabilitySurface.COMPUTER_OBSERVE,
         CapabilitySurface.COMPUTER_CONTROL,
     }
@@ -199,6 +205,19 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         "terminal_window_close",
         "terminal_window_list",
         "terminal_window_open",
+    )
+    assert groups[CapabilitySurface.TERMINAL_INTERACT].oauth_scopes == (
+        "files:read",
+        "files:write",
+        "terminal:execute",
+        "terminal:interact",
+    )
+    assert groups[CapabilitySurface.TERMINAL_INTERACT].tools == (
+        "terminal_window_activate",
+        "terminal_window_capture",
+        "terminal_window_interrupt",
+        "terminal_window_keys",
+        "terminal_window_type",
     )
     assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
     assert "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools

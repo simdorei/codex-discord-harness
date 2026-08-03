@@ -41,6 +41,9 @@ from simdorei_mcp_common.messages import (
 from simdorei_mcp_common.operation_outputs import ComputerStopOutput
 from simdorei_mcp_common.operation_requests import ComputerStopRequest
 from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
+from simdorei_mcp_common.terminal_window_interaction_protocol import (
+    is_terminal_window_interaction_request,
+)
 from simdorei_mcp_common.terminal_window_protocol import is_terminal_window_request
 
 
@@ -247,7 +250,10 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 )
             if isinstance(
                 command, ProjectOperationCommand
-            ) and is_terminal_window_request(command.operation):
+            ) and (
+                is_terminal_window_request(command.operation)
+                or is_terminal_window_interaction_request(command.operation)
+            ):
                 terminal_windows = self._terminal_windows_for(
                     command.thread_id,
                     project,

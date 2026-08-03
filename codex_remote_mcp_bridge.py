@@ -305,7 +305,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=9,
+                protocol_version=10,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )

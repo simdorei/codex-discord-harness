@@ -18,6 +18,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     COMPUTER_OBSERVE_REQUIRED_SCOPES,
     READ_SCOPE,
     TERMINAL_EXECUTE_REQUIRED_SCOPES,
+    TERMINAL_INTERACT_REQUIRED_SCOPES,
     WRITE_SCOPE,
 )
 from simdorei_mcp_common.operation_base import OperationOutput
@@ -51,6 +52,14 @@ TERMINAL_EXECUTE_AUTH_META: Final = {
         {
             "type": "oauth2",
             "scopes": list(TERMINAL_EXECUTE_REQUIRED_SCOPES),
+        }
+    ]
+}
+TERMINAL_INTERACT_AUTH_META: Final = {
+    "securitySchemes": [
+        {
+            "type": "oauth2",
+            "scopes": list(TERMINAL_INTERACT_REQUIRED_SCOPES),
         }
     ]
 }

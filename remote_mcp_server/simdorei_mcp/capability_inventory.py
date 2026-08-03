@@ -12,6 +12,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     COMPUTER_OBSERVE_REQUIRED_SCOPES,
     READ_SCOPE,
     TERMINAL_EXECUTE_REQUIRED_SCOPES,
+    TERMINAL_INTERACT_REQUIRED_SCOPES,
     WRITE_SCOPE,
 )
 
@@ -24,6 +25,7 @@ class CapabilitySurface(StrEnum):
     COMPUTER_OBSERVE = "computer_observe"
     COMPUTER_CONTROL = "computer_control"
     TERMINAL_EXECUTE = "terminal_execute"
+    TERMINAL_INTERACT = "terminal_interact"
 
 
 class CapabilityGroup(BaseModel):
@@ -100,6 +102,17 @@ CAPABILITY_GROUPS = (
             "terminal_window_close",
             "terminal_window_list",
             "terminal_window_open",
+        ),
+    ),
+    CapabilityGroup(
+        surface=CapabilitySurface.TERMINAL_INTERACT,
+        oauth_scopes=TERMINAL_INTERACT_REQUIRED_SCOPES,
+        tools=(
+            "terminal_window_activate",
+            "terminal_window_capture",
+            "terminal_window_interrupt",
+            "terminal_window_keys",
+            "terminal_window_type",
         ),
     ),
     CapabilityGroup(

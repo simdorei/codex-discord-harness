@@ -78,6 +78,9 @@ from simdorei_mcp_common.operation_requests import (
 from simdorei_mcp_common.terminal_window_protocol import (
     is_terminal_operation_request,
 )
+from simdorei_mcp_common.terminal_window_interaction_protocol import (
+    is_terminal_window_interaction_request,
+)
 
 
 class ProjectCapabilityError(ProjectFileError):
@@ -93,7 +96,9 @@ def execute_project_operation(
     terminal_windows: TerminalWindowManager | None = None,
 ) -> ProjectOperationOutput:
     """Execute one typed capability inside a validated project root."""
-    if is_terminal_operation_request(operation):
+    if is_terminal_operation_request(
+        operation
+    ) or is_terminal_window_interaction_request(operation):
         return execute_terminal_operation(
             operation,
             terminal=terminal,

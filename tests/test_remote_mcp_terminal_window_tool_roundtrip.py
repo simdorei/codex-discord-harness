@@ -110,7 +110,7 @@ def _activate(
     socket: BridgeSocket,
 ) -> dict[str, str]:
     socket.send_text(
-        BridgeHello(protocol_version=9, device_id=DeviceId("device-a")).model_dump_json()
+        BridgeHello(protocol_version=10, device_id=DeviceId("device-a")).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
     socket.send_text(
