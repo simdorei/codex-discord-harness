@@ -95,7 +95,12 @@ CAPABILITY_GROUPS = (
     CapabilityGroup(
         surface=CapabilitySurface.TERMINAL_EXECUTE,
         oauth_scopes=TERMINAL_EXECUTE_REQUIRED_SCOPES,
-        tools=("terminal_exec",),
+        tools=(
+            "terminal_exec",
+            "terminal_window_close",
+            "terminal_window_list",
+            "terminal_window_open",
+        ),
     ),
     CapabilityGroup(
         surface=CapabilitySurface.COMPUTER_OBSERVE,

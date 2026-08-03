@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+import subprocess
+from typing import Protocol, final, runtime_checkable
 
 from codex_remote_mcp_computer_errors import ComputerControlError
 from codex_remote_mcp_windows_windows import ResolvedWindow
+from codex_windows_job import WindowsKillOnCloseJob
 
 
 class OwnedProcess(Protocol):
@@ -18,6 +20,45 @@ class OwnedProcess(Protocol):
     def terminate(self) -> None: ...
 
     def kill(self) -> None: ...
+
+
+@runtime_checkable
+class OwnedProcessTree(Protocol):
+    def terminate_tree_and_close(self, *, timeout_seconds: float = 5.0) -> None: ...
+
+
+@final
+class JobOwnedProcess:
+    """Retain a Popen handle together with its kill-on-close process tree."""
+
+    __slots__ = ("_job", "_process")
+
+    def __init__(
+        self,
+        process: subprocess.Popen[bytes],
+        job: WindowsKillOnCloseJob,
+    ) -> None:
+        self._process = process
+        self._job = job
+
+    @property
+    def pid(self) -> int:
+        return self._process.pid
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self._process.wait(timeout=timeout)
+
+    def terminate(self) -> None:
+        self._process.terminate()
+
+    def kill(self) -> None:
+        self._process.kill()
+
+    def terminate_tree_and_close(self, *, timeout_seconds: float = 5.0) -> None:
+        self._job.terminate_and_close(timeout_seconds=timeout_seconds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +75,7 @@ class FailedLaunchCleanup:
     temporary_profile: str | None
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(slots=True, init=False)
 class ApplicationLaunchCleanupError(ComputerControlError):
     cleanup: FailedLaunchCleanup
 
@@ -43,4 +84,4 @@ class ApplicationLaunchCleanupError(ComputerControlError):
             self,
             "Failed application cleanup must be retried.",
         )
-        object.__setattr__(self, "cleanup", cleanup)
+        self.cleanup = cleanup

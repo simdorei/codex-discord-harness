@@ -49,7 +49,7 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
     ):
         socket.send_text(
             BridgeHello(
-                protocol_version=8,
+                protocol_version=9,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -129,7 +129,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
     ):
         first.send_text(
             BridgeHello(
-                protocol_version=8,
+                protocol_version=9,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -138,7 +138,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
         with client.websocket_connect("/bridge", headers=headers) as replacement:
             replacement.send_text(
                 BridgeHello(
-                    protocol_version=8,
+                    protocol_version=9,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )
@@ -207,7 +207,7 @@ def test_duplicate_hello_closes_with_protocol_error() -> None:
         client.websocket_connect("/bridge", headers=headers) as socket,
     ):
         hello = BridgeHello(
-            protocol_version=8,
+            protocol_version=9,
             device_id=DeviceId("device-a"),
         ).model_dump_json()
         socket.send_text(hello)

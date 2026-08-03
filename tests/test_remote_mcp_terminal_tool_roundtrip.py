@@ -43,7 +43,7 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=8,
+                    protocol_version=9,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

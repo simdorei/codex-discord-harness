@@ -20,6 +20,7 @@ from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
 from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
 from codex_remote_mcp_terminal_sessions import TerminalSessionRegistry
+from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import (
     BridgeResult,
     GatewayCommand,
@@ -40,6 +41,7 @@ from simdorei_mcp_common.messages import (
 from simdorei_mcp_common.operation_outputs import ComputerStopOutput
 from simdorei_mcp_common.operation_requests import ComputerStopRequest
 from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
+from simdorei_mcp_common.terminal_window_protocol import is_terminal_window_request
 
 
 @final
@@ -165,6 +167,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
     ) -> BridgeResult:
         computer: ComputerController | None = None
         terminal: TerminalExecutionEngine | None = None
+        terminal_windows: TerminalWindowManager | None = None
         if project.expires_at <= datetime.now(UTC):
             self._stop_computer(command.thread_id)
             return OperationErrorResult(
@@ -242,13 +245,22 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     project,
                     command.computer_session_id,
                 )
-            if terminal is None:
+            if isinstance(
+                command, ProjectOperationCommand
+            ) and is_terminal_window_request(command.operation):
+                terminal_windows = self._terminal_windows_for(
+                    command.thread_id,
+                    project,
+                    command.computer_session_id,
+                )
+            if terminal is None and terminal_windows is None:
                 return execute_bound_project_command(command, project.access, computer)
             return execute_bound_project_command(
                 command,
                 project.access,
                 computer,
                 terminal=terminal,
+                terminal_windows=terminal_windows,
             )
         except ProjectFileError as exc:
             return OperationErrorResult(
@@ -301,6 +313,25 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     "terminal session identity is missing",
                 )
             return self._terminals.for_session(
+                thread_id,
+                expected_project.access.root,
+                session_id,
+            )
+
+    def _terminal_windows_for(
+        self,
+        thread_id: str,
+        expected_project: ActiveProject,
+        session_id: str | None,
+    ) -> TerminalWindowManager:
+        with self._terminal_lifecycle_lock:
+            self._state.require(thread_id, expected_project, session_id)
+            if session_id is None:
+                raise ProjectFileError(
+                    "terminal",
+                    "terminal session identity is missing",
+                )
+            return self._terminals.windows_for_session(
                 thread_id,
                 expected_project.access.root,
                 session_id,

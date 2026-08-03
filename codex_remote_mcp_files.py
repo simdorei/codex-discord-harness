@@ -46,7 +46,7 @@ SENSITIVE_BASENAME: Final = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ProjectFileError(Exception):
     path: str
     reason: str

@@ -31,6 +31,8 @@ from codex_remote_mcp_images import (
 )
 from codex_remote_mcp_patch import apply_project_patch
 from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
+from codex_remote_mcp_terminal_operations import execute_terminal_operation
+from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import WriteFileOutput
 from simdorei_mcp_common.operation_outputs import (
     CheckpointListOutput,
@@ -73,7 +75,9 @@ from simdorei_mcp_common.operation_requests import (
     SaveImageFromUrlRequest,
     SaveImageRequest,
 )
-from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
+from simdorei_mcp_common.terminal_window_protocol import (
+    is_terminal_operation_request,
+)
 
 
 class ProjectCapabilityError(ProjectFileError):
@@ -86,16 +90,16 @@ def execute_project_operation(
     *,
     computer: ComputerController | None = None,
     terminal: TerminalExecutionEngine | None = None,
+    terminal_windows: TerminalWindowManager | None = None,
 ) -> ProjectOperationOutput:
     """Execute one typed capability inside a validated project root."""
+    if is_terminal_operation_request(operation):
+        return execute_terminal_operation(
+            operation,
+            terminal=terminal,
+            terminal_windows=terminal_windows,
+        )
     match operation:
-        case TerminalExecRequest():
-            if terminal is None:
-                raise ProjectCapabilityError(
-                    "terminal",
-                    "terminal execution is unavailable for this project session",
-                )
-            return terminal.execute(operation)
         case (
             ComputerListWindowsRequest()
             | ComputerActivateRequest()
@@ -166,7 +170,8 @@ def execute_project_operation(
                 restored_files=restored,
             )
         case unreachable:
-            assert_never(unreachable)
+            # TypeGuard narrowing applies only to its true branch.
+            assert_never(unreachable)  # pyright: ignore[reportArgumentType]
 
 
 def _project_status(root: Path) -> ProjectStatusOutput:

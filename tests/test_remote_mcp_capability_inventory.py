@@ -60,6 +60,9 @@ EXPECTED_TOOL_NAMES = (
     "show_changes",
     "stop_computer_control",
     "terminal_exec",
+    "terminal_window_close",
+    "terminal_window_list",
+    "terminal_window_open",
     "type_computer_text",
     "write_project_file",
 )
@@ -191,7 +194,12 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         "files:write",
         "terminal:execute",
     )
-    assert groups[CapabilitySurface.TERMINAL_EXECUTE].tools == ("terminal_exec",)
+    assert groups[CapabilitySurface.TERMINAL_EXECUTE].tools == (
+        "terminal_exec",
+        "terminal_window_close",
+        "terminal_window_list",
+        "terminal_window_open",
+    )
     assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
     assert "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
 
