@@ -56,6 +56,7 @@ _COMMON_SOURCE_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "-q",
             "tests/test_codex_pro_runtime_receipts.py",
             "tests/test_codex_pro_runtime_receipt_schema.py",
+            "tests/test_codex_pro_runtime_observation_collector.py",
             "tests/test_collect_pro_release_evidence_runtime.py",
         ),
     ),
