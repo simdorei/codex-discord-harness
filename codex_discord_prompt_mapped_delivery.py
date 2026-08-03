@@ -6,6 +6,8 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
+from codex_pro_runtime_diagnostics import ProRuntimeDiagnostic
+
 ChannelContraT = TypeVar("ChannelContraT", contravariant=True)
 ChannelT = TypeVar("ChannelT")
 LogFunc = Callable[[str], None]
@@ -24,6 +26,9 @@ class PromptPreprocessResult:
     visible_line: str = ""
     should_deliver: bool = True
     error_message: str = ""
+    diagnostic_stage: str = ""
+    diagnostic_code: str = ""
+    recovery_action: str = ""
 
 
 class PromptPreprocessor(Protocol):
@@ -42,12 +47,22 @@ def keep_prompt(
     return PromptPreprocessResult(prompt=prompt)
 
 
-def block_prompt(reason: str) -> PromptPreprocessResult:
+def block_prompt(diagnostic: ProRuntimeDiagnostic) -> PromptPreprocessResult:
     return PromptPreprocessResult(
         prompt="",
-        visible_line=f"!pro unavailable: {reason}",
+        visible_line="\n".join(
+            (
+                "!pro unavailable",
+                f"Reason: {diagnostic.public_message}",
+                f"Recovery: {diagnostic.recovery_action}",
+                f"Code: {diagnostic.code.value}",
+            )
+        ),
         should_deliver=False,
-        error_message=reason,
+        error_message=diagnostic.internal_detail,
+        diagnostic_stage=diagnostic.stage.value,
+        diagnostic_code=diagnostic.code.value,
+        recovery_action=diagnostic.recovery_action,
     )
 
 
@@ -173,6 +188,8 @@ async def handle_mapped_prompt_delivery(
     if not preprocessed.should_deliver:
         deps.log(
             "prompt_preprocess_blocked "
+            + f"stage={preprocessed.diagnostic_stage or 'unspecified'} "
+            + f"code={preprocessed.diagnostic_code or 'unspecified'} "
             + f"error={preprocessed.error_message or 'unspecified'}"
         )
         return MappedPromptDeliveryResult(

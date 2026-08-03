@@ -26,6 +26,14 @@ class PluginRuntimeFingerprintError(RuntimeError):
         return self.args[0] if self.args else "plugin runtime fingerprint failed"
 
 
+class PluginInventoryFingerprintError(PluginRuntimeFingerprintError):
+    pass
+
+
+class PluginContentFingerprintError(PluginRuntimeFingerprintError):
+    pass
+
+
 def read_codex_plugin_inventory() -> str:
     executable = shutil.which("codex")
     if executable is None:
@@ -73,11 +81,11 @@ def _inventory_object(inventory_json: str) -> dict[str, object]:
     try:
         raw = cast(object, json.loads(inventory_json))
     except json.JSONDecodeError as exc:
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             f"Codex plugin inventory is not valid JSON: {exc}"
         ) from exc
     if not isinstance(raw, dict):
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             "Codex plugin inventory must be a JSON object"
         )
     return cast("dict[str, object]", raw)
@@ -85,13 +93,13 @@ def _inventory_object(inventory_json: str) -> dict[str, object]:
 
 def _plugin_records(value: object) -> tuple[dict[str, object], ...]:
     if not isinstance(value, list):
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             "Codex plugin inventory.installed must be a JSON array"
         )
     records: list[dict[str, object]] = []
     for item in cast("list[object]", value):
         if not isinstance(item, dict):
-            raise PluginRuntimeFingerprintError(
+            raise PluginInventoryFingerprintError(
                 "Codex plugin inventory entries must be JSON objects"
             )
         records.append(cast("dict[str, object]", item))
@@ -103,17 +111,19 @@ def _plugin_evidence(
 ) -> dict[str, str]:
     matches = tuple(record for record in records if record.get("pluginId") == plugin_id)
     if len(matches) != 1:
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             f"plugin {plugin_id!r} was not installed exactly once"
         )
     record = matches[0]
     if record.get("installed") is not True:
-        raise PluginRuntimeFingerprintError(f"plugin {plugin_id!r} is not installed")
+        raise PluginInventoryFingerprintError(
+            f"plugin {plugin_id!r} is not installed"
+        )
     if record.get("enabled") is not True:
-        raise PluginRuntimeFingerprintError(f"plugin {plugin_id!r} is not enabled")
+        raise PluginInventoryFingerprintError(f"plugin {plugin_id!r} is not enabled")
     version = record.get("version")
     if not isinstance(version, str) or not version:
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             f"plugin {plugin_id!r} version must be a non-empty string"
         )
     root = _plugin_source_path(record, plugin_id)
@@ -128,22 +138,22 @@ def _plugin_evidence(
 def _plugin_source_path(record: dict[str, object], plugin_id: str) -> Path:
     raw_source = record.get("source")
     if not isinstance(raw_source, dict):
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             f"plugin {plugin_id!r} source must be a JSON object"
         )
     raw_path = cast("dict[str, object]", raw_source).get("path")
     if not isinstance(raw_path, str) or not raw_path:
-        raise PluginRuntimeFingerprintError(
+        raise PluginInventoryFingerprintError(
             f"plugin {plugin_id!r} source.path must be a non-empty string"
         )
     try:
         root = Path(raw_path).resolve(strict=True)
     except OSError as exc:
-        raise PluginRuntimeFingerprintError(
+        raise PluginContentFingerprintError(
             f"plugin {plugin_id!r} source path is unavailable: {exc}"
         ) from exc
     if not root.is_dir():
-        raise PluginRuntimeFingerprintError(
+        raise PluginContentFingerprintError(
             f"plugin {plugin_id!r} source path is not a directory"
         )
     return root
@@ -171,7 +181,7 @@ def _tree_digest(root: Path, plugin_id: str) -> str:
                 if path.is_file():
                     _hash_file(digest, relative.as_posix(), path)
     except OSError as exc:
-        raise PluginRuntimeFingerprintError(
+        raise PluginContentFingerprintError(
             f"plugin {plugin_id!r} source tree could not be hashed: {exc}"
         ) from exc
     return digest.hexdigest()
@@ -202,13 +212,13 @@ def _reject_link_or_escape(
     root: Path, path: Path, relative: Path, plugin_id: str
 ) -> None:
     if path.is_symlink() or is_directory_junction(path):
-        raise PluginRuntimeFingerprintError(
+        raise PluginContentFingerprintError(
             f"plugin {plugin_id!r} source contains a symbolic link or junction: "
             + str(relative)
         )
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(root):
-        raise PluginRuntimeFingerprintError(
+        raise PluginContentFingerprintError(
             f"plugin {plugin_id!r} source escapes its root: {relative}"
         )
 

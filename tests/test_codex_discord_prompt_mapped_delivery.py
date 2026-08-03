@@ -8,6 +8,11 @@ import unittest
 
 import codex_discord_steering as steering
 import codex_discord_prompt_mapped_delivery as mapped_delivery
+from codex_pro_runtime_diagnostics import (
+    ProDiagnosticCode,
+    ProDiagnosticStage,
+    diagnostic,
+)
 
 
 @dataclass(slots=True)
@@ -153,11 +158,14 @@ class DepsFixture:
 class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_preprocess_reports_reason_without_transport(self) -> None:
         fixture = DepsFixture(
-            preprocess_result=mapped_delivery.PromptPreprocessResult(
-                prompt="",
-                visible_line="!pro unavailable: Browser plugin is disabled",
-                should_deliver=False,
-                error_message="Browser plugin is disabled",
+            preprocess_result=mapped_delivery.block_prompt(
+                diagnostic(
+                    stage=ProDiagnosticStage.PLUGIN_INVENTORY,
+                    code=ProDiagnosticCode.BROWSER_PLUGIN_DISABLED,
+                    public_message="The Browser plugin is installed but disabled.",
+                    recovery_action="Enable the Browser plugin, then retry !pro.",
+                    internal_detail="private plugin path C:/secret/browser is disabled",
+                )
             )
         )
         channel = FakeChannel()
@@ -171,14 +179,18 @@ class MappedPromptDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.handled)
         self.assertFalse(result.accepted)
-        self.assertEqual(result.error_message, "Browser plugin is disabled")
-        self.assertEqual(
-            channel.messages,
-            ["!pro unavailable: Browser plugin is disabled"],
-        )
+        self.assertIn("C:/secret/browser", result.error_message)
+        self.assertEqual(len(channel.messages), 1)
+        self.assertIn("installed but disabled", channel.messages[0])
+        self.assertIn("Enable the Browser plugin", channel.messages[0])
+        self.assertNotIn("C:/secret", channel.messages[0])
         self.assertEqual(fixture.transport_calls, [])
         self.assertEqual(fixture.marked_discord_origin_prompts, [])
         self.assertEqual(channel.typing_events, [])
+        self.assertIn(
+            "stage=plugin_inventory code=browser_plugin_disabled",
+            "\n".join(fixture.logs),
+        )
 
     async def test_blocking_preprocessor_does_not_block_discord_event_loop(
         self,

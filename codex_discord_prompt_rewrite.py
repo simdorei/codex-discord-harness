@@ -13,6 +13,11 @@ from codex_pro_runtime_preflight import (
     ProRuntimeStatus,
     run_pro_runtime_preflight,
 )
+from codex_pro_runtime_diagnostics import (
+    ProDiagnosticCode,
+    ProDiagnosticStage,
+    diagnostic,
+)
 from codex_remote_mcp_binding import register_remote_mcp_project
 from codex_remote_mcp_bridge_config import (
     ProjectTicket,
@@ -74,28 +79,63 @@ def rewrite_prompt(
     try:
         _ = runtime_preflight()
     except ProRuntimePreflightError as exc:
-        return mapped_delivery.block_prompt(str(exc))
+        return mapped_delivery.block_prompt(exc.diagnostic)
     if not target_thread_id:
         return mapped_delivery.keep_prompt(rewritten)
     project_scope = fresh_project_scope()
     try:
         ticket = project_registrar(target_thread_id, project_scope, cwd, log)
-    except (
-        RemoteMcpBridgeError,
-        RemoteMcpConfigurationError,
-    ) as exc:
-        return mapped_delivery.block_prompt(str(exc))
+    except RemoteMcpConfigurationError as exc:
+        return mapped_delivery.block_prompt(
+            diagnostic(
+                stage=ProDiagnosticStage.REMOTE_MCP,
+                code=ProDiagnosticCode.REMOTE_MCP_CONFIGURATION_INVALID,
+                public_message="The local project connection is configured incorrectly.",
+                recovery_action="Repair the remote MCP configuration, restart the remote bot, then retry !pro.",
+                internal_detail=str(exc),
+            )
+        )
+    except RemoteMcpBridgeError as exc:
+        return mapped_delivery.block_prompt(
+            diagnostic(
+                stage=ProDiagnosticStage.REMOTE_MCP,
+                code=ProDiagnosticCode.REMOTE_MCP_CONNECTION_FAILED,
+                public_message="The local project connection did not become ready.",
+                recovery_action="Restart the remote bot, verify remote MCP connectivity, then retry !pro.",
+                internal_detail=str(exc),
+            )
+        )
     if ticket is None:
-        return mapped_delivery.block_prompt("remote MCP is not configured")
+        return mapped_delivery.block_prompt(
+            diagnostic(
+                stage=ProDiagnosticStage.REMOTE_MCP,
+                code=ProDiagnosticCode.REMOTE_MCP_NOT_CONFIGURED,
+                public_message="The local project connection is not configured.",
+                recovery_action="Configure remote MCP, restart the remote bot, then retry !pro.",
+                internal_detail="remote MCP is not configured",
+            )
+        )
     try:
         expired = ticket.expires_at <= datetime.now(UTC)
     except TypeError:
         return mapped_delivery.block_prompt(
-            "remote MCP returned a project ticket without a timezone"
+            diagnostic(
+                stage=ProDiagnosticStage.PROJECT_TICKET,
+                code=ProDiagnosticCode.PROJECT_TICKET_TIMEZONE_INVALID,
+                public_message="The local project connection returned an invalid access ticket.",
+                recovery_action="Restart the remote bot, then retry !pro.",
+                internal_detail="remote MCP returned a project ticket without a timezone",
+            )
         )
     if expired:
         return mapped_delivery.block_prompt(
-            "remote MCP returned a project ticket that is already expired"
+            diagnostic(
+                stage=ProDiagnosticStage.PROJECT_TICKET,
+                code=ProDiagnosticCode.PROJECT_TICKET_EXPIRED,
+                public_message="The local project access ticket expired before delivery.",
+                recovery_action="Retry !pro to request a fresh project ticket.",
+                internal_detail="remote MCP returned a project ticket that is already expired",
+            )
         )
     project_instruction = "\n".join(
         (

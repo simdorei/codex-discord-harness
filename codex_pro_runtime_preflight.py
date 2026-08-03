@@ -4,17 +4,24 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast, override
+from typing import cast
 
 import codex_app_server_transport as app_server_transport
 from codex_app_server_transport_lifecycle import AppServerLifecycleSnapshot
 from codex_plugin_runtime_fingerprint import (
-    BROWSER_PLUGIN_ID,
-    REMOTE_PLUGIN_ID,
+    PluginContentFingerprintError,
+    PluginInventoryFingerprintError,
     PluginRuntimeFingerprintError,
     fingerprint_required_plugins,
     read_codex_plugin_inventory,
 )
+from codex_pro_runtime_diagnostics import (
+    ProDiagnosticCode,
+    ProDiagnosticStage,
+    ProRuntimePreflightError as ProRuntimePreflightError,
+    preflight_error,
+)
+from codex_pro_runtime_inventory import PluginStatus, verify_plugin_inventory
 
 PLUGIN_MANIFEST_PATH = (
     Path(__file__).resolve().parent
@@ -23,15 +30,6 @@ PLUGIN_MANIFEST_PATH = (
 
 InventoryReader = Callable[[], str]
 ResidentSnapshotReader = Callable[[], AppServerLifecycleSnapshot]
-
-
-@dataclass(frozen=True, slots=True)
-class ProRuntimePreflightError(Exception):
-    reason: str
-
-    @override
-    def __str__(self) -> str:
-        return self.reason
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,15 +43,29 @@ def expected_remote_plugin_version(path: Path = PLUGIN_MANIFEST_PATH) -> str:
     try:
         raw = cast(object, json.loads(path.read_text(encoding="utf-8-sig")))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ProRuntimePreflightError(
-            f"remote plugin manifest is unavailable: {exc}"
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_MANIFEST,
+            code=ProDiagnosticCode.REMOTE_MANIFEST_UNAVAILABLE,
+            public_message="The remote plugin manifest could not be read.",
+            recovery_action="Reinstall the remote plugin, then retry !pro.",
+            internal_detail=f"remote plugin manifest is unavailable: {exc}",
         ) from exc
     if not isinstance(raw, dict):
-        raise ProRuntimePreflightError("remote plugin manifest must be a JSON object")
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_MANIFEST,
+            code=ProDiagnosticCode.REMOTE_MANIFEST_INVALID,
+            public_message="The remote plugin manifest is invalid.",
+            recovery_action="Reinstall the remote plugin, then retry !pro.",
+            internal_detail="remote plugin manifest must be a JSON object",
+        )
     version = cast("dict[str, object]", raw).get("version")
     if not isinstance(version, str) or not version:
-        raise ProRuntimePreflightError(
-            "remote plugin manifest.version must be a non-empty string"
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_MANIFEST,
+            code=ProDiagnosticCode.REMOTE_MANIFEST_INVALID,
+            public_message="The remote plugin manifest has no valid version.",
+            recovery_action="Reinstall the remote plugin, then retry !pro.",
+            internal_detail="remote plugin manifest.version must be a non-empty string",
         )
     return version
 
@@ -65,41 +77,71 @@ def verify_pro_runtime(
     resident_snapshot: AppServerLifecycleSnapshot,
     current_plugin_fingerprint: str,
 ) -> ProRuntimeStatus:
-    inventory = _inventory_object(inventory_json)
-    plugins = _plugin_records(inventory.get("installed"))
-    remote = _required_plugin(plugins, REMOTE_PLUGIN_ID)
-    browser = _required_plugin(plugins, BROWSER_PLUGIN_ID)
-    remote_version = _enabled_version(remote, REMOTE_PLUGIN_ID)
-    browser_version = _enabled_version(browser, BROWSER_PLUGIN_ID)
-    if remote_version != expected_remote_version:
-        raise ProRuntimePreflightError(
-            f"plugin {REMOTE_PLUGIN_ID!r} version mismatch: expected "
-            + f"{expected_remote_version!r}, got {remote_version!r}"
-        )
+    plugin_status = verify_plugin_inventory(
+        inventory_json,
+        expected_remote_version=expected_remote_version,
+    )
+    return _verify_resident_runtime(
+        plugin_status,
+        resident_snapshot=resident_snapshot,
+        current_plugin_fingerprint=current_plugin_fingerprint,
+    )
+
+
+def _verify_resident_runtime(
+    plugin_status: PluginStatus,
+    *,
+    resident_snapshot: AppServerLifecycleSnapshot,
+    current_plugin_fingerprint: str,
+) -> ProRuntimeStatus:
     if not resident_snapshot.healthy or resident_snapshot.accepting_since is None:
-        raise ProRuntimePreflightError(
-            "resident Codex app-server is not healthy "
-            + f"(generation {resident_snapshot.generation})"
+        raise preflight_error(
+            stage=ProDiagnosticStage.RESIDENT_APP_SERVER,
+            code=ProDiagnosticCode.RESIDENT_UNHEALTHY,
+            public_message="The resident Codex process is not ready to accept !pro.",
+            recovery_action="Restart the remote bot, wait for it to become healthy, then retry !pro.",
+            internal_detail=(
+                "resident Codex app-server is not healthy "
+                + f"(generation {resident_snapshot.generation})"
+            ),
         )
     if resident_snapshot.plugin_runtime_error is not None:
-        raise ProRuntimePreflightError(
-            "resident Codex app-server plugin snapshot failed: "
-            + resident_snapshot.plugin_runtime_error
+        raise preflight_error(
+            stage=ProDiagnosticStage.RESIDENT_APP_SERVER,
+            code=ProDiagnosticCode.RESIDENT_SNAPSHOT_FAILED,
+            public_message="The resident Codex process could not verify its plugin snapshot.",
+            recovery_action="Repair the plugin installation and restart the remote bot.",
+            internal_detail=(
+                "resident Codex app-server plugin snapshot failed: "
+                + resident_snapshot.plugin_runtime_error
+            ),
         )
     resident_fingerprint = resident_snapshot.plugin_runtime_fingerprint
     if resident_fingerprint is None:
-        raise ProRuntimePreflightError(
-            "resident Codex app-server has no plugin snapshot "
-            + f"(generation {resident_snapshot.generation})"
+        raise preflight_error(
+            stage=ProDiagnosticStage.RESIDENT_APP_SERVER,
+            code=ProDiagnosticCode.RESIDENT_SNAPSHOT_MISSING,
+            public_message="The resident Codex process started without a verified plugin snapshot.",
+            recovery_action="Restart the remote bot, then retry !pro.",
+            internal_detail=(
+                "resident Codex app-server has no plugin snapshot "
+                + f"(generation {resident_snapshot.generation})"
+            ),
         )
     if resident_fingerprint != current_plugin_fingerprint:
-        raise ProRuntimePreflightError(
-            "resident Codex app-server plugin snapshot is stale "
-            + f"(generation {resident_snapshot.generation}); restart the remote bot"
+        raise preflight_error(
+            stage=ProDiagnosticStage.RESIDENT_APP_SERVER,
+            code=ProDiagnosticCode.RESIDENT_STALE,
+            public_message="The installed plugins changed after the resident Codex process started.",
+            recovery_action="Restart the remote bot, then retry !pro.",
+            internal_detail=(
+                "resident Codex app-server plugin snapshot is stale "
+                + f"(generation {resident_snapshot.generation}); restart the remote bot"
+            ),
         )
     return ProRuntimeStatus(
-        remote_plugin_version=remote_version,
-        browser_plugin_version=browser_version,
+        remote_plugin_version=plugin_status.remote_version,
+        browser_plugin_version=plugin_status.browser_version,
         resident_generation=resident_snapshot.generation,
     )
 
@@ -112,68 +154,49 @@ def run_pro_runtime_preflight(
     ),
     manifest_path: Path = PLUGIN_MANIFEST_PATH,
 ) -> ProRuntimeStatus:
-    inventory_json = inventory_reader()
+    try:
+        inventory_json = inventory_reader()
+    except PluginRuntimeFingerprintError as exc:
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_INVENTORY,
+            code=ProDiagnosticCode.PLUGIN_INVENTORY_QUERY_FAILED,
+            public_message="Codex could not read the installed plugin inventory.",
+            recovery_action="Run `codex plugin list --json`, fix the reported error, then retry !pro.",
+            internal_detail=str(exc),
+        ) from exc
+    expected_version = expected_remote_plugin_version(manifest_path)
+    plugin_status = verify_plugin_inventory(
+        inventory_json,
+        expected_remote_version=expected_version,
+    )
     try:
         current_fingerprint = fingerprint_required_plugins(inventory_json)
-    except PluginRuntimeFingerprintError as exc:
-        raise ProRuntimePreflightError(
-            f"current Codex plugin fingerprint failed: {exc}"
+    except PluginInventoryFingerprintError as exc:
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_INVENTORY,
+            code=ProDiagnosticCode.PLUGIN_INVENTORY_INVALID,
+            public_message="Codex returned invalid plugin source metadata.",
+            recovery_action="Repair or reinstall the required plugins, then retry !pro.",
+            internal_detail=f"plugin fingerprint inventory validation failed: {exc}",
         ) from exc
-    return verify_pro_runtime(
-        inventory_json=inventory_json,
-        expected_remote_version=expected_remote_plugin_version(manifest_path),
+    except PluginContentFingerprintError as exc:
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_CONTENT,
+            code=ProDiagnosticCode.PLUGIN_CONTENT_UNVERIFIED,
+            public_message="The installed plugin files could not be verified; Browser availability was not tested.",
+            recovery_action="Repair or reinstall the required plugins, restart the remote bot, then retry !pro.",
+            internal_detail=f"current Codex plugin fingerprint failed: {exc}",
+        ) from exc
+    except PluginRuntimeFingerprintError as exc:
+        raise preflight_error(
+            stage=ProDiagnosticStage.PLUGIN_INVENTORY,
+            code=ProDiagnosticCode.PLUGIN_INVENTORY_INVALID,
+            public_message="Codex could not classify the plugin verification result.",
+            recovery_action="Repair or reinstall the required plugins, then retry !pro.",
+            internal_detail=f"unclassified plugin fingerprint failure: {exc}",
+        ) from exc
+    return _verify_resident_runtime(
+        plugin_status,
         resident_snapshot=resident_snapshot_reader(),
         current_plugin_fingerprint=current_fingerprint,
     )
-
-
-def _inventory_object(inventory_json: str) -> dict[str, object]:
-    try:
-        raw = cast(object, json.loads(inventory_json))
-    except json.JSONDecodeError as exc:
-        raise ProRuntimePreflightError(
-            f"Codex plugin inventory is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(raw, dict):
-        raise ProRuntimePreflightError("Codex plugin inventory must be a JSON object")
-    return cast("dict[str, object]", raw)
-
-
-def _plugin_records(value: object) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, list):
-        raise ProRuntimePreflightError(
-            "Codex plugin inventory.installed must be a JSON array"
-        )
-    records: list[dict[str, object]] = []
-    for item in cast("list[object]", value):
-        if not isinstance(item, dict):
-            raise ProRuntimePreflightError(
-                "Codex plugin inventory entries must be JSON objects"
-            )
-        records.append(cast("dict[str, object]", item))
-    return tuple(records)
-
-
-def _required_plugin(
-    records: tuple[dict[str, object], ...],
-    plugin_id: str,
-) -> dict[str, object]:
-    matches = tuple(record for record in records if record.get("pluginId") == plugin_id)
-    if len(matches) != 1:
-        raise ProRuntimePreflightError(
-            f"plugin {plugin_id!r} was not installed exactly once"
-        )
-    return matches[0]
-
-
-def _enabled_version(record: dict[str, object], plugin_id: str) -> str:
-    if record.get("installed") is not True:
-        raise ProRuntimePreflightError(f"plugin {plugin_id!r} is not installed")
-    if record.get("enabled") is not True:
-        raise ProRuntimePreflightError(f"plugin {plugin_id!r} is not enabled")
-    version = record.get("version")
-    if not isinstance(version, str) or not version:
-        raise ProRuntimePreflightError(
-            f"plugin {plugin_id!r} version must be a non-empty string"
-        )
-    return version
