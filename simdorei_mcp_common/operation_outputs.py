@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-
-class OperationOutput(BaseModel):
-    """Immutable output from one local project capability."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+from simdorei_mcp_common.operation_base import OperationOutput
 
 
 class RuleFile(OperationOutput):

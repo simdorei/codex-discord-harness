@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, model_validator
 
-
-class OperationRequest(BaseModel):
-    """Immutable input for one thread-bound project capability."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
+from simdorei_mcp_common.operation_base import OperationRequest
 
 
 class ProjectRulesRequest(OperationRequest):
