@@ -16,6 +16,7 @@ HOOK_PATH = Path(
 
 class HookModule(Protocol):
     PROTOCOL: str
+    PROBE_RELATIVE_PATH: Path
 
     def canonical_probe_code(self, plugin_root: Path | None = None) -> str: ...
 
@@ -126,6 +127,23 @@ class BrowserEvidenceHookTests(unittest.TestCase):
             )
 
             self.assertFalse(recorded)
+
+    def test_windows_line_endings_preserve_probe_integrity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            plugin_root = Path(raw_dir) / "plugin"
+            source_probe = HOOK_PATH.parent.parent / self.hook.PROBE_RELATIVE_PATH
+            probe = plugin_root / self.hook.PROBE_RELATIVE_PATH
+            probe.parent.mkdir(parents=True)
+            source = source_probe.read_text(encoding="utf-8")
+            _ = probe.write_bytes(source.replace("\n", "\r\n").encode("utf-8"))
+            payload = _post_payload(self.hook)
+            payload["tool_input"] = self.hook.canonical_probe_code(plugin_root)
+
+            recorded = self.hook.process_post_tool_use(
+                payload, Path(raw_dir) / "data", plugin_root
+            )
+
+            self.assertTrue(recorded)
 
     def test_unverified_or_available_evidence_does_not_authorize_claim(self) -> None:
         for status in ("unverified", "available"):

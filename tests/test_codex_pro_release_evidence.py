@@ -181,7 +181,7 @@ class ProReleaseCheckCollectionTests(unittest.TestCase):
         self.assertTrue(evidence.pre_restart_ready)
         self.assertEqual(evidence.workspace_state, "dirty")
         self.assertEqual(evidence.repository_revision, "revision-1")
-        self.assertEqual(len(calls), 13)
+        self.assertEqual(len(calls), 14)
         serialized = json.dumps(evidence.to_payload())
         self.assertNotIn("C:/private", serialized)
         self.assertNotIn("project_scope", serialized)

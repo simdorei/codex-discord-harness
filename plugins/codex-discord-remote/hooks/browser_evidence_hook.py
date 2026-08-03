@@ -156,9 +156,11 @@ def _object_map(raw: object) -> dict[str, object] | None:
 def _probe_integrity_ok(plugin_root: Path) -> bool:
     probe = plugin_root / PROBE_RELATIVE_PATH
     try:
-        digest = hashlib.sha256(probe.read_bytes()).hexdigest()
+        source = probe.read_bytes()
     except OSError:
         return False
+    canonical_source = source.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    digest = hashlib.sha256(canonical_source).hexdigest()
     return digest == EXPECTED_PROBE_SHA256
 
 
