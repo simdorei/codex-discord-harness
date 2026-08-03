@@ -1,9 +1,12 @@
+# pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import assert_never
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -59,41 +62,49 @@ def test_command_list_discovers_package_script(tmp_path: Path) -> None:
             assert_never(unreachable)
 
 
-def test_command_run_executes_discovered_verification_script(tmp_path: Path) -> None:
-    # Given
-    root, dispatcher = _bound_project(tmp_path)
-    _write_package(root)
+def test_command_run_executes_discovered_verification_script() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    qa_root = repo_root / f".remote-command-qa-{uuid4().hex}"
+    qa_root.mkdir()
+    try:
+        # Given
+        root, dispatcher = _bound_project(qa_root)
+        _write_package(root)
 
-    # When
-    result = dispatcher.execute(
-        _command(
-            "run",
-            CommandRunRequest(command_id="npm:test"),
+        # When
+        result = dispatcher.execute(
+            _command(
+                "run",
+                CommandRunRequest(command_id="npm:test"),
+            )
         )
-    )
 
-    # Then
-    match result:
-        case ProjectOperationResult(output=CommandRunOutput(exit_code=code, stdout=stdout)):
-            assert code == 0
-            assert "verified" in stdout
-        case (
-            ProjectInfoResult()
-            | ListFilesResult()
-            | ReadFileResult()
-            | WriteFileResult()
-            | ProjectOperationResult()
-            | OperationErrorResult()
-        ):
-            raise AssertionError(f"unexpected result: {result.type}")
-        case unreachable:
-            assert_never(unreachable)
+        # Then
+        match result:
+            case ProjectOperationResult(
+                output=CommandRunOutput(exit_code=code, stdout=stdout)
+            ):
+                assert code == 0
+                assert "verified" in stdout
+            case (
+                ProjectInfoResult()
+                | ListFilesResult()
+                | ReadFileResult()
+                | WriteFileResult()
+                | ProjectOperationResult()
+                | OperationErrorResult()
+            ):
+                raise AssertionError(f"unexpected result: {result.type}")
+            case unreachable:
+                assert_never(unreachable)
+    finally:
+        shutil.rmtree(qa_root)
 
 
 def test_command_run_rejects_caller_supplied_arguments() -> None:
     # Given / When / Then
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        CommandRunRequest.model_validate(
+        _ = CommandRunRequest.model_validate(
             {
                 "command_id": "npm:test",
                 "args": ("--import=data:text/javascript,console.log('unsafe')",),
@@ -105,7 +116,7 @@ def test_command_run_rejects_manifest_shell_body(tmp_path: Path) -> None:
     # Given
     root, dispatcher = _bound_project(tmp_path)
     outside = tmp_path / "escaped.txt"
-    (root / "package.json").write_text(
+    _ = (root / "package.json").write_text(
         json.dumps(
             {
                 "scripts": {
@@ -146,16 +157,19 @@ def _bound_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
 def _write_package(root: Path) -> None:
     tests = root / "tests"
     tests.mkdir()
-    (tests / "verified.test.mjs").write_text(
+    _ = (tests / "verified.test.mjs").write_text(
         "import test from 'node:test';\n"
-        "test('verified', () => console.log('verified'));\n",
+        + "test('verified', () => console.log('verified'));\n",
         encoding="utf-8",
     )
-    (root / "package.json").write_text(
+    _ = (root / "package.json").write_text(
         json.dumps(
             {
                 "scripts": {
-                    "test": "node --test tests/verified.test.mjs",
+                    "test": (
+                        "node --test --test-isolation=none "
+                        "tests/verified.test.mjs"
+                    ),
                 }
             }
         ),
