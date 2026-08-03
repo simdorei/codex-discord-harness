@@ -2,16 +2,19 @@ from __future__ import annotations
 
 # pyright: reportAny=false
 
-import ctypes
-import ctypes.wintypes as wt
 import subprocess
 import time
 from pathlib import Path
 from typing import Final, final, override
 
-from codex_remote_mcp_redaction import redact
 from codex_remote_mcp_terminal_engine import TerminalExecutionError
 from codex_remote_mcp_terminal_runtime import inherited_terminal_environment
+from codex_remote_mcp_terminal_window_probe_windows import (
+    inspect_owned_terminal_window,
+    require_window_process_id,
+    terminal_window_entry,
+    window_title,
+)
 from codex_remote_mcp_terminal_window_types import (
     OwnedTerminalWindow,
     TerminalWindowBackend,
@@ -21,7 +24,7 @@ from codex_remote_mcp_windows_launch_types import (
     OwnedProcess,
     OwnedProcessTree,
 )
-from codex_remote_mcp_windows_native import USER32, EnumWindowsCallback, Rect
+from codex_remote_mcp_windows_native import USER32, EnumWindowsCallback
 from codex_remote_mcp_windows_process_stop import stop_retained_process
 from codex_windows_job import (
     WINDOWS_CREATE_SUSPENDED,
@@ -82,7 +85,7 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
             ) from exc
         try:
             window_id = _wait_for_window(process, title)
-            entry = _entry(
+            entry = terminal_window_entry(
                 terminal_window_id,
                 window_id,
                 process.pid,
@@ -95,33 +98,12 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
         return OwnedTerminalWindow(
             entry=entry,
             process=process,
-            window_process_id=_window_process_id(window_id),
+            window_process_id=require_window_process_id(window_id),
         )
 
     @override
     def inspect(self, window: OwnedTerminalWindow) -> TerminalWindowEntry | None:
-        try:
-            if window.process.poll() is not None:
-                return None
-        except OSError as exc:
-            raise TerminalExecutionError(
-                "Windows could not inspect the terminal window process"
-            ) from exc
-        if not USER32.IsWindow(window.entry.window_id):
-            return None
-        if (
-            window.window_process_id is not None
-            and _window_process_id(window.entry.window_id)
-            != window.window_process_id
-        ):
-            return None
-        return _entry(
-            window.entry.terminal_window_id,
-            window.entry.window_id,
-            window.process.pid,
-            window.entry.shell,
-            Path(window.entry.cwd),
-        )
+        return inspect_owned_terminal_window(window)
 
     @override
     def close(self, window: OwnedTerminalWindow) -> None:
@@ -167,7 +149,7 @@ def _find_window_by_title(title: str) -> int | None:
     def visit(hwnd: int, _lparam: int) -> bool:
         # Elevated cmd.exe localizes and prepends an administrator marker. The
         # complete high-entropy title still remains an unambiguous suffix.
-        visible_title = _window_title(int(hwnd)).rstrip()
+        visible_title = window_title(int(hwnd)).rstrip()
         if USER32.IsWindowVisible(hwnd) and visible_title.endswith(title):
             matched.append(int(hwnd))
             return False
@@ -176,48 +158,6 @@ def _find_window_by_title(title: str) -> int | None:
     if not USER32.EnumWindows(visit, 0) and not matched:
         raise TerminalExecutionError("Windows could not enumerate terminal windows")
     return matched[0] if matched else None
-
-
-def _entry(
-    terminal_window_id: str,
-    window_id: int,
-    process_id: int,
-    shell: TerminalWindowShell,
-    cwd: Path,
-) -> TerminalWindowEntry:
-    if not USER32.IsWindow(window_id):
-        raise TerminalExecutionError("terminal window is no longer available")
-    rect = Rect()
-    if not USER32.GetWindowRect(window_id, ctypes.byref(rect)):
-        raise TerminalExecutionError("Windows could not inspect the terminal window")
-    title = redact(_window_title(window_id))[:500]
-    if not title:
-        raise TerminalExecutionError("terminal window has no usable title")
-    return TerminalWindowEntry(
-        terminal_window_id=terminal_window_id,
-        window_id=window_id,
-        process_id=process_id,
-        shell=shell,
-        cwd=str(cwd),
-        title=title,
-    )
-
-
-def _window_title(window_id: int) -> str:
-    length = int(USER32.GetWindowTextLengthW(window_id))
-    if length <= 0:
-        return ""
-    buffer = ctypes.create_unicode_buffer(length + 1)
-    USER32.GetWindowTextW(window_id, buffer, length + 1)
-    return buffer.value
-
-
-def _window_process_id(window_id: int) -> int:
-    owner = wt.DWORD()
-    thread_id = int(USER32.GetWindowThreadProcessId(window_id, ctypes.byref(owner)))
-    if thread_id <= 0 or owner.value <= 0:
-        raise TerminalExecutionError("Windows could not identify the terminal window")
-    return int(owner.value)
 
 
 def _close_owned_process(process: OwnedProcess) -> None:
