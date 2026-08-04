@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Final, Literal, Protocol, assert_never, cast
+from typing import Final, Literal, assert_never, cast
 from urllib.parse import urlsplit
 
 
@@ -23,22 +23,16 @@ class ConversationMapError(Exception):
     """Raised when a conversation mapping command is invalid."""
 
 
-class _Arguments(Protocol):
-    command: Literal["acquire", "set", "release", "delete"]
-    scope: str
-    url: str
-    lease_token: str
+class _Arguments(argparse.Namespace):
+    command: Literal["acquire", "set", "release", "delete"] | None = None
+    scope: str | None = None
+    url: str | None = None
+    lease_token: str | None = None
 
 
-def _row_value(row: sqlite3.Row, key: str) -> object:
-    return cast(object, row[key])
-
-
-def _row_int(row: sqlite3.Row, key: str) -> int:
-    value = _row_value(row, key)
-    if isinstance(value, (int, str, bytes, bytearray)):
-        return int(value)
-    return 0
+_AcquireRow = tuple[str | None, str | None, int | None]
+_SaveRow = tuple[str | None]
+_ReleaseRow = tuple[str | None, str | None]
 
 
 def database_path() -> Path:
@@ -60,7 +54,7 @@ def acquire(scope: str) -> dict[str, str]:
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
         row = cast(
-            sqlite3.Row | None,
+            _AcquireRow | None,
             connection.execute(
                 """
             SELECT conversation_url, lease_hash, lease_expires_at
@@ -70,16 +64,14 @@ def acquire(scope: str) -> dict[str, str]:
                 (scope,),
             ).fetchone(),
         )
-        conversation_url = (
-            _row_value(row, "conversation_url") if row is not None else None
-        )
+        conversation_url = row[0] if row is not None else None
         if conversation_url:
             connection.commit()
             return {"status": "found", "url": str(conversation_url)}
         if (
             row is not None
-            and _row_value(row, "lease_hash")
-            and _row_int(row, "lease_expires_at") >= now
+            and row[1]
+            and (row[2] or 0) >= now
         ):
             connection.commit()
             return {"status": "busy"}
@@ -113,7 +105,7 @@ def save(scope: str, url: str, lease_token: str) -> dict[str, str]:
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
         row = cast(
-            sqlite3.Row | None,
+            _SaveRow | None,
             connection.execute(
                 """
             SELECT lease_hash
@@ -124,7 +116,7 @@ def save(scope: str, url: str, lease_token: str) -> dict[str, str]:
             ).fetchone(),
         )
         if row is None or not secrets.compare_digest(
-            str(_row_value(row, "lease_hash") or ""),
+            str(row[0] or ""),
             _token_hash(lease_token),
         ):
             raise ConversationMapError(
@@ -149,17 +141,17 @@ def release(scope: str, lease_token: str) -> dict[str, str]:
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
         row = cast(
-            sqlite3.Row | None,
+            _ReleaseRow | None,
             connection.execute(
                 "SELECT lease_hash, conversation_url FROM conversations WHERE scope = ?",
                 (scope,),
             ).fetchone(),
         )
         if row is not None and secrets.compare_digest(
-            str(_row_value(row, "lease_hash") or ""),
+            str(row[0] or ""),
             _token_hash(lease_token),
         ):
-            if _row_value(row, "conversation_url"):
+            if row[1]:
                 _ = connection.execute(
                     """
                     UPDATE conversations
@@ -191,7 +183,6 @@ def _connect() -> sqlite3.Connection:
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
-    connection.row_factory = sqlite3.Row
     _ = connection.execute(
         """
         CREATE TABLE IF NOT EXISTS conversations (
@@ -251,18 +242,26 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    arguments = cast(_Arguments, cast(object, _parser().parse_args()))
+    arguments = _parser().parse_args(namespace=_Arguments())
     try:
+        if arguments.command is None or arguments.scope is None:
+            raise ConversationMapError("The command arguments are incomplete.")
         match arguments.command:
             case "acquire":
                 result = acquire(arguments.scope)
             case "set":
+                if arguments.url is None or arguments.lease_token is None:
+                    raise ConversationMapError("The set command arguments are incomplete.")
                 result = save(
                     arguments.scope,
                     arguments.url,
                     arguments.lease_token,
                 )
             case "release":
+                if arguments.lease_token is None:
+                    raise ConversationMapError(
+                        "The release command arguments are incomplete."
+                    )
                 result = release(arguments.scope, arguments.lease_token)
             case "delete":
                 result = delete(arguments.scope)
