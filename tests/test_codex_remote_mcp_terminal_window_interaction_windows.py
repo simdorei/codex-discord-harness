@@ -70,8 +70,22 @@ def test_real_powershell_interrupt_returns_control_to_owned_shell(
     try:
         opened = manager.open(TerminalWindowOpenRequest(shell="powershell"))
         window_id = opened.window.terminal_window_id
-        _submit(manager, window_id, "Start-Sleep -Seconds 30")
-        time.sleep(0.5)
+        started = tmp_path / "powershell-sleep-started.txt"
+        completed = tmp_path / "powershell-sleep-completed.txt"
+        escaped_started = str(started).replace("'", "''")
+        escaped_completed = str(completed).replace("'", "''")
+        _submit(
+            manager,
+            window_id,
+            "; ".join(
+                (
+                    f"Set-Content -LiteralPath '{escaped_started}' -Value 'started'",
+                    "Start-Sleep -Seconds 120",
+                    f"Set-Content -LiteralPath '{escaped_completed}' -Value 'completed'",
+                )
+            ),
+        )
+        _wait_for_text(started, "started")
 
         observed = manager.capture(
             TerminalWindowCaptureRequest(terminal_window_id=window_id)
@@ -91,6 +105,7 @@ def test_real_powershell_interrupt_returns_control_to_owned_shell(
         )
 
         _wait_for_text(marker, "interrupt-ok", timeout=12)
+        assert not completed.exists()
         assert interrupted.receipt.action == "interrupt"
         assert interrupted.receipt.keys == ("CTRL", "C")
     finally:

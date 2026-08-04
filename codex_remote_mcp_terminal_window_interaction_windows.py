@@ -75,10 +75,13 @@ class WindowsTerminalWindowInteractionBackend(TerminalWindowInteractionBackend):
     @override
     def interrupt(self, window: OwnedTerminalWindow) -> None:
         _ = require_terminal_window_rect(window)
+        shell_process_id = window.window_process_id
+        if shell_process_id is None:
+            raise TerminalExecutionError("terminal window process identity is unavailable")
         helper = Path(__file__).with_name("codex_remote_mcp_terminal_interrupt_helper.py")
         try:
             completed = subprocess.run(
-                [sys.executable, "-I", "-S", str(helper), str(window.process.pid)],
+                [sys.executable, "-I", "-S", str(helper), str(shell_process_id)],
                 check=False,
                 timeout=5,
                 env=inherited_terminal_environment(),

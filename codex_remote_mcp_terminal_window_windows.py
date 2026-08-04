@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportAny=false
 
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Final, final, override
@@ -55,7 +56,8 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
         cwd: Path,
         title: str,
     ) -> OwnedTerminalWindow:
-        environment = _terminal_window_environment(title)
+        environment = inherited_terminal_environment()
+        environment[_TITLE_ENVIRONMENT] = title
         try:
             raw_process = subprocess.Popen(
                 _shell_command(shell, title),
@@ -85,6 +87,7 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
             ) from exc
         try:
             window_id = _wait_for_window(process, title)
+            window_process_id = require_window_process_id(window_id)
             entry = terminal_window_entry(
                 terminal_window_id,
                 window_id,
@@ -98,7 +101,7 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
         return OwnedTerminalWindow(
             entry=entry,
             process=process,
-            window_process_id=require_window_process_id(window_id),
+            window_process_id=window_process_id,
         )
 
     @override
@@ -112,22 +115,11 @@ class WindowsTerminalWindowBackend(TerminalWindowBackend):
 
 def _shell_command(shell: TerminalWindowShell, title: str) -> list[str]:
     if shell == "powershell":
-        return [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NoExit",
-            "-Command",
-            f"$Host.UI.RawUI.WindowTitle = $env:{_TITLE_ENVIRONMENT}",
-        ]
+        bootstrap = Path(__file__).with_name(
+            "codex_remote_mcp_terminal_window_bootstrap.py"
+        )
+        return [sys.executable, "-I", "-S", str(bootstrap)]
     return ["cmd.exe", "/D", "/K", f"title {title}"]
-
-
-def _terminal_window_environment(title: str) -> dict[str, str]:
-    return {
-        **inherited_terminal_environment(),
-        _TITLE_ENVIRONMENT: title,
-    }
 
 
 def _wait_for_window(process: JobOwnedProcess, title: str) -> int:
