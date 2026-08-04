@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final, Literal, Protocol, assert_never, cast
 from urllib.parse import urlsplit
 
 
@@ -21,6 +21,24 @@ LEASE_SECONDS: Final = 120
 
 class ConversationMapError(Exception):
     """Raised when a conversation mapping command is invalid."""
+
+
+class _Arguments(Protocol):
+    command: Literal["acquire", "set", "release", "delete"]
+    scope: str
+    url: str
+    lease_token: str
+
+
+def _row_value(row: sqlite3.Row, key: str) -> object:
+    return cast(object, row[key])
+
+
+def _row_int(row: sqlite3.Row, key: str) -> int:
+    value = _row_value(row, key)
+    if isinstance(value, (int, str, bytes, bytearray)):
+        return int(value)
+    return 0
 
 
 def database_path() -> Path:
@@ -40,27 +58,33 @@ def acquire(scope: str) -> dict[str, str]:
     _validate_scope(scope)
     now = int(time.time())
     with _connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            """
+        _ = connection.execute("BEGIN IMMEDIATE")
+        row = cast(
+            sqlite3.Row | None,
+            connection.execute(
+                """
             SELECT conversation_url, lease_hash, lease_expires_at
             FROM conversations
             WHERE scope = ?
             """,
-            (scope,),
-        ).fetchone()
-        if row is not None and row["conversation_url"]:
+                (scope,),
+            ).fetchone(),
+        )
+        conversation_url = (
+            _row_value(row, "conversation_url") if row is not None else None
+        )
+        if conversation_url:
             connection.commit()
-            return {"status": "found", "url": str(row["conversation_url"])}
+            return {"status": "found", "url": str(conversation_url)}
         if (
             row is not None
-            and row["lease_hash"]
-            and int(row["lease_expires_at"] or 0) >= now
+            and _row_value(row, "lease_hash")
+            and _row_int(row, "lease_expires_at") >= now
         ):
             connection.commit()
             return {"status": "busy"}
         lease_token = "lease_" + secrets.token_urlsafe(24)
-        connection.execute(
+        _ = connection.execute(
             """
             INSERT INTO conversations(
                 scope, conversation_url, lease_hash, lease_expires_at, updated_at
@@ -87,23 +111,26 @@ def save(scope: str, url: str, lease_token: str) -> dict[str, str]:
     _validate_lease_token(lease_token)
     now = int(time.time())
     with _connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            """
+        _ = connection.execute("BEGIN IMMEDIATE")
+        row = cast(
+            sqlite3.Row | None,
+            connection.execute(
+                """
             SELECT lease_hash
             FROM conversations
             WHERE scope = ?
             """,
-            (scope,),
-        ).fetchone()
+                (scope,),
+            ).fetchone(),
+        )
         if row is None or not secrets.compare_digest(
-            str(row["lease_hash"] or ""),
+            str(_row_value(row, "lease_hash") or ""),
             _token_hash(lease_token),
         ):
             raise ConversationMapError(
                 "The conversation creation lease is missing or was replaced."
             )
-        connection.execute(
+        _ = connection.execute(
             """
             UPDATE conversations
             SET conversation_url = ?, lease_hash = NULL,
@@ -120,17 +147,20 @@ def release(scope: str, lease_token: str) -> dict[str, str]:
     _validate_scope(scope)
     _validate_lease_token(lease_token)
     with _connect() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            "SELECT lease_hash, conversation_url FROM conversations WHERE scope = ?",
-            (scope,),
-        ).fetchone()
+        _ = connection.execute("BEGIN IMMEDIATE")
+        row = cast(
+            sqlite3.Row | None,
+            connection.execute(
+                "SELECT lease_hash, conversation_url FROM conversations WHERE scope = ?",
+                (scope,),
+            ).fetchone(),
+        )
         if row is not None and secrets.compare_digest(
-            str(row["lease_hash"] or ""),
+            str(_row_value(row, "lease_hash") or ""),
             _token_hash(lease_token),
         ):
-            if row["conversation_url"]:
-                connection.execute(
+            if _row_value(row, "conversation_url"):
+                _ = connection.execute(
                     """
                     UPDATE conversations
                     SET lease_hash = NULL, lease_expires_at = NULL
@@ -139,7 +169,7 @@ def release(scope: str, lease_token: str) -> dict[str, str]:
                     (scope,),
                 )
             else:
-                connection.execute(
+                _ = connection.execute(
                     "DELETE FROM conversations WHERE scope = ?",
                     (scope,),
                 )
@@ -150,7 +180,7 @@ def release(scope: str, lease_token: str) -> dict[str, str]:
 def delete(scope: str) -> dict[str, str]:
     _validate_scope(scope)
     with _connect() as connection:
-        connection.execute(
+        _ = connection.execute(
             "DELETE FROM conversations WHERE scope = ?",
             (scope,),
         )
@@ -162,7 +192,7 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
     connection.row_factory = sqlite3.Row
-    connection.execute(
+    _ = connection.execute(
         """
         CREATE TABLE IF NOT EXISTS conversations (
             scope TEXT PRIMARY KEY,
@@ -221,7 +251,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    arguments = _parser().parse_args()
+    arguments = cast(_Arguments, cast(object, _parser().parse_args()))
     try:
         match arguments.command:
             case "acquire":
