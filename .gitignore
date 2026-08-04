@@ -28,4 +28,5 @@ __pycache__/
 discord_attachments/
 generated_images/
 .pro-web-review/
+.release-evidence/
 .codex-remote-mcp/
