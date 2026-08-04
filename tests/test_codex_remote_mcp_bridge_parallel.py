@@ -17,11 +17,15 @@ from codex_remote_mcp_dispatch_commands import (
     BoundProjectCommand,
     execute_bound_project_command,
 )
+from codex_remote_mcp_dispatch import LocalProjectDispatcher
+from codex_remote_mcp_dispatch_state import ActiveProject
 from codex_remote_mcp_files import ProjectFileAccess
 from simdorei_mcp_common.messages import (
     BridgeHello,
     BridgeResult,
+    GatewayCommand,
     GatewayHello,
+    OperationErrorResult,
     ProjectAck,
     ProjectSessionCommand,
     ProjectSessionResult,
@@ -30,6 +34,7 @@ from simdorei_mcp_common.messages import (
     ReadFileResult,
     RequestId,
 )
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 
 class ParallelSocket:
@@ -106,6 +111,8 @@ def test_two_project_reads_can_run_concurrently(
         command: BoundProjectCommand,
         access: ProjectFileAccess,
         computer: ComputerController | None,
+        *,
+        budget: RequestBudget,
     ) -> BridgeResult:
         if isinstance(command, ReadFileCommand):
             if command.request_id == "read-first":
@@ -113,7 +120,7 @@ def test_two_project_reads_can_run_concurrently(
                 assert release_first.wait(timeout=5)
             if command.request_id == "read-second":
                 second_started.set()
-        return original_execute(command, access, computer)
+        return original_execute(command, access, computer, budget=budget)
 
     monkeypatch.setattr(
         "codex_remote_mcp_dispatch.execute_bound_project_command",
@@ -131,6 +138,7 @@ def test_two_project_reads_can_run_concurrently(
                 request_id=RequestId("activate-parallel-session"),
                 thread_id="thread-1",
                 computer_session_id="parallel-session-id",
+                computer_session_generation=1,
             ).model_dump_json()
         )
         _wait_for_result(socket.sent, ProjectSessionResult)
@@ -158,6 +166,76 @@ def test_two_project_reads_can_run_concurrently(
         bridge.close()
 
 
+def test_older_session_command_cannot_win_after_newer_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    socket = ParallelSocket()
+    dispatcher = LocalProjectDispatcher()
+    bridge = RemoteMcpBridge(
+        _config(),
+        connector=ParallelConnector(socket),
+        dispatcher=dispatcher,
+        log=lambda _: None,
+    )
+    old_started = threading.Event()
+    release_old = threading.Event()
+    original = LocalProjectDispatcher._execute_admitted
+
+    def delay_old_before_lock(
+        self: LocalProjectDispatcher,
+        command: GatewayCommand,
+        project: ActiveProject,
+        connection_generation: int | None,
+        cancel_event: threading.Event | None,
+    ) -> BridgeResult:
+        if (
+            isinstance(command, ProjectSessionCommand)
+            and command.computer_session_generation == 1
+        ):
+            old_started.set()
+            assert release_old.wait(timeout=5)
+        return original(
+            self,
+            command,
+            project,
+            connection_generation,
+            cancel_event,
+        )
+
+    monkeypatch.setattr(
+        LocalProjectDispatcher, "_execute_admitted", delay_old_before_lock
+    )
+    try:
+        _ = bridge.register_project("thread-1", "codex-pro-project-ordering", tmp_path)
+        for request_id, session_id, session_generation in (
+            ("activate-old", "old-computer-session", 1),
+            ("activate-new", "new-computer-session", 2),
+        ):
+            socket.inbound.put(
+                ProjectSessionCommand(
+                    request_id=RequestId(request_id),
+                    thread_id="thread-1",
+                    computer_session_id=session_id,
+                    computer_session_generation=session_generation,
+                ).model_dump_json()
+            )
+            if session_generation == 1:
+                assert old_started.wait(timeout=2)
+
+        _ = ProjectSessionResult.model_validate_json(
+            _wait_for_request(socket.sent, "activate-new")
+        )
+        release_old.set()
+        stale = OperationErrorResult.model_validate_json(
+            _wait_for_request(socket.sent, "activate-old")
+        )
+        assert stale.error_code == "computer_control"
+    finally:
+        release_old.set()
+        bridge.close()
+
+
 def _wait_for_result(
     messages: list[str],
     result_type: type[ProjectSessionResult],
@@ -181,6 +259,15 @@ def _wait_for_result_count(
         if len(matching) >= expected:
             return matching[-1]
     raise AssertionError(f"expected {expected} {result_type.__name__} messages")
+
+
+def _wait_for_request(messages: list[str], request_id: str) -> str:
+    deadline = datetime.now(UTC).timestamp() + 2
+    while datetime.now(UTC).timestamp() < deadline:
+        for message in messages:
+            if f'"request_id":"{request_id}"' in message:
+                return message
+    raise AssertionError(f"expected result for {request_id}")
 
 
 def _config() -> RemoteMcpBridgeConfig:

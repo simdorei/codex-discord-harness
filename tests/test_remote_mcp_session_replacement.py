@@ -42,11 +42,13 @@ class DelayedOldSessionSender(BridgeSender):
         self.old_command_started = anyio.Event()
         self.release_old_command = anyio.Event()
         self.old_generation = ""
+        self.session_generations: list[int] = []
         self.delayed_result_type = ""
 
     async def send(self, command: GatewayCommand) -> None:
         match command:
             case ProjectSessionCommand():
+                self.session_generations.append(command.computer_session_generation)
                 if not self.old_generation:
                     self.old_generation = command.computer_session_id
                 result = self._dispatcher.execute(command)
@@ -122,6 +124,7 @@ def test_replacement_barrier_rejects_a_delayed_old_generation(
         assert len(old_failure) == 1
         assert isinstance(old_failure[0], ActiveBindingMissingError)
         assert sender.delayed_result_type == "operation_error"
+        assert sender.session_generations == [1, 2]
 
     anyio.run(scenario)
 
@@ -141,6 +144,7 @@ def test_local_dispatcher_requires_an_acknowledged_session_generation(
             request_id=RequestId("activate-a"),
             thread_id="thread-a",
             computer_session_id="computer-session-a",
+            computer_session_generation=1,
         )
     )
     replaced = dispatcher.execute(
@@ -148,6 +152,7 @@ def test_local_dispatcher_requires_an_acknowledged_session_generation(
             request_id=RequestId("activate-b"),
             thread_id="thread-a",
             computer_session_id="computer-session-b",
+            computer_session_generation=2,
         )
     )
     stale = dispatcher.execute(

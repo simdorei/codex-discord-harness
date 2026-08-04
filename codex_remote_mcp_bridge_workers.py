@@ -43,27 +43,45 @@ class BridgeCommandWorkers:
         self._completed: queue.Queue[WorkerCompletion] = queue.Queue()
         self._generation_lock = threading.Lock()
         self._generation = 0
+        self._connection_cancel_event = threading.Event()
         self._close_lock = threading.Lock()
         self._closed = False
 
     def begin_connection(self) -> int:
         with self._generation_lock:
+            self._connection_cancel_event.set()
+            self._connection_cancel_event = threading.Event()
             self._generation += 1
-            return self._generation
+            generation = self._generation
+        self._dispatcher.begin_connection(generation)
+        return generation
 
     def submit(
         self,
         generation: int,
         command: GatewayCommand,
     ) -> OperationErrorResult | None:
-        if not self._capacity.acquire(blocking=False):
-            self._log("remote_mcp_bridge_command_rejected reason=capacity")
-            return OperationErrorResult(
-                request_id=command.request_id,
-                error_code="bridge_busy",
-                message="The local bridge is busy. Retry this request shortly.",
+        with self._close_lock:
+            if self._closed:
+                self._log("remote_mcp_bridge_command_rejected reason=closing")
+                return OperationErrorResult(
+                    request_id=command.request_id,
+                    error_code="bridge_closing",
+                    message="The local bridge is closing and cannot accept new work.",
+                )
+            if not self._capacity.acquire(blocking=False):
+                self._log("remote_mcp_bridge_command_rejected reason=capacity")
+                return OperationErrorResult(
+                    request_id=command.request_id,
+                    error_code="bridge_busy",
+                    message="The local bridge is busy. Retry this request shortly.",
+                )
+            future = self._executor.submit(
+                self._dispatcher.execute,
+                command,
+                connection_generation=generation,
+                cancel_event=self._cancel_event_for(generation),
             )
-        future = self._executor.submit(self._dispatcher.execute, command)
         _ = future.add_done_callback(
             lambda completed: self._finish(generation, command, completed)
         )
@@ -86,7 +104,17 @@ class BridgeCommandWorkers:
             if self._closed:
                 return
             self._closed = True
+            with self._generation_lock:
+                self._connection_cancel_event.set()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _cancel_event_for(self, generation: int) -> threading.Event:
+        with self._generation_lock:
+            if generation == self._generation:
+                return self._connection_cancel_event
+        stale = threading.Event()
+        stale.set()
+        return stale
 
     def _finish(
         self,

@@ -12,6 +12,8 @@ from simdorei_mcp_common.messages import (
     GatewayCommand,
     OperationErrorResult,
 )
+from simdorei_mcp_common.canonical_json import canonical_command_json
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 
 CacheKey: TypeAlias = tuple[str, str | None, str]
@@ -37,6 +39,8 @@ class IdempotentResultCache:
         self,
         command: GatewayCommand,
         execute: Callable[[], BridgeResult],
+        *,
+        budget: RequestBudget,
     ) -> BridgeResult:
         key = _cache_key(command)
         fingerprint = _fingerprint(command)
@@ -44,7 +48,8 @@ class IdempotentResultCache:
             while key in self._in_flight:
                 if self._in_flight[key] != fingerprint:
                     return _conflict(command)
-                self._condition.wait()
+                wait_seconds = budget.remaining(0.1)
+                _ = self._condition.wait(timeout=wait_seconds)
             cached = self._completed.get(key)
             if cached is not None:
                 if cached.fingerprint != fingerprint:
@@ -80,8 +85,9 @@ def _cache_key(command: GatewayCommand) -> CacheKey:
 
 
 def _fingerprint(command: GatewayCommand) -> str:
-    payload = command.model_dump_json(
-        exclude={"request_id", "deadline_at"},
+    payload = canonical_command_json(
+        command,
+        exclude={"deadline_at", "request_id"},
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

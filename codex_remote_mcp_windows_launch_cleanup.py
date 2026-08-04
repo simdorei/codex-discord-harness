@@ -12,6 +12,7 @@ from codex_remote_mcp_windows_launch_types import (
     ApplicationLaunchCleanupError,
     FailedLaunchCleanup,
     OwnedProcess,
+    OwnedProcessTree,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -19,8 +20,12 @@ PROFILE_CLEANUP_ATTEMPTS: Final = 60
 PROFILE_CLEANUP_DELAY_SECONDS: Final = 1.0
 
 
-def remove_temporary_profile(directory: str | None) -> None:
-    if not _cleanup_profile(directory):
+def remove_temporary_profile(
+    directory: str | None,
+    *,
+    deadline_monotonic: float | None = None,
+) -> None:
+    if not _cleanup_profile(directory, deadline_monotonic=deadline_monotonic):
         raise ComputerControlError(
             "The isolated Chrome profile could not be removed yet."
         )
@@ -29,11 +34,16 @@ def remove_temporary_profile(directory: str | None) -> None:
 def retry_failed_launch_cleanup(
     cleanup: FailedLaunchCleanup,
     remove_profile: Callable[[str | None], None],
+    *,
+    deadline_monotonic: float | None = None,
 ) -> None:
     failures: list[ComputerControlError] = []
     if cleanup.process is not None:
         try:
-            _terminate_process(cleanup.process)
+            _terminate_process(
+                cleanup.process,
+                deadline_monotonic=deadline_monotonic,
+            )
         except ComputerControlError as exc:
             failures.append(exc)
     try:
@@ -44,7 +54,24 @@ def retry_failed_launch_cleanup(
         raise ApplicationLaunchCleanupError(cleanup) from failures[0]
 
 
-def _terminate_process(process: OwnedProcess) -> None:
+def _terminate_process(
+    process: OwnedProcess,
+    *,
+    deadline_monotonic: float | None = None,
+) -> None:
+    if isinstance(process, OwnedProcessTree):
+        try:
+            timeout_seconds = (
+                5.0
+                if deadline_monotonic is None
+                else max(0.0, deadline_monotonic - time.monotonic())
+            )
+            process.terminate_tree_and_close(timeout_seconds=timeout_seconds)
+        except (OSError, TimeoutError) as exc:
+            raise ComputerControlError(
+                "Stopping the failed application process tree failed."
+            ) from exc
+        return
     if _process_exit_code(process) is not None:
         return
     try:
@@ -79,10 +106,16 @@ def _process_exit_code(process: OwnedProcess) -> int | None:
         ) from exc
 
 
-def _cleanup_profile(directory: str | None) -> bool:
+def _cleanup_profile(
+    directory: str | None,
+    *,
+    deadline_monotonic: float | None,
+) -> bool:
     if directory is None:
         return True
     for attempt in range(PROFILE_CLEANUP_ATTEMPTS):
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise TimeoutError("Timed out removing the isolated Chrome profile.")
         try:
             shutil.rmtree(directory)
             return True
@@ -96,5 +129,8 @@ def _cleanup_profile(directory: str | None) -> bool:
                     PROFILE_CLEANUP_ATTEMPTS,
                 )
                 return False
-            time.sleep(PROFILE_CLEANUP_DELAY_SECONDS)
+            delay = PROFILE_CLEANUP_DELAY_SECONDS
+            if deadline_monotonic is not None:
+                delay = min(delay, max(0.0, deadline_monotonic - time.monotonic()))
+            time.sleep(delay)
     return False

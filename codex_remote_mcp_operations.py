@@ -30,8 +30,9 @@ from codex_remote_mcp_images import (
     save_image_from_url,
 )
 from codex_remote_mcp_patch import apply_project_patch
-from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
-from codex_remote_mcp_terminal_operations import execute_terminal_operation
+from codex_remote_mcp_terminal_engine import (
+    TerminalExecutionEngine,
+)
 from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import WriteFileOutput
 from simdorei_mcp_common.operation_outputs import (
@@ -75,11 +76,19 @@ from simdorei_mcp_common.operation_requests import (
     SaveImageFromUrlRequest,
     SaveImageRequest,
 )
-from simdorei_mcp_common.terminal_window_protocol import (
-    is_terminal_operation_request,
-)
+from simdorei_mcp_common.request_deadlines import RequestBudget
+from simdorei_mcp_common.terminal_protocol import TerminalExecRequest
 from simdorei_mcp_common.terminal_window_interaction_protocol import (
-    is_terminal_window_interaction_request,
+    TerminalWindowActivateRequest,
+    TerminalWindowCaptureRequest,
+    TerminalWindowInterruptRequest,
+    TerminalWindowKeysRequest,
+    TerminalWindowTypeRequest,
+)
+from simdorei_mcp_common.terminal_window_protocol import (
+    TerminalWindowCloseRequest,
+    TerminalWindowListRequest,
+    TerminalWindowOpenRequest,
 )
 
 
@@ -94,17 +103,96 @@ def execute_project_operation(
     computer: ComputerController | None = None,
     terminal: TerminalExecutionEngine | None = None,
     terminal_windows: TerminalWindowManager | None = None,
+    budget: RequestBudget,
 ) -> ProjectOperationOutput:
     """Execute one typed capability inside a validated project root."""
-    if is_terminal_operation_request(
-        operation
-    ) or is_terminal_window_interaction_request(operation):
-        return execute_terminal_operation(
-            operation,
-            terminal=terminal,
-            terminal_windows=terminal_windows,
-        )
+    budget.ensure_active()
     match operation:
+        case TerminalExecRequest():
+            if terminal is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal execution is unavailable for this project session",
+                )
+            output = terminal.execute(
+                operation,
+                cancel_event=budget.cancel_event,
+                timeout_seconds=budget.remaining(operation.timeout_seconds),
+            )
+            budget.ensure_active()
+            return output
+        case TerminalWindowOpenRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.open(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowListRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.list()
+            budget.ensure_active()
+            return output
+        case TerminalWindowCloseRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.close(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowCaptureRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.capture(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowActivateRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.activate(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowTypeRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.type_text(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowKeysRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.press_keys(operation)
+            budget.ensure_active()
+            return output
+        case TerminalWindowInterruptRequest():
+            if terminal_windows is None:
+                raise ProjectCapabilityError(
+                    "terminal",
+                    "terminal windows are unavailable for this project session",
+                )
+            output = terminal_windows.interrupt(operation)
+            budget.ensure_active()
+            return output
         case (
             ComputerListWindowsRequest()
             | ComputerActivateRequest()
@@ -119,33 +207,38 @@ def execute_project_operation(
             | ComputerSetClipboardRequest()
             | ComputerStopRequest()
         ):
-            return execute_computer_operation(operation, controller=computer)
+            return execute_computer_operation(
+                operation,
+                controller=computer,
+                budget=budget,
+            )
         case ProjectRulesRequest():
-            return read_project_rules(root)
+            return read_project_rules(root, budget=budget)
         case CodeSearchRequest():
-            return search_project(root, operation)
+            return search_project(root, operation, budget=budget)
         case CommandListRequest():
-            return list_commands(root)
+            return list_commands(root, budget=budget)
         case CommandRunRequest():
-            return run_command(root, operation)
+            return run_command(root, operation, budget=budget)
         case FileCreateRequest():
-            return _create_file(root, operation)
+            return _create_file(root, operation, budget=budget)
         case FileApplyPatchRequest():
-            return apply_project_patch(root, operation)
+            return apply_project_patch(root, operation, budget=budget)
         case RepoStatusRequest():
-            return repo_status(root)
+            return repo_status(root, budget=budget)
         case RepoDiffRequest():
-            return repo_diff(root)
+            return repo_diff(root, budget=budget)
         case GitCommitRequest():
-            return git_commit(root, operation)
+            return git_commit(root, operation, budget=budget)
         case GitPushRequest():
-            return git_push(root, operation)
+            return git_push(root, operation, budget=budget)
         case SaveImageRequest():
             return save_image(
                 root,
                 operation.path,
                 operation.data_base64,
                 overwrite=operation.overwrite,
+                budget=budget,
             )
         case SaveImageFromUrlRequest():
             return save_image_from_url(
@@ -153,36 +246,45 @@ def execute_project_operation(
                 operation.path,
                 str(operation.url),
                 overwrite=operation.overwrite,
+                budget=budget,
             )
         case ListImagesRequest():
-            return list_images(root)
+            return list_images(root, budget=budget)
         case RetrieveImageRequest():
-            return retrieve_image(root, operation.path)
+            return retrieve_image(root, operation.path, budget=budget)
         case ProjectStatusRequest():
-            return _project_status(root)
+            return _project_status(root, budget=budget)
         case CheckpointListRequest():
-            return CheckpointListOutput(checkpoints=list_checkpoints(root))
+            return CheckpointListOutput(
+                checkpoints=list_checkpoints(root, budget=budget)
+            )
         case CheckpointShowRequest():
             checkpoint, patch = show_checkpoint(
                 root,
                 operation.checkpoint_id,
+                budget=budget,
             )
             return CheckpointShowOutput(checkpoint=checkpoint, patch=patch)
         case CheckpointRestoreRequest():
-            restored = restore_checkpoint(root, operation.checkpoint_id)
+            restored = restore_checkpoint(
+                root,
+                operation.checkpoint_id,
+                budget=budget,
+            )
             return CheckpointRestoreOutput(
                 checkpoint_id=operation.checkpoint_id,
                 restored_files=restored,
             )
         case unreachable:
-            # TypeGuard narrowing applies only to its true branch.
-            assert_never(unreachable)  # pyright: ignore[reportArgumentType]
+            assert_never(unreachable)
 
 
-def _project_status(root: Path) -> ProjectStatusOutput:
-    status = repo_status(root)
-    rules = read_project_rules(root)
-    commands = list_commands(root)
+def _project_status(root: Path, *, budget: RequestBudget) -> ProjectStatusOutput:
+    status = repo_status(root, budget=budget)
+    budget.ensure_active()
+    rules = read_project_rules(root, budget=budget)
+    budget.ensure_active()
+    commands = list_commands(root, budget=budget)
     return ProjectStatusOutput(
         branch=status.branch,
         dirty_files=status.dirty_files,
@@ -195,11 +297,14 @@ def _project_status(root: Path) -> ProjectStatusOutput:
 def _create_file(
     root: Path,
     request: FileCreateRequest,
+    *,
+    budget: RequestBudget,
 ) -> FileCreateOutput:
     access = ProjectFileAccess(root)
     target = access.resolve_path(request.path, require_file=False)
     if access.file_exists(request.path) and not request.overwrite:
         raise ProjectCapabilityError(request.path, "file already exists")
+    budget.ensure_active()
     draft = begin_checkpoint(
         root,
         "create",
@@ -213,6 +318,7 @@ def _create_file(
             max_lines=1,
         ).sha256
     with checkpoint_transaction(draft) as transaction:
+        budget.ensure_active()
         written = access.write_file(
             request.path,
             request.content,
@@ -234,16 +340,19 @@ def write_file_with_checkpoint(
     content: str,
     *,
     expected_sha256: str | None,
+    budget: RequestBudget,
 ) -> WriteFileOutput:
     """Preserve compatibility for the legacy write tool without losing undo."""
     access = ProjectFileAccess(root)
     target = access.resolve_path(path, require_file=False)
+    budget.ensure_active()
     draft = begin_checkpoint(
         root,
         "write file",
         (CheckpointTarget(path=path, absolute_path=target),),
     )
     with checkpoint_transaction(draft) as transaction:
+        budget.ensure_active()
         output = access.write_file(
             path,
             content,

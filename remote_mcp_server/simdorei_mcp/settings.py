@@ -40,7 +40,37 @@ class GatewaySettings(BaseSettings):
         ge=1,
         le=1_000,
     )
+    oauth_authorization_code_global_limit: int = Field(
+        default=1_024,
+        ge=1,
+        le=100_000,
+    )
+    oauth_authorization_code_per_client_limit: int = Field(
+        default=64,
+        ge=1,
+        le=10_000,
+    )
     oauth_client_limit: int = Field(default=500, ge=10, le=10_000)
+    oauth_token_family_global_limit: int = Field(
+        default=256,
+        ge=1,
+        le=100_000,
+    )
+    oauth_token_family_per_client_limit: int = Field(
+        default=16,
+        ge=1,
+        le=10_000,
+    )
+    oauth_refresh_history_global_limit: int = Field(
+        default=65_536,
+        ge=1,
+        le=1_000_000,
+    )
+    oauth_refresh_history_per_family_limit: int = Field(
+        default=1_024,
+        ge=1,
+        le=100_000,
+    )
     request_timeout_seconds: float = Field(
         default=GATEWAY_REQUEST_TIMEOUT_SECONDS,
         ge=GATEWAY_REQUEST_TIMEOUT_SECONDS,
@@ -64,6 +94,24 @@ def load_gateway_settings() -> GatewaySettings:
             "SIMDOREI_MCP_OAUTH_PENDING_AUTHORIZATION_LIMIT"
         ),
         "oauth_client_limit": "SIMDOREI_MCP_OAUTH_CLIENT_LIMIT",
+        "oauth_authorization_code_global_limit": (
+            "SIMDOREI_MCP_OAUTH_AUTHORIZATION_CODE_GLOBAL_LIMIT"
+        ),
+        "oauth_authorization_code_per_client_limit": (
+            "SIMDOREI_MCP_OAUTH_AUTHORIZATION_CODE_PER_CLIENT_LIMIT"
+        ),
+        "oauth_token_family_global_limit": (
+            "SIMDOREI_MCP_OAUTH_TOKEN_FAMILY_GLOBAL_LIMIT"
+        ),
+        "oauth_token_family_per_client_limit": (
+            "SIMDOREI_MCP_OAUTH_TOKEN_FAMILY_PER_CLIENT_LIMIT"
+        ),
+        "oauth_refresh_history_global_limit": (
+            "SIMDOREI_MCP_OAUTH_REFRESH_HISTORY_GLOBAL_LIMIT"
+        ),
+        "oauth_refresh_history_per_family_limit": (
+            "SIMDOREI_MCP_OAUTH_REFRESH_HISTORY_PER_FAMILY_LIMIT"
+        ),
         "request_timeout_seconds": "SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS",
         "log_level": "SIMDOREI_MCP_LOG_LEVEL",
     }

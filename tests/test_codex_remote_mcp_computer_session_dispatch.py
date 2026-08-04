@@ -26,12 +26,17 @@ from tests.remote_mcp_computer_fakes import (
 )
 
 
-def _activate(dispatcher: LocalProjectDispatcher, generation: str) -> None:
+def _activate(
+    dispatcher: LocalProjectDispatcher,
+    session_id: str,
+    session_generation: int,
+) -> None:
     result = dispatcher.execute(
         ProjectSessionCommand(
-            request_id=RequestId(f"activate-{generation}"),
+            request_id=RequestId(f"activate-{session_id}"),
             thread_id="thread-a",
-            computer_session_id=generation,
+            computer_session_id=session_id,
+            computer_session_generation=session_generation,
         )
     )
     assert isinstance(result, ProjectSessionResult)
@@ -47,7 +52,7 @@ def test_new_chat_session_revokes_previous_screenshot_token(tmp_path: Path) -> N
         tmp_path,
         datetime.now(UTC) + timedelta(minutes=10),
     )
-    _activate(dispatcher, "computer-session-a")
+    _activate(dispatcher, "computer-session-a", 1)
     captured = dispatcher.execute(
         ProjectOperationCommand(
             request_id=RequestId("request-capture-session-a"),
@@ -59,7 +64,7 @@ def test_new_chat_session_revokes_previous_screenshot_token(tmp_path: Path) -> N
     assert isinstance(captured, ProjectOperationResult)
     assert isinstance(captured.output, ComputerScreenshotOutput)
 
-    _activate(dispatcher, "computer-session-b")
+    _activate(dispatcher, "computer-session-b", 2)
     stale = dispatcher.execute(
         ProjectOperationCommand(
             request_id=RequestId("request-click-session-a"),
@@ -86,8 +91,8 @@ def test_new_chat_session_rejects_stale_file_mutation(tmp_path: Path) -> None:
         tmp_path,
         datetime.now(UTC) + timedelta(minutes=10),
     )
-    _activate(dispatcher, "computer-session-a")
-    _activate(dispatcher, "computer-session-b")
+    _activate(dispatcher, "computer-session-a", 1)
+    _activate(dispatcher, "computer-session-b", 2)
 
     stale = dispatcher.execute(
         ProjectOperationCommand(
@@ -111,8 +116,8 @@ def test_new_chat_session_rejects_stale_legacy_file_command(tmp_path: Path) -> N
         tmp_path,
         datetime.now(UTC) + timedelta(minutes=10),
     )
-    _activate(dispatcher, "computer-session-a")
-    _activate(dispatcher, "computer-session-b")
+    _activate(dispatcher, "computer-session-a", 1)
+    _activate(dispatcher, "computer-session-b", 2)
 
     stale = dispatcher.execute(
         ReadFileCommand(

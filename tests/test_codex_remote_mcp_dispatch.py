@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import assert_never
 
+import pytest
+
+import codex_remote_mcp_dispatch as dispatch_module
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
     ListFilesResult,
@@ -19,6 +23,7 @@ from simdorei_mcp_common.messages import (
 )
 from simdorei_mcp_common.operation_outputs import FileCreateOutput
 from simdorei_mcp_common.operation_requests import FileCreateRequest
+from simdorei_mcp_common.request_deadlines import RequestBudget
 from tests.remote_mcp_dispatch_support import (
     TEST_PROJECT_SESSION_ID,
     activate_test_session,
@@ -268,3 +273,78 @@ def test_expired_mutation_is_not_executed(tmp_path: Path) -> None:
     assert isinstance(result, OperationErrorResult)
     assert result.error_code == "request_expired"
     assert not (root / "late.txt").exists()
+
+
+def test_mutation_expiring_while_waiting_for_lock_never_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        root,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    activate_test_session(dispatcher)
+    project = dispatcher._state.binding("thread-a")
+    assert project is not None
+    admitted = threading.Event()
+    original_requires_lock = dispatch_module.requires_execution_lock
+
+    def tracked_requires_lock(command) -> bool:
+        admitted.set()
+        return original_requires_lock(command)
+
+    monkeypatch.setattr(
+        dispatch_module,
+        "requires_execution_lock",
+        tracked_requires_lock,
+    )
+    fake_now = [0.0]
+    budget = RequestBudget(
+        _deadline_monotonic=1.0,
+        _clock=lambda: fake_now[0],
+    )
+    monkeypatch.setattr(
+        dispatch_module.RequestBudget,
+        "from_deadline",
+        classmethod(lambda _cls, _deadline, *, cancel_event=None: budget),
+    )
+    deadline = datetime.now(UTC) + timedelta(minutes=1)
+    results = []
+
+    def mutate() -> None:
+        results.append(
+            dispatcher.execute(
+                ProjectOperationCommand(
+                    request_id=RequestId("request-lock-expired"),
+                    thread_id="thread-a",
+                    computer_session_id=TEST_PROJECT_SESSION_ID,
+                    deadline_at=deadline,
+                    operation=FileCreateRequest(
+                        path="late-after-lock.txt",
+                        content="must not be written",
+                    ),
+                )
+            )
+        )
+
+    project.execution_lock.acquire()
+    worker = threading.Thread(target=mutate)
+    try:
+        worker.start()
+        assert admitted.wait(timeout=2)
+        fake_now[0] = 2.0
+    finally:
+        project.execution_lock.release()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert len(results) == 1
+    assert isinstance(results[0], OperationErrorResult)
+    assert results[0].error_code == "request_expired"
+    assert not (root / "late-after-lock.txt").exists()
+    checkpoint_dir = root / ".codex-remote-mcp" / "checkpoints"
+    assert not checkpoint_dir.exists() or not tuple(checkpoint_dir.iterdir())

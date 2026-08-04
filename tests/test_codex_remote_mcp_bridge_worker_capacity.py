@@ -27,8 +27,11 @@ def test_worker_capacity_returns_an_explicit_busy_result(
     def delayed_execute(
         self: LocalProjectDispatcher,
         command: ProjectInfoCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> BridgeResult:
-        _ = self
+        _ = self, connection_generation, cancel_event
         started.set()
         assert release.wait(timeout=5)
         return ProjectInfoResult(
@@ -68,10 +71,15 @@ def test_close_does_not_wait_forever_for_a_running_command(
     def delayed_execute(
         self: LocalProjectDispatcher,
         command: ProjectInfoCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> BridgeResult:
-        _ = self, command
+        _ = self, command, connection_generation
         started.set()
-        assert release.wait(timeout=5)
+        assert cancel_event is not None
+        assert cancel_event.wait(timeout=5)
+        release.set()
         return ProjectInfoResult(
             request_id=command.request_id,
             output=ProjectInfoOutput(root="C:/qa", thread_id=command.thread_id),
@@ -88,6 +96,21 @@ def test_close_does_not_wait_forever_for_a_running_command(
         assert time.monotonic() - started_at < 0.5
     finally:
         release.set()
+
+
+def test_submit_after_close_returns_an_explicit_error() -> None:
+    workers = BridgeCommandWorkers(
+        LocalProjectDispatcher(),
+        log=lambda _: None,
+        max_workers=1,
+    )
+    generation = workers.begin_connection()
+    workers.close()
+
+    rejected = workers.submit(generation, _command("after-close"))
+
+    assert isinstance(rejected, OperationErrorResult)
+    assert rejected.error_code == "bridge_closing"
 
 
 def _command(request_id: str) -> ProjectInfoCommand:

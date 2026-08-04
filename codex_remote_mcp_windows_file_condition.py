@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+from codex_remote_mcp_file_hash import sha256_stream
 from codex_remote_mcp_windows_file_native import (
     DELETE_ACCESS,
     FILE_READ_ATTRIBUTES,
@@ -31,7 +31,7 @@ def validate_expected(
     verify_regular_file: VerifyRegularFile,
 ) -> bool:
     try:
-        current = read_verified(target, verify_regular_file)
+        current_sha256 = hash_verified(target, verify_regular_file)
     except FileNotFoundError:
         if expected_sha256 is not None:
             raise WindowsAtomicWriteConflictError(
@@ -40,7 +40,7 @@ def validate_expected(
         return True
     if expected_sha256 is None:
         raise WindowsAtomicWriteConflictError("existing files require expected_sha256")
-    if hashlib.sha256(current).hexdigest() != expected_sha256:
+    if current_sha256 != expected_sha256:
         raise WindowsAtomicWriteConflictError("file changed since it was read")
     return False
 
@@ -71,8 +71,12 @@ def retain_expected_target(
     validation_completed = False
     try:
         information = verify_regular_file(retained)
-        current = read_verified(target, verify_regular_file, exclusive=True)
-        if hashlib.sha256(current).hexdigest() != expected_sha256:
+        current_sha256 = hash_verified(
+            target,
+            verify_regular_file,
+            exclusive=True,
+        )
+        if current_sha256 != expected_sha256:
             raise WindowsAtomicWriteConflictError("file changed since it was read")
         validation_completed = True
         return retained, file_identity(information)
@@ -116,12 +120,12 @@ def verify_committed(
         close_handle(handle)
 
 
-def read_verified(
+def hash_verified(
     target: Path,
     verify_regular_file: VerifyRegularFile,
     *,
     exclusive: bool = False,
-) -> bytes:
+) -> str:
     handle = open_handle(
         target,
         GENERIC_READ,
@@ -135,4 +139,4 @@ def read_verified(
         close_handle(handle)
         raise
     with binary_stream(handle, writable=False) as stream:
-        return stream.read()
+        return sha256_stream(stream)

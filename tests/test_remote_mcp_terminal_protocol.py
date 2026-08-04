@@ -57,10 +57,7 @@ def test_terminal_request_rejects_invalid_bounds_and_ids() -> None:
         {"command": ""},
         {"command": "echo ok", "terminal_id": "not-a-terminal"},
         {"command": "echo ok", "timeout_seconds": 0},
-        {
-            "command": "echo ok",
-            "environment": {str(index): "x" for index in range(101)},
-        },
+        {"command": "echo ok", "environment": {str(index): "x" for index in range(101)}},
         {"command": "echo ok", "environment": {"": "x"}},
         {"command": "echo ok", "environment": {"BAD=NAME": "x"}},
         {"command": "echo ok", "environment": {"BAD\x00NAME": "x"}},

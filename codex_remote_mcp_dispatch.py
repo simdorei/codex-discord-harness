@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 import threading
+from time import monotonic
 from typing import final, overload
 
 from codex_remote_mcp_computer import (
@@ -18,11 +19,9 @@ from codex_remote_mcp_dispatch_errors import project_error_code
 from codex_remote_mcp_dispatch_state import ActiveProject, ProjectDispatchState
 from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
-from codex_remote_mcp_runtime_provenance import (
-    DEFAULT_RUNTIME_PROVENANCE_OBSERVER,
-    RuntimeProvenanceObserver,
+from codex_remote_mcp_terminal_engine import (
+    TerminalExecutionEngine,
 )
-from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
 from codex_remote_mcp_terminal_sessions import TerminalSessionRegistry
 from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import (
@@ -39,8 +38,6 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ReadFileCommand,
     ReadFileResult,
-    RuntimeCapabilityCommand,
-    RuntimeCapabilityResult,
     WriteFileCommand,
     WriteFileResult,
 )
@@ -51,6 +48,10 @@ from simdorei_mcp_common.terminal_window_interaction_protocol import (
     is_terminal_window_interaction_request,
 )
 from simdorei_mcp_common.terminal_window_protocol import is_terminal_window_request
+from simdorei_mcp_common.request_deadlines import (
+    RequestBudget,
+    RequestDeadlineExpired,
+)
 
 
 @final
@@ -61,14 +62,10 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         self,
         *,
         computer_factory: Callable[[], ComputerController] = new_computer_controller,
-        runtime_provenance: RuntimeProvenanceObserver = (
-            DEFAULT_RUNTIME_PROVENANCE_OBSERVER
-        ),
     ) -> None:
         self._state = ProjectDispatchState(computer_factory)
         self._terminal_lifecycle_lock = threading.RLock()
         self._terminals = TerminalSessionRegistry()
-        self._runtime_provenance = runtime_provenance
 
     def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
         with self._terminal_lifecycle_lock:
@@ -77,43 +74,74 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
 
     @overload
     def execute(
-        self, command: ProjectSessionCommand
+        self,
+        command: ProjectSessionCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> ProjectSessionResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: ProjectInfoCommand
+        self,
+        command: ProjectInfoCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> ProjectInfoResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: ListFilesCommand
+        self,
+        command: ListFilesCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> ListFilesResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: ReadFileCommand
+        self,
+        command: ReadFileCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> ReadFileResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: WriteFileCommand
+        self,
+        command: WriteFileCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> WriteFileResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: ProjectOperationCommand
+        self,
+        command: ProjectOperationCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> ProjectOperationResult | OperationErrorResult: ...
 
     @overload
     def execute(
-        self, command: RuntimeCapabilityCommand
-    ) -> RuntimeCapabilityResult | OperationErrorResult: ...
+        self,
+        command: GatewayCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> BridgeResult: ...
 
-    @overload
-    def execute(self, command: GatewayCommand) -> BridgeResult: ...
-
-    def execute(self, command: GatewayCommand) -> BridgeResult:
+    def execute(
+        self,
+        command: GatewayCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> BridgeResult:
         project = self._state.binding(command.thread_id)
         if project is None:
             return OperationErrorResult(
@@ -121,58 +149,94 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code="binding_missing",
                 message="The Codex thread is not bound on this device.",
             )
-        if isinstance(
+        budget = RequestBudget.from_deadline(
+            command.deadline_at,
+            cancel_event=cancel_event,
+        )
+        if _request_expired(budget):
+            return _request_expired_result(command)
+        if isinstance(command, (WriteFileCommand, ProjectOperationCommand)):
+            try:
+                return project.result_cache.execute_once(
+                    command,
+                    lambda: self._execute_admitted(
+                        command,
+                        project,
+                        budget,
+                        connection_generation,
+                    ),
+                    budget=budget,
+                )
+            except RequestDeadlineExpired:
+                return _request_expired_result(command)
+        return self._execute_admitted(
             command,
-            (WriteFileCommand, ProjectOperationCommand, RuntimeCapabilityCommand),
-        ):
-            result = project.result_cache.execute_once(
-                command,
-                lambda: self._execute_admitted(command, project),
-            )
-            if isinstance(command, ProjectOperationCommand) and isinstance(
-                result,
-                ProjectOperationResult,
-            ):
-                self._observe_runtime_terminal(command, result)
-            return result
-        return self._execute_admitted(command, project)
+            project,
+            budget,
+            connection_generation,
+        )
 
     def _execute_admitted(
         self,
         command: GatewayCommand,
         project: ActiveProject,
+        budget: RequestBudget,
+        connection_generation: int | None,
     ) -> BridgeResult:
-        if command.deadline_at <= datetime.now(UTC):
-            return OperationErrorResult(
-                request_id=command.request_id,
-                error_code="request_expired",
-                message="The local project request expired before execution.",
-            )
+        if _request_expired(budget):
+            return _request_expired_result(command)
         if isinstance(command, ProjectOperationCommand) and isinstance(
             command.operation,
             ComputerStopRequest,
         ):
-            return self._execute_computer_stop(command, project)
+            return self._execute_computer_stop(
+                command,
+                project,
+                budget,
+                connection_generation,
+            )
         if requires_execution_lock(command):
             with project.execution_lock:
-                return self._execute_locked(command, project)
-        return self._execute_locked(command, project)
+                if _request_expired(budget):
+                    return _request_expired_result(command)
+                return self._execute_locked(
+                    command,
+                    project,
+                    budget,
+                    connection_generation,
+                )
+        return self._execute_locked(
+            command,
+            project,
+            budget,
+            connection_generation,
+        )
 
     def _execute_computer_stop(
         self,
         command: ProjectOperationCommand,
         project: ActiveProject,
+        budget: RequestBudget,
+        connection_generation: int | None,
     ) -> ProjectOperationResult | OperationErrorResult:
         try:
             if project.expires_at <= datetime.now(UTC):
-                self._state.stop_computer_if_bound(command.thread_id, project)
+                self._state.stop_computer_if_bound(
+                    command.thread_id,
+                    project,
+                    deadline_monotonic=monotonic() + budget.remaining(),
+                )
                 return OperationErrorResult(
                     request_id=command.request_id,
                     error_code="binding_expired",
                     message="The local project binding expired. Run !pro again.",
                 )
             self._state.stop_computer_if_current(
-                command.thread_id, project, command.computer_session_id
+                command.thread_id,
+                project,
+                command.computer_session_id,
+                connection_generation,
+                deadline_monotonic=monotonic() + budget.remaining(),
             )
         except ProjectFileError as exc:
             return OperationErrorResult(
@@ -191,12 +255,19 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         self,
         command: GatewayCommand,
         project: ActiveProject,
+        budget: RequestBudget,
+        connection_generation: int | None,
     ) -> BridgeResult:
+        if _request_expired(budget):
+            return _request_expired_result(command)
         computer: ComputerController | None = None
         terminal: TerminalExecutionEngine | None = None
         terminal_windows: TerminalWindowManager | None = None
         if project.expires_at <= datetime.now(UTC):
-            self._stop_computer(command.thread_id)
+            self._stop_computer(
+                command.thread_id,
+                deadline_monotonic=monotonic() + budget.remaining(),
+            )
             return OperationErrorResult(
                 request_id=command.request_id,
                 error_code="binding_expired",
@@ -215,6 +286,8 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     command.thread_id,
                     project,
                     generation,
+                    command.computer_session_generation,
+                    connection_generation,
                 )
             except ProjectFileError as exc:
                 return OperationErrorResult(
@@ -222,13 +295,13 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     error_code=project_error_code(exc),
                     message=redact(str(exc)),
                 )
-            self._runtime_provenance.bind_route(command)
             return ProjectSessionResult(request_id=command.request_id)
         try:
             self._require_project_session(
                 command.thread_id,
                 project,
                 command.computer_session_id,
+                connection_generation,
             )
         except ProjectFileError as exc:
             return OperationErrorResult(
@@ -236,18 +309,6 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code=project_error_code(exc),
                 message=redact(str(exc)),
             )
-        if isinstance(command, RuntimeCapabilityCommand):
-            try:
-                return self._runtime_provenance.capability(command)
-            except RuntimeError as exc:
-                return OperationErrorResult(
-                    request_id=command.request_id,
-                    error_code="runtime_observation_failed",
-                    message=(
-                        "Runtime capability evidence was rejected: "
-                        + type(exc).__name__
-                    ),
-                )
         if isinstance(command, ProjectOperationCommand) and is_computer_operation(
             command.operation
         ):
@@ -262,6 +323,7 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     command.thread_id,
                     project,
                     command.computer_session_id,
+                    connection_generation,
                 )
             except ProjectFileError as exc:
                 return OperationErrorResult(
@@ -284,10 +346,9 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     command.thread_id,
                     project,
                     command.computer_session_id,
+                    connection_generation,
                 )
-            if isinstance(
-                command, ProjectOperationCommand
-            ) and (
+            if isinstance(command, ProjectOperationCommand) and (
                 is_terminal_window_request(command.operation)
                 or is_terminal_window_interaction_request(command.operation)
             ):
@@ -295,22 +356,32 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                     command.thread_id,
                     project,
                     command.computer_session_id,
+                    connection_generation,
                 )
-            if terminal is None and terminal_windows is None:
-                result = execute_bound_project_command(
+            if terminal_windows is not None:
+                return execute_bound_project_command(
                     command,
                     project.access,
                     computer,
-                )
-            else:
-                result = execute_bound_project_command(
-                    command,
-                    project.access,
-                    computer,
-                    terminal=terminal,
                     terminal_windows=terminal_windows,
+                    budget=budget,
                 )
-            return result
+            if terminal is None:
+                return execute_bound_project_command(
+                    command,
+                    project.access,
+                    computer,
+                    budget=budget,
+                )
+            return execute_bound_project_command(
+                command,
+                project.access,
+                computer,
+                terminal=terminal,
+                budget=budget,
+            )
+        except RequestDeadlineExpired:
+            return _request_expired_result(command)
         except ProjectFileError as exc:
             return OperationErrorResult(
                 request_id=command.request_id,
@@ -318,33 +389,18 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 message=redact(str(exc)),
             )
 
-    def _observe_runtime_terminal(
-        self,
-        command: ProjectOperationCommand,
-        result: ProjectOperationResult,
-    ) -> None:
-        try:
-            self._runtime_provenance.terminal(command, result.output)
-        except (OSError, OverflowError, RuntimeError, ValueError):
-            # The terminal side effect already succeeded. Provenance failure
-            # must fail the release cycle without hiding that success.
-            try:
-                self._runtime_provenance.invalidate(
-                    "terminal_runtime_observer_failed"
-                )
-            except (OSError, OverflowError, RuntimeError, ValueError):
-                pass
-
     def _computer_for(
         self,
         thread_id: str,
         expected_project: ActiveProject,
         computer_session_id: str | None,
+        connection_generation: int | None,
     ) -> ComputerController | None:
         return self._state.computer_for(
             thread_id,
             expected_project,
             computer_session_id,
+            connection_generation,
         )
 
     def _activate_project_session(
@@ -352,12 +408,16 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         thread_id: str,
         expected_project: ActiveProject,
         computer_session_id: str,
+        computer_session_generation: int,
+        connection_generation: int | None,
     ) -> None:
         with self._terminal_lifecycle_lock:
             self._state.activate(
                 thread_id,
                 expected_project,
                 computer_session_id,
+                computer_session_generation,
+                connection_generation,
             )
             _ = self._terminals.for_session(
                 thread_id,
@@ -370,9 +430,15 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         thread_id: str,
         expected_project: ActiveProject,
         session_id: str | None,
+        connection_generation: int | None,
     ) -> TerminalExecutionEngine:
         with self._terminal_lifecycle_lock:
-            self._state.require(thread_id, expected_project, session_id)
+            self._state.require(
+                thread_id,
+                expected_project,
+                session_id,
+                connection_generation,
+            )
             if session_id is None:
                 raise ProjectFileError(
                     "terminal",
@@ -389,9 +455,15 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         thread_id: str,
         expected_project: ActiveProject,
         session_id: str | None,
+        connection_generation: int | None,
     ) -> TerminalWindowManager:
         with self._terminal_lifecycle_lock:
-            self._state.require(thread_id, expected_project, session_id)
+            self._state.require(
+                thread_id,
+                expected_project,
+                session_id,
+                connection_generation,
+            )
             if session_id is None:
                 raise ProjectFileError(
                     "terminal",
@@ -408,15 +480,60 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         thread_id: str,
         expected_project: ActiveProject,
         computer_session_id: str | None,
+        connection_generation: int | None,
     ) -> None:
-        self._state.require(thread_id, expected_project, computer_session_id)
+        self._state.require(
+            thread_id,
+            expected_project,
+            computer_session_id,
+            connection_generation,
+        )
 
-    def invalidate_computer_sessions(self) -> None:
+    def begin_connection(self, generation: int) -> None:
         with self._terminal_lifecycle_lock:
-            self._state.invalidate_sessions()
+            self._state.begin_connection(generation)
             self._terminals.close_all()
 
-    def _stop_computer(self, thread_id: str) -> None:
+    def retire_computer_sessions(self) -> None:
+        with self._terminal_lifecycle_lock:
+            self._state.retire_sessions()
+            self._terminals.close_all()
+
+    def invalidate_computer_sessions(
+        self,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> None:
+        with self._terminal_lifecycle_lock:
+            self._state.retire_sessions()
+            self._terminals.close_all()
+            self._state.invalidate_sessions(deadline_monotonic=deadline_monotonic)
+
+    def _stop_computer(
+        self,
+        thread_id: str,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> None:
         with self._terminal_lifecycle_lock:
             self._terminals.close_thread(thread_id)
-            self._state.stop_computer(thread_id)
+            self._state.stop_computer(
+                thread_id,
+                deadline_monotonic=deadline_monotonic,
+            )
+
+
+def _request_expired(budget: RequestBudget) -> bool:
+    try:
+        budget.ensure_active()
+    except RequestDeadlineExpired:
+        return True
+    return False
+
+
+def _request_expired_result(command: GatewayCommand) -> OperationErrorResult:
+    return OperationErrorResult(
+        request_id=command.request_id,
+        error_code="request_expired",
+        message="The local project request expired before execution.",
+    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Protocol, assert_never
 
 from codex_remote_mcp_computer_contracts import ComputerActionPermit, ComputerPlatform
@@ -26,6 +27,7 @@ from simdorei_mcp_common.operation_requests import (
     ComputerStopRequest,
     ComputerTypeTextRequest,
 )
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +49,14 @@ class ComputerControllerLike(Protocol):
 def execute_running_operation(
     request: ComputerOperation,
     active: ComputerControllerLike,
+    *,
+    budget: RequestBudget | None = None,
 ) -> ComputerWindowsOutput | ComputerScreenshotOutput | ComputerActionOutput:
+    ensure_active: Callable[[], None] | None = (
+        budget.ensure_active if budget is not None else None
+    )
+    if ensure_active is not None:
+        ensure_active()
     match request:
         case ComputerListWindowsRequest():
             return active.list_windows()
@@ -58,7 +67,12 @@ def execute_running_operation(
             return _action("activate", window.window_id, "Window activated.")
         case ComputerLaunchRequest(app=app):
             active.require_running()
-            active.platform.launch(app)
+            if ensure_active is None:
+                active.platform.launch(app)
+            else:
+                active.platform.launch(app, ensure_active=ensure_active)
+            if ensure_active is not None:
+                ensure_active()
             active.require_running()
             return _action("launch", None, f"{app} launch requested.")
         case ComputerScreenshotRequest(window_id=window_id):
@@ -116,8 +130,7 @@ def execute_running_operation(
             return _action("set_clipboard", clipboard.window_id, "Clipboard text set.")
         case ComputerStopRequest():
             raise ComputerControlError("Computer stop must use the controller stop path.")
-        case unreachable:
-            assert_never(unreachable)
+    assert_never(request)
 
 
 def _action(

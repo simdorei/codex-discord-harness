@@ -82,18 +82,6 @@ def is_terminal_window_request(value: object) -> TypeGuard[TerminalWindowRequest
     )
 
 
-def is_terminal_operation_request(value: object) -> TypeGuard[TerminalOperationRequest]:
-    return isinstance(
-        value,
-        (
-            TerminalExecRequest,
-            TerminalWindowOpenRequest,
-            TerminalWindowListRequest,
-            TerminalWindowCloseRequest,
-        ),
-    )
-
-
 __all__ = [
     "TerminalWindowCloseOutput",
     "TerminalWindowCloseRequest",
@@ -108,6 +96,5 @@ __all__ = [
     "TerminalWindowShell",
     "TerminalOperationOutput",
     "TerminalOperationRequest",
-    "is_terminal_operation_request",
     "is_terminal_window_request",
 ]

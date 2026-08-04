@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import AsyncIterator
+from builtins import BaseExceptionGroup
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
 from typing import assert_never
 
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from mcp.server.auth.settings import (
     AuthSettings,
     ClientRegistrationOptions,
@@ -24,7 +27,10 @@ from remote_mcp_server.simdorei_mcp.capability_inventory import (
 )
 from remote_mcp_server.simdorei_mcp.mcp_instructions import MCP_INSTRUCTIONS
 from remote_mcp_server.simdorei_mcp.oauth_approval import create_approval_router
-from remote_mcp_server.simdorei_mcp.oauth_provider import SingleUserOAuthProvider
+from remote_mcp_server.simdorei_mcp.oauth_provider import (
+    SingleUserOAuthProvider,
+    TokenCapacityError,
+)
 from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     DEFAULT_OAUTH_SCOPES,
     OAUTH_SCOPES,
@@ -47,7 +53,6 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ProjectUpsert,
     ReadFileResult,
-    RuntimeCapabilityResult,
     WriteFileResult,
     parse_bridge_message,
 )
@@ -77,6 +82,16 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         store=OAuthStore(
             settings.oauth_database_path,
             max_clients=settings.oauth_client_limit,
+            max_token_families=settings.oauth_token_family_global_limit,
+            max_token_families_per_client=(
+                settings.oauth_token_family_per_client_limit
+            ),
+            max_refresh_history_global=(
+                settings.oauth_refresh_history_global_limit
+            ),
+            max_refresh_history_per_family=(
+                settings.oauth_refresh_history_per_family_limit
+            ),
         ),
         owner_token=settings.owner_token,
         public_base_url=public_base_url,
@@ -84,6 +99,10 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         access_token_seconds=settings.oauth_access_token_seconds,
         refresh_token_seconds=settings.oauth_refresh_token_seconds,
         pending_authorization_limit=(settings.oauth_pending_authorization_limit),
+        authorization_code_limit=settings.oauth_authorization_code_global_limit,
+        authorization_code_per_client_limit=(
+            settings.oauth_authorization_code_per_client_limit
+        ),
     )
     mcp = FastMCP(
         "simdorei-local-project",
@@ -116,14 +135,15 @@ def create_app(settings: GatewaySettings) -> FastAPI:
     register_tools(mcp, broker)
     _ = require_complete_tool_inventory(registered_tool_names(mcp))
     mcp_app = mcp.streamable_http_app()
+    mcp_app.add_exception_handler(TokenCapacityError, _token_capacity_error_response)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        try:
-            async with mcp.session_manager.run():
-                yield
-        finally:
-            await oauth_provider.close()
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+        async with _close_preserving_lifespan(
+            mcp.session_manager.run(),
+            oauth_provider.close,
+        ):
+            yield
 
     app = FastAPI(
         title="Simdorei Local Project MCP",
@@ -171,13 +191,13 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                     | ReadFileResult()
                     | WriteFileResult()
                     | ProjectOperationResult()
-                    | RuntimeCapabilityResult()
                     | ProjectSessionResult()
                     | OperationErrorResult()
                 ):
                     await sender.reject(1002, "hello required")
                     return
-                case unreachable:
+                # Preserve a runtime guard at the validated WebSocket boundary.
+                case unreachable:  # pyright: ignore[reportUnnecessaryComparison]
                     assert_never(unreachable)
             while True:
                 message = parse_bridge_message(await socket.receive_text())
@@ -193,22 +213,22 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                                 binding_id=binding_id,
                             )
                         )
+                        continue
                     case (
                         ProjectInfoResult()
                         | ListFilesResult()
                         | ReadFileResult()
                         | WriteFileResult()
                         | ProjectOperationResult()
-                        | RuntimeCapabilityResult()
                         | ProjectSessionResult()
                         | OperationErrorResult()
                     ):
                         await broker.complete(expected_device_id, sender, message)
+                        continue
                     case BridgeHello():
                         await sender.reject(1002, "duplicate hello")
                         return
-                    case unreachable:
-                        assert_never(unreachable)
+                assert_never(message)
         except WebSocketDisconnect:
             LOGGER.info("bridge.disconnected", device_id=expected_device_id)
         except (ValidationError, BrokerError) as exc:
@@ -224,6 +244,26 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     app.mount("/", mcp_app)
     return app
+
+
+@asynccontextmanager
+async def _close_preserving_lifespan(
+    session_context: AbstractAsyncContextManager[None],
+    close_oauth: Callable[[], Awaitable[None]],
+) -> AsyncGenerator[None, None]:
+    try:
+        async with session_context:
+            yield
+    except BaseException as session_error:  # noqa: BLE001 - preserve teardown failures.
+        try:
+            await close_oauth()
+        except BaseException as close_error:  # noqa: BLE001 - preserve both failures.
+            raise BaseExceptionGroup(
+                "MCP session and OAuth shutdown failures",
+                (session_error, close_error),
+            ) from None
+        raise
+    await close_oauth()
 
 
 def _authorized(socket: WebSocket, settings: GatewaySettings) -> bool:
@@ -245,3 +285,17 @@ def _public_host(settings: GatewaySettings) -> str:
             "SIMDOREI_MCP_PUBLIC_BASE_URL must include a host."
         )
     return host
+
+
+async def _token_capacity_error_response(
+    _request: Request,
+    _error: Exception,
+) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "temporarily_unavailable",
+            "error_description": "OAuth token storage capacity is full.",
+        },
+        status_code=503,
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )

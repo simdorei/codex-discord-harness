@@ -19,6 +19,7 @@ def activate_test_session(
             request_id=RequestId(f"activate-{thread_id}"),
             thread_id=thread_id,
             computer_session_id=TEST_PROJECT_SESSION_ID,
+            computer_session_generation=1,
         )
     )
     assert isinstance(result, ProjectSessionResult)

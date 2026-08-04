@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import assert_never, final
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from codex_remote_mcp_bridge_connection import (
     BridgeSocket,
     RemoteMcpBridgeError,
     SerializedBridgeConnection,
+    close_socket_before_deadline,
     connect_bridge,
     invalidate_sessions,
     receive_message,
@@ -40,7 +42,6 @@ from simdorei_mcp_common.messages import (
     ProjectInfoCommand,
     ProjectOperationCommand,
     ProjectSessionCommand,
-    RuntimeCapabilityCommand,
     ProjectUpsert,
     ReadFileCommand,
     WriteFileCommand,
@@ -64,11 +65,15 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         dispatcher: LocalProjectDispatcher | None = None,
         log: LogFunc,
         now: NowFactory = lambda: datetime.now(UTC),
+        close_timeout_seconds: float = 12.0,
     ) -> None:
+        if close_timeout_seconds <= 0:
+            raise ValueError("close_timeout_seconds must be positive")
         self._config = config
         self._connector = connector or connect_bridge
         self._log = log
         self._now = now
+        self._close_timeout_seconds = close_timeout_seconds
         self._dispatcher = dispatcher or LocalProjectDispatcher()
         self._workers = BridgeCommandWorkers(self._dispatcher, log=log)
         self._condition = threading.Condition()
@@ -189,29 +194,49 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             self._stop.clear()
 
     def close(self) -> None:
+        deadline_monotonic = monotonic() + self._close_timeout_seconds
         self._stop.set()
+        self._workers.close()
+        self._dispatcher.retire_computer_sessions()
         with self._condition:
             self._connected = False
             self._acked.clear()
             self._condition.notify_all()
         with self._socket_lock:
             socket = self._active_socket
+        socket_close_completed = True
         if socket is not None:
-            try:
-                socket.close()
-            except (OSError, WebSocketException) as exc:
-                self._log(f"remote_mcp_bridge_close_failed error={type(exc).__name__}")
-        _ = invalidate_sessions(self._dispatcher, self._log)
+            attempt = close_socket_before_deadline(
+                socket,
+                deadline_monotonic=deadline_monotonic,
+            )
+            socket_close_completed = attempt.completed
+            if attempt.error is not None:
+                self._log(
+                    "remote_mcp_bridge_close_failed "
+                    + f"error={type(attempt.error).__name__}"
+                )
         thread = self._thread
         if thread is not None and thread.is_alive():
-            thread.join(timeout=12)
-        if thread is not None and thread.is_alive():
-            raise RemoteMcpBridgeError("The local project bridge did not stop in time.")
-        self._workers.close()
-        cleanup_complete = invalidate_sessions(self._dispatcher, self._log)
+            thread.join(timeout=max(0.0, deadline_monotonic - monotonic()))
+        thread_stopped = thread is None or not thread.is_alive()
+        cleanup_complete = invalidate_sessions(
+            self._dispatcher,
+            self._log,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if not socket_close_completed:
+            raise RemoteMcpBridgeError(
+                "The local project bridge socket did not close before the deadline."
+            )
+        if not thread_stopped:
+            raise RemoteMcpBridgeError(
+                "The local project bridge did not stop before the close deadline."
+            )
         if not cleanup_complete:
             raise RemoteMcpBridgeError(
-                "The local project bridge could not close every session-owned app."
+                "The local project bridge close deadline expired before every "
+                "session-owned app was cleaned up."
             )
 
     def _ensure_started(self) -> None:
@@ -230,8 +255,8 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
             if not owns_bridge:
                 self._fail_terminal(
                     RemoteMcpBridgeError(
-                        "Another process already owns the remote MCP connection for "
-                        + "this device."
+                        "Another process already owns the remote MCP connection "
+                        "for this device."
                     ),
                     "remote_mcp_bridge_owner_conflict",
                 )
@@ -252,7 +277,13 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                         with self._socket_lock:
                             if self._active_socket is socket:
                                 self._active_socket = None
-                        _ = invalidate_sessions(self._dispatcher, self._log)
+                        _ = invalidate_sessions(
+                            self._dispatcher,
+                            self._log,
+                            deadline_monotonic=(
+                                monotonic() + self._close_timeout_seconds
+                            ),
+                        )
             except (
                 OSError,
                 ValidationError,
@@ -306,7 +337,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=11,
+                protocol_version=9,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )
@@ -362,7 +393,6 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                     | ReadFileCommand()
                     | WriteFileCommand()
                     | ProjectOperationCommand()
-                    | RuntimeCapabilityCommand()
                     | ProjectSessionCommand()
                 ):
                     rejected = self._workers.submit(generation, message)

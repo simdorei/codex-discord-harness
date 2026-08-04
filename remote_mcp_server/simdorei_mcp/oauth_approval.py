@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from remote_mcp_server.simdorei_mcp.oauth_provider import (
+    ApprovalCapacityError,
     ApprovalDeniedError,
     ApprovalNotFoundError,
     SingleUserOAuthProvider,
@@ -17,7 +18,6 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     COMPUTER_OBSERVE_SCOPE,
     READ_SCOPE,
     TERMINAL_EXECUTE_SCOPE,
-    TERMINAL_INTERACT_SCOPE,
     WRITE_SCOPE,
 )
 
@@ -79,6 +79,11 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
                 ),
                 status_code=401,
             )
+        except ApprovalCapacityError:
+            return _page(
+                "temporarily_unavailable: OAuth authorization capacity is full.",
+                status_code=503,
+            )
         return RedirectResponse(
             redirect_url,
             status_code=302,
@@ -125,10 +130,6 @@ def _scope_description(scope: str) -> str:
         TERMINAL_EXECUTE_SCOPE: (
             "Run unrestricted local terminal commands with the selected session's "
             "host permissions. Commands do not require per-run approval."
-        ),
-        TERMINAL_INTERACT_SCOPE: (
-            "Capture and directly control terminal windows owned by the selected "
-            "ChatGPT session, without per-action approval."
         ),
         COMPUTER_OBSERVE_SCOPE: (
             "List launched app windows and capture screenshots only from the blank "

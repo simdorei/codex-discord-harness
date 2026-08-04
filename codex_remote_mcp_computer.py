@@ -38,6 +38,7 @@ from simdorei_mcp_common.operation_requests import (
     ComputerTypeTextRequest,
     ProjectOperation,
 )
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 Clock = Callable[[], float]
 TokenFactory = Callable[[], str]
@@ -134,16 +135,29 @@ class ComputerController:  # MUTABLE_OK: owns short-lived screenshot observation
         permit.require_active()
         return permit
 
-    def stop(self) -> None:
+    def stop(self, *, deadline_monotonic: float | None = None) -> None:
         self._stopped.set()
-        with self._operation_lock:
+        if deadline_monotonic is None:
+            acquired = self._operation_lock.acquire()
+        else:
+            acquired = self._operation_lock.acquire(
+                timeout=max(0.0, deadline_monotonic - time.monotonic())
+            )
+        if not acquired:
+            raise TimeoutError("Timed out waiting to stop computer control.")
+        try:
             with self._lock:
                 self._observations.clear()
                 should_stop_platform = not self._platform_stopped
             if should_stop_platform:
-                self._platform.stop()
+                if deadline_monotonic is None:
+                    self._platform.stop()
+                else:
+                    self._platform.stop(deadline_monotonic=deadline_monotonic)
                 with self._lock:
                     self._platform_stopped = True
+        finally:
+            self._operation_lock.release()
 
     def begin_operation(self) -> None:
         _ = self._operation_lock.acquire()
@@ -172,10 +186,16 @@ def execute_computer_operation(
     request: ComputerOperation,
     *,
     controller: ComputerController | None = None,
+    budget: RequestBudget | None = None,
 ) -> ComputerWindowsOutput | ComputerScreenshotOutput | ComputerActionOutput | ComputerStopOutput:
     active = controller or default_computer_controller()
     if isinstance(request, ComputerStopRequest):
-        active.stop()
+        deadline = (
+            time.monotonic() + budget.remaining()
+            if budget is not None
+            else None
+        )
+        active.stop(deadline_monotonic=deadline)
         return ComputerStopOutput(
             message="Computer control stopped until this project is bound again."
         )
@@ -183,7 +203,7 @@ def execute_computer_operation(
     try:
         from codex_remote_mcp_computer_execute import execute_running_operation
 
-        return execute_running_operation(request, active)
+        return execute_running_operation(request, active, budget=budget)
     finally:
         active.end_operation()
 

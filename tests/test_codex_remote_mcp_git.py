@@ -79,6 +79,21 @@ def test_repo_status_and_diff_report_working_change(tmp_path: Path) -> None:
             assert_never(unreachable)
 
 
+def test_repo_diff_returns_bounded_partial_patch_for_large_change(
+    tmp_path: Path,
+) -> None:
+    root, dispatcher = _git_project(tmp_path)
+    (root / "notes.txt").write_text("x" * 500_000 + "\n", encoding="utf-8")
+
+    result = dispatcher.execute(_command("large-diff", RepoDiffRequest()))
+
+    assert isinstance(result, ProjectOperationResult)
+    assert isinstance(result.output, RepoDiffOutput)
+    assert result.output.truncated
+    assert len(result.output.patch) == 200_000
+    assert result.output.files[0].path == "notes.txt"
+
+
 def test_git_commit_stages_and_commits_selected_file(tmp_path: Path) -> None:
     # Given
     root, dispatcher = _git_project(tmp_path)
@@ -258,10 +273,7 @@ def _git_project(tmp_path: Path) -> tuple[Path, LocalProjectDispatcher]:
 def _command(
     suffix: str,
     operation: (
-        RepoStatusRequest
-        | RepoDiffRequest
-        | GitCommitRequest
-        | GitPushRequest
+        RepoStatusRequest | RepoDiffRequest | GitCommitRequest | GitPushRequest
     ),
 ) -> ProjectOperationCommand:
     return ProjectOperationCommand(

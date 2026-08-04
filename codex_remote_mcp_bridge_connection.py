@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from time import monotonic
 from types import TracebackType
 from typing import Protocol, final, override
 
@@ -35,6 +36,12 @@ class BridgeSocket(Protocol):
     def recv(self, timeout: float | None = None) -> str | bytes: ...
 
     def close(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SocketCloseAttempt:
+    completed: bool
+    error: BaseException | None
 
 
 @final
@@ -92,6 +99,35 @@ class SerializedBridgeConnection:
         )
 
 
+def close_socket_before_deadline(
+    socket: BridgeSocket,
+    *,
+    deadline_monotonic: float,
+) -> SocketCloseAttempt:
+    completed = threading.Event()
+    errors: list[BaseException] = []
+
+    def close_socket() -> None:
+        try:
+            socket.close()
+        except BaseException as exc:  # noqa: BLE001 - returned to owner thread.
+            errors.append(exc)
+        finally:
+            completed.set()
+
+    closer = threading.Thread(
+        target=close_socket,
+        name="codex-remote-mcp-socket-close",
+        daemon=True,
+    )
+    closer.start()
+    finished = completed.wait(max(0.0, deadline_monotonic - monotonic()))
+    return SocketCloseAttempt(
+        completed=finished,
+        error=errors[0] if errors else None,
+    )
+
+
 BridgeConnector = Callable[
     [RemoteMcpBridgeConfig],
     AbstractContextManager[BridgeSocket],
@@ -125,10 +161,14 @@ def receive_message(
 def invalidate_sessions(
     dispatcher: LocalProjectDispatcher,
     log: Callable[[str], None],
+    *,
+    deadline_monotonic: float | None = None,
 ) -> bool:
     try:
-        dispatcher.invalidate_computer_sessions()
-    except ComputerControlError as exc:
+        dispatcher.invalidate_computer_sessions(
+            deadline_monotonic=deadline_monotonic,
+        )
+    except (ComputerControlError, TimeoutError) as exc:
         log("remote_mcp_computer_cleanup_failed " + f"error={type(exc).__name__}")
         return False
     return True

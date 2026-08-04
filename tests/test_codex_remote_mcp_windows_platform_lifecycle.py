@@ -128,6 +128,38 @@ def test_platform_stop_retains_failed_cleanup_for_a_retry(
     assert attempts == [123, 123]
 
 
+def test_platform_stop_attempts_profile_cleanup_after_process_stop_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved = _resolved()
+    cleanup_attempts: list[str | None] = []
+    monkeypatch.setattr(
+        windows_platform,
+        "launch_allowed_app",
+        lambda _: launched_application(
+            resolved,
+            temporary_profile="temporary-profile",
+        ),
+    )
+    monkeypatch.setattr(
+        windows_platform,
+        "stop_owned_process",
+        lambda *_: (_ for _ in ()).throw(ComputerControlError("stop failed")),
+    )
+    monkeypatch.setattr(
+        windows_platform,
+        "remove_temporary_profile",
+        cleanup_attempts.append,
+    )
+    platform = windows_platform.WindowsComputerPlatform()
+    platform.launch("chrome")
+
+    with pytest.raises(ComputerControlError, match="stop failed"):
+        platform.stop()
+
+    assert cleanup_attempts == ["temporary-profile"]
+
+
 def test_platform_retains_a_failed_launch_cleanup_until_stop_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

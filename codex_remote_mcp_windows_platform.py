@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import final
 
 from codex_remote_mcp_computer_contracts import ComputerActionPermit, ComputerCapture
@@ -24,6 +25,7 @@ from codex_remote_mcp_windows_launch_cleanup import remove_temporary_profile
 from codex_remote_mcp_windows_launch_types import (
     ApplicationLaunchCleanupError,
     FailedLaunchCleanup,
+    OwnedProcess,
 )
 from codex_remote_mcp_windows_platform_lifecycle import (
     OwnedActionPermit,
@@ -66,16 +68,45 @@ class WindowsComputerPlatform:
                     _ = self._owned.pop(window_id, None)
         return tuple(windows)
 
-    def stop(self) -> None:
+    def stop(self, *, deadline_monotonic: float | None = None) -> None:
         with self._lock:
             launched = tuple(self._launched.values())
             failed_launches = tuple(self._failed_launches)
+        if deadline_monotonic is None:
+            stop_process = stop_owned_process
+            remove_profile = remove_temporary_profile
+            retry_cleanup = retry_failed_launch_cleanup
+        else:
+            def stop_process(
+                window_id: int,
+                process: OwnedProcess,
+                process_path: str,
+            ) -> None:
+                stop_owned_process(
+                    window_id,
+                    process,
+                    process_path,
+                    deadline_monotonic=deadline_monotonic,
+                )
+
+            def remove_profile(directory: str | None) -> None:
+                remove_temporary_profile(
+                    directory,
+                    deadline_monotonic=deadline_monotonic,
+                )
+
+            def retry_cleanup(cleanup: FailedLaunchCleanup) -> None:
+                retry_failed_launch_cleanup(
+                    cleanup,
+                    deadline_monotonic=deadline_monotonic,
+                )
         outcome = cleanup_owned_applications(
             launched,
             failed_launches,
-            stop_owned_process,
-            remove_temporary_profile,
-            retry_failed_launch_cleanup,
+            stop_process,
+            remove_profile,
+            retry_cleanup,
+            deadline_monotonic=deadline_monotonic,
         )
         with self._lock:
             for cleanup in outcome.completed_failed_launches:
@@ -107,7 +138,12 @@ class WindowsComputerPlatform:
         _ = self._resolve_owned(window_id)
         return activate_window(window_id)
 
-    def launch(self, app: str) -> None:
+    def launch(
+        self,
+        app: str,
+        *,
+        ensure_active: Callable[[], None] | None = None,
+    ) -> None:
         self._prune_exited_processes()
         process_name = f"{app}.exe" if app == "chrome" else "notepad.exe"
         with self._lock:
@@ -123,7 +159,10 @@ class WindowsComputerPlatform:
                 f"This session already has a launched {app} window."
             )
         try:
-            launched = launch_allowed_app(app)
+            if ensure_active is None:
+                launched = launch_allowed_app(app)
+            else:
+                launched = launch_allowed_app(app, ensure_active=ensure_active)
         except ApplicationLaunchCleanupError as exc:
             with self._lock:
                 self._failed_launches.append(exc.cleanup)

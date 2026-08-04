@@ -29,6 +29,7 @@ class CheckpointDraft:
     checkpoint_id: str
     created_at: str
     reason: str
+    max_target_bytes: int
     snapshots: tuple[BeforeSnapshot, ...]
 
 
@@ -84,6 +85,7 @@ def rollback_checkpoint(transaction: CheckpointTransaction) -> None:
             access,
             snapshot.target.path,
             state,
+            max_bytes=transaction.draft.max_target_bytes,
         )
     for snapshot in reversed(snapshots):
         path = snapshot.target.path
@@ -119,12 +121,16 @@ def _validate_produced_state(
     access: ProjectFileAccess,
     path: str,
     state: MutationState,
+    *,
+    max_bytes: int,
 ) -> None:
     current_exists = access.file_exists(path)
     if current_exists != state.exists:
         raise FileConflictError(path, "file changed during rollback")
     if not current_exists:
         return
-    current_sha256 = hashlib.sha256(access.read_bytes(path)).hexdigest()
+    current_sha256 = hashlib.sha256(
+        access.read_bytes(path, max_bytes=max_bytes)
+    ).hexdigest()
     if current_sha256 != state.sha256:
         raise FileConflictError(path, "file changed during rollback")

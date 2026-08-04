@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from builtins import BaseExceptionGroup
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import assert_never, final
 
@@ -10,7 +12,11 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
-from remote_mcp_server.simdorei_mcp.app import WebSocketBridgeSender, create_app
+from remote_mcp_server.simdorei_mcp.app import (
+    WebSocketBridgeSender,
+    _close_preserving_lifespan,
+    create_app,
+)
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 from simdorei_mcp_common.messages import (
     BridgeHello,
@@ -23,7 +29,6 @@ from simdorei_mcp_common.messages import (
     ProjectSessionCommand,
     ProjectUpsert,
     ReadFileCommand,
-    RuntimeCapabilityCommand,
     WriteFileCommand,
     parse_gateway_message,
 )
@@ -50,7 +55,7 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
     ):
         socket.send_text(
             BridgeHello(
-                protocol_version=11,
+                protocol_version=9,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -76,7 +81,6 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
             | ProjectSessionCommand()
             | ListFilesCommand()
             | ReadFileCommand()
-            | RuntimeCapabilityCommand()
             | WriteFileCommand()
         ):
             raise AssertionError(f"unexpected message: {hello.type}")
@@ -92,12 +96,34 @@ def test_bridge_accepts_authenticated_project_registration() -> None:
             | ProjectSessionCommand()
             | ListFilesCommand()
             | ReadFileCommand()
-            | RuntimeCapabilityCommand()
             | WriteFileCommand()
         ):
             raise AssertionError(f"unexpected message: {project.type}")
         case unreachable:
             assert_never(unreachable)
+
+
+def test_bridge_requires_hello_before_project_registration() -> None:
+    app = create_app(_settings())
+    headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/bridge", headers=headers) as socket,
+    ):
+        socket.send_text(
+            ProjectUpsert(
+                project_scope="codex-pro-project-a",
+                binding_id="binding-generation-project-a",
+                thread_id="thread-a",
+                project_name="project-a",
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            ).model_dump_json()
+        )
+        with pytest.raises(WebSocketDisconnect) as closed:
+            _ = socket.receive_text()
+
+    assert closed.value.code == 1002
 
 
 def test_health_reports_bridge_disconnected_before_local_bridge_attaches() -> None:
@@ -132,7 +158,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
     ):
         first.send_text(
             BridgeHello(
-                protocol_version=11,
+                protocol_version=9,
                 device_id=DeviceId("device-a"),
             ).model_dump_json()
         )
@@ -141,7 +167,7 @@ def test_replacing_a_bridge_connection_closes_the_displaced_socket() -> None:
         with client.websocket_connect("/bridge", headers=headers) as replacement:
             replacement.send_text(
                 BridgeHello(
-                    protocol_version=11,
+                    protocol_version=9,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )
@@ -201,6 +227,36 @@ def test_gateway_sender_serializes_protocol_close_after_an_inflight_send() -> No
     anyio.run(scenario)
 
 
+def test_lifespan_preserves_session_and_oauth_close_failures() -> None:
+    class SessionFailure(RuntimeError):
+        pass
+
+    class OAuthFailure(RuntimeError):
+        pass
+
+    @asynccontextmanager
+    async def failing_session():
+        yield
+        raise SessionFailure("session close failed")
+
+    async def fail_oauth_close() -> None:
+        raise OAuthFailure("oauth close failed")
+
+    async def scenario() -> None:
+        with pytest.raises(BaseExceptionGroup) as captured:
+            async with _close_preserving_lifespan(
+                failing_session(),
+                fail_oauth_close,
+            ):
+                pass
+        assert tuple(type(error) for error in captured.value.exceptions) == (
+            SessionFailure,
+            OAuthFailure,
+        )
+
+    anyio.run(scenario)
+
+
 def test_duplicate_hello_closes_with_protocol_error() -> None:
     app = create_app(_settings())
     headers = {"Authorization": "Bearer bridge-secret-1234567890"}
@@ -210,7 +266,7 @@ def test_duplicate_hello_closes_with_protocol_error() -> None:
         client.websocket_connect("/bridge", headers=headers) as socket,
     ):
         hello = BridgeHello(
-            protocol_version=11,
+            protocol_version=9,
             device_id=DeviceId("device-a"),
         ).model_dump_json()
         socket.send_text(hello)

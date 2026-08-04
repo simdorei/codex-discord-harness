@@ -5,9 +5,9 @@ import shlex
 import sys
 import threading
 import time
+from unittest.mock import patch
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
@@ -18,10 +18,8 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     RequestId,
 )
-from simdorei_mcp_common.terminal_protocol import (
-    TerminalExecOutput,
-    TerminalExecRequest,
-)
+from simdorei_mcp_common.terminal_protocol import TerminalExecOutput, TerminalExecRequest
+from tests.remote_mcp_dispatch_support import activate_test_session
 
 
 def _python(code: str) -> str:
@@ -39,14 +37,7 @@ def _dispatcher(root: Path) -> LocalProjectDispatcher:
         root,
         datetime.now(UTC) + timedelta(minutes=10),
     )
-    activated = dispatcher.execute(
-        ProjectSessionCommand(
-            request_id=RequestId("activate-session-one"),
-            thread_id="thread-a",
-            computer_session_id="session-one-generation",
-        )
-    )
-    assert isinstance(activated, ProjectSessionResult)
+    activate_test_session(dispatcher)
     return dispatcher
 
 
@@ -54,7 +45,7 @@ def _command(
     request_id: str,
     operation: TerminalExecRequest,
     *,
-    session_id: str = "session-one-generation",
+    session_id: str = "test-project-session-generation",
 ) -> ProjectOperationCommand:
     return ProjectOperationCommand(
         request_id=RequestId(request_id),
@@ -117,6 +108,7 @@ def test_project_session_replacement_cancels_owned_terminal_work(
     )
     marker = tmp_path / "session-replace-started"
     outcomes: list[object] = []
+
     worker = threading.Thread(
         target=lambda: outcomes.append(
             dispatcher.execute(
@@ -142,6 +134,7 @@ def test_project_session_replacement_cancels_owned_terminal_work(
             request_id=RequestId("activate-session-two"),
             thread_id="thread-a",
             computer_session_id="session-two-generation",
+            computer_session_generation=2,
         )
     )
     worker.join(timeout=10)
@@ -149,43 +142,111 @@ def test_project_session_replacement_cancels_owned_terminal_work(
     assert isinstance(activated, ProjectSessionResult)
     assert not worker.is_alive()
     assert _terminal_output(outcomes[0]).cancelled is True
+    stale = dispatcher.execute(
+        _command(
+            "stale-terminal",
+            TerminalExecRequest(command="echo stale"),
+        )
+    )
+    assert isinstance(stale, OperationErrorResult)
+    assert stale.error_code == "computer_control"
+    fresh = _terminal_output(
+        dispatcher.execute(
+            _command(
+                "fresh-terminal",
+                TerminalExecRequest(command="echo fresh"),
+                session_id="session-two-generation",
+            )
+        )
+    )
+    assert fresh.exit_code == 0
 
 
-def test_connection_invalidation_cancels_terminal_process_tree(tmp_path: Path) -> None:
-    dispatcher = _dispatcher(tmp_path)
-    marker = tmp_path / "connection-invalidate-started"
+def test_bridge_connection_replacement_cancels_terminal_process_tree(
+    tmp_path: Path,
+) -> None:
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        tmp_path,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    dispatcher.begin_connection(1)
+    activated = dispatcher.execute(
+        ProjectSessionCommand(
+            request_id=RequestId("activate-generation-one"),
+            thread_id="thread-a",
+            computer_session_id="session-one-generation",
+            computer_session_generation=1,
+        ),
+        connection_generation=1,
+    )
+    assert isinstance(activated, ProjectSessionResult)
+    seed = _terminal_output(
+        dispatcher.execute(
+            _command(
+                "generation-seed",
+                TerminalExecRequest(command="echo seed"),
+                session_id="session-one-generation",
+            ),
+            connection_generation=1,
+        )
+    )
+    marker = tmp_path / "connection-replace-started"
     outcomes: list[object] = []
     worker = threading.Thread(
         target=lambda: outcomes.append(
             dispatcher.execute(
                 _command(
-                    "connection-long",
+                    "generation-long",
                     TerminalExecRequest(
+                        terminal_id=seed.terminal_id,
                         command=_python(
                             "from pathlib import Path; import time; "
                             + f"Path({str(marker)!r}).write_text('x'); time.sleep(30)"
                         ),
                         timeout_seconds=60,
                     ),
-                )
+                    session_id="session-one-generation",
+                ),
+                connection_generation=1,
             )
         )
     )
     worker.start()
     _wait_for(marker)
 
-    dispatcher.invalidate_computer_sessions()
+    dispatcher.begin_connection(2)
     worker.join(timeout=10)
 
     assert not worker.is_alive()
     assert _terminal_output(outcomes[0]).cancelled is True
 
 
-def test_invalidation_cannot_overtake_terminal_registration(tmp_path: Path) -> None:
-    dispatcher = _dispatcher(tmp_path)
+def test_connection_replacement_cannot_overtake_terminal_registration(
+    tmp_path: Path,
+) -> None:
+    dispatcher = LocalProjectDispatcher()
+    dispatcher.upsert(
+        "thread-a",
+        tmp_path,
+        datetime.now(UTC) + timedelta(minutes=10),
+    )
+    dispatcher.begin_connection(1)
+    activated = dispatcher.execute(
+        ProjectSessionCommand(
+            request_id=RequestId("activate-generation-one"),
+            thread_id="thread-a",
+            computer_session_id="session-one-generation",
+            computer_session_generation=1,
+        ),
+        connection_generation=1,
+    )
+    assert isinstance(activated, ProjectSessionResult)
+
     registration_entered = threading.Event()
     release_registration = threading.Event()
-    invalidation_completed = threading.Event()
+    replacement_completed = threading.Event()
     outcomes: list[object] = []
     original_for_session = dispatcher._terminals.for_session  # pyright: ignore[reportPrivateUsage]
 
@@ -205,28 +266,31 @@ def test_invalidation_cannot_overtake_terminal_registration(tmp_path: Path) -> N
                     _command(
                         "registration-race",
                         TerminalExecRequest(command="echo registration-race"),
-                    )
+                        session_id="session-one-generation",
+                    ),
+                    connection_generation=1,
                 )
             )
         )
         worker.start()
         assert registration_entered.wait(5)
-        invalidation = threading.Thread(
+
+        replacement = threading.Thread(
             target=lambda: (
-                dispatcher.invalidate_computer_sessions(),
-                invalidation_completed.set(),
+                dispatcher.begin_connection(2),
+                replacement_completed.set(),
             )
         )
-        invalidation.start()
-        assert not invalidation_completed.wait(0.2)
+        replacement.start()
+        assert not replacement_completed.wait(0.2)
 
         release_registration.set()
         worker.join(timeout=10)
-        invalidation.join(timeout=10)
+        replacement.join(timeout=10)
 
     assert not worker.is_alive()
-    assert not invalidation.is_alive()
-    assert invalidation_completed.is_set()
+    assert not replacement.is_alive()
+    assert replacement_completed.is_set()
     assert len(outcomes) == 1
 
 

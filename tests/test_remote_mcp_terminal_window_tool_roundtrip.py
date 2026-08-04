@@ -63,16 +63,7 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
                 client,
                 socket,
                 headers,
-                2,
-                "terminal_window_list",
-                {},
-                TerminalWindowListOutput(windows=(entry,)),
-            )
-            listed_again, _ = _round_trip(
-                client,
-                socket,
-                headers,
-                2,
+                3,
                 "terminal_window_list",
                 {},
                 TerminalWindowListOutput(windows=(entry,)),
@@ -81,7 +72,7 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
                 client,
                 socket,
                 headers,
-                2,
+                4,
                 "terminal_window_close",
                 {"terminal_window_id": WINDOW_ID},
                 TerminalWindowCloseOutput(terminal_window_id=WINDOW_ID),
@@ -93,17 +84,15 @@ def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
     assert isinstance(listed.operation, TerminalWindowListRequest)
     assert isinstance(closed.operation, TerminalWindowCloseRequest)
     assert closed.operation.terminal_window_id == WINDOW_ID
-    assert len({opened.request_id, listed.request_id, closed.request_id}) == 3
-    assert listed_again.request_id == listed.request_id
     assert _structured(open_result)["window"] == entry.model_dump(mode="json")
     assert _structured(list_result)["windows"] == [entry.model_dump(mode="json")]
     assert _structured(close_result)["closed"] is True
 
 
-def test_terminal_window_tools_require_write_scope() -> None:
+def test_terminal_window_tools_reuse_project_write_oauth_scope() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        token = authorize(client, scopes=(READ_SCOPE,))
+        token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
         response = client.post(
             "/mcp",
             headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
@@ -113,7 +102,9 @@ def test_terminal_window_tools_require_write_scope() -> None:
     assert response.status_code == 200, response.text
     result = cast(dict[str, object], response.json()["result"])
     assert result["isError"] is True
-    assert "files:write" in str(result["content"])
+    message = str(result["content"])
+    assert "no active project selection" in message
+    assert "terminal:execute" not in message
 
 
 def _activate(
@@ -121,7 +112,7 @@ def _activate(
     socket: BridgeSocket,
 ) -> dict[str, str]:
     socket.send_text(
-        BridgeHello(protocol_version=11, device_id=DeviceId("device-a")).model_dump_json()
+        BridgeHello(protocol_version=9, device_id=DeviceId("device-a")).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
     socket.send_text(
@@ -134,7 +125,7 @@ def _activate(
         ).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
-    token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
+    token = authorize(client)
     headers = {**MCP_HEADERS, "Authorization": f"Bearer {token}"}
     with ThreadPoolExecutor(max_workers=1) as executor:
         pending = executor.submit(

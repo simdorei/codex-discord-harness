@@ -47,6 +47,7 @@ def _activate(
             request_id=RequestId(f"activate-{thread_id}-{computer_session_id}"),
             thread_id=thread_id,
             computer_session_id=computer_session_id,
+            computer_session_generation=1,
         )
     )
     assert isinstance(result, ProjectSessionResult)
@@ -229,11 +230,17 @@ def test_stop_between_state_check_and_controller_creation_blocks_operation(
         thread_id: str,
         project: ActiveProject,
         computer_session_id: str | None,
+        connection_generation: int | None,
     ) -> ComputerController | None:
         waiting.set()
         if not release.wait(timeout=2):
             raise AssertionError("controller creation was not released")
-        return original(thread_id, project, computer_session_id)
+        return original(
+            thread_id,
+            project,
+            computer_session_id,
+            connection_generation,
+        )
 
     monkeypatch.setattr(dispatcher, "_computer_for", delayed_controller)
     outcome: list[ProjectOperationResult | OperationErrorResult] = []

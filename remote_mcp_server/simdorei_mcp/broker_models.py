@@ -34,6 +34,7 @@ class SessionRoute:
     thread_id: str
     subject: str
     computer_session_id: str
+    computer_session_generation: int
     expires_at: datetime
 
 

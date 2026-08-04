@@ -9,7 +9,6 @@ from simdorei_mcp_common.messages import (
     ProjectOperationCommand,
     ProjectSessionCommand,
     ReadFileCommand,
-    RuntimeCapabilityCommand,
     WriteFileCommand,
 )
 from simdorei_mcp_common.operation_requests import (
@@ -49,7 +48,7 @@ def requires_execution_lock(command: GatewayCommand) -> bool:
             if isinstance(operation, TerminalExecRequest):
                 return False
             return not isinstance(operation, READ_ONLY_OPERATIONS)
-        case WriteFileCommand() | ProjectSessionCommand() | RuntimeCapabilityCommand():
+        case WriteFileCommand() | ProjectSessionCommand():
             return True
     assert_never(command)
 

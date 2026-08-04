@@ -1,13 +1,13 @@
 # pyright: reportAny=false
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import final
 
+from codex_remote_mcp_file_hash import sha256_stream
 from codex_remote_mcp_windows_file_condition import WindowsAtomicWriteConflictError
 from codex_remote_mcp_windows_file_native import (
     DELETE_ACCESS,
@@ -36,6 +36,10 @@ class WindowsFileGuardError(OSError):
 
 class WindowsFileConflictError(WindowsFileGuardError):
     """Raised when a retained file identity no longer meets a write condition."""
+
+
+class WindowsFileReadLimitError(WindowsFileGuardError):
+    """Raised before a retained file can exceed a bounded read."""
 
 
 @final
@@ -120,16 +124,39 @@ class WindowsProjectFileGuard:
                 "the bound project root moved or changed identity"
             )
 
-    def read_bytes(self, relative: Path) -> bytes:
+    def read_bytes(
+        self,
+        relative: Path,
+        *,
+        max_bytes: int | None = None,
+        allow_truncated: bool = False,
+    ) -> bytes:
         with self._locked_parent(relative, create=False) as target:
             handle = open_handle(target, GENERIC_READ, OPEN_EXISTING)
             try:
-                _ = self._verify_single_link_file(handle)
+                information = self._verify_single_link_file(handle)
+                size = (
+                    (information.file_size_high << 32)
+                    | information.file_size_low
+                )
+                if (
+                    max_bytes is not None
+                    and size > max_bytes
+                    and not allow_truncated
+                ):
+                    raise WindowsFileReadLimitError("file exceeds read limit")
             except OSError:
                 close_handle(handle)
                 raise
             with binary_stream(handle, writable=False) as stream:
-                return stream.read()
+                if max_bytes is None:
+                    return stream.read()
+                content = stream.read(
+                    max_bytes if allow_truncated else max_bytes + 1
+                )
+                if len(content) > max_bytes:
+                    raise WindowsFileReadLimitError("file exceeds read limit")
+                return content
 
     def file_size(self, relative: Path) -> int:
         with self._locked_parent(relative, create=False) as target:
@@ -179,8 +206,7 @@ class WindowsProjectFileGuard:
                 close_handle(handle)
                 raise
             with binary_stream(handle, writable=False) as stream:
-                current = stream.read()
-                if hashlib.sha256(current).hexdigest() != expected_sha256:
+                if sha256_stream(stream) != expected_sha256:
                     raise WindowsFileConflictError("file changed since it was read")
                 set_delete(os_handle(stream))
 

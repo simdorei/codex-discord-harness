@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, final
 
-from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_redaction import redact
+from codex_remote_mcp_files import ProjectFileError
 from codex_remote_mcp_subprocess import (
     CancellationSignal,
     RemoteProcessCancelled,
@@ -142,9 +142,7 @@ class TerminalExecutionEngine:
         except RemoteProcessCancelled as exc:
             raise TerminalExecutionError("terminal execution was cancelled") from exc
         except (FileNotFoundError, NotADirectoryError) as exc:
-            raise TerminalExecutionError(
-                "terminal executable or directory was not found"
-            ) from exc
+            raise TerminalExecutionError("terminal executable or directory was not found") from exc
         except OSError as exc:
             raise TerminalExecutionError(
                 f"terminal process could not start ({type(exc).__name__})"
@@ -189,9 +187,7 @@ class TerminalExecutionEngine:
             if terminal_id is not None:
                 state = self._terminals.get(terminal_id)
                 if state is None or state.closed:
-                    raise TerminalExecutionError(
-                        "terminal does not belong to this session"
-                    )
+                    raise TerminalExecutionError("terminal does not belong to this session")
                 return state
             while True:
                 generated = f"term_{secrets.token_hex(8)}"
@@ -222,9 +218,7 @@ class TerminalExecutionEngine:
                     return ticket
                 previous = state.active
                 if not cancel_previous:
-                    raise TerminalExecutionError(
-                        "terminal already has an active command"
-                    )
+                    raise TerminalExecutionError("terminal already has an active command")
                 previous.cancel.set()
             while not previous.done.wait(0.02):
                 if cancel_event is not None and cancel_event.is_set():
@@ -235,6 +229,5 @@ class TerminalExecutionEngine:
             if state.active is ticket:
                 state.active = None
         ticket.done.set()
-
 
 __all__ = ["TerminalExecutionEngine", "TerminalExecutionError"]

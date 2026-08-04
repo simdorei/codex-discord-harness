@@ -19,12 +19,13 @@ from simdorei_mcp_common.messages import (
     ProjectUpsert,
     ReadFileCommand,
     RequestId,
-    RuntimeCapabilityCommand,
-    RuntimeCapabilityResult,
     WriteFileCommand,
 )
 from simdorei_mcp_common.operation_outputs import RepoStatusOutput
-from simdorei_mcp_common.operation_requests import RepoStatusRequest
+from simdorei_mcp_common.operation_requests import (
+    RepoDiffRequest,
+    RepoStatusRequest,
+)
 
 
 class OperationSender(BridgeSender):
@@ -32,7 +33,6 @@ class OperationSender(BridgeSender):
         self._broker = broker
         self.command: ProjectOperationCommand | None = None
         self.commands: list[ProjectOperationCommand] = []
-        self.capability_command: RuntimeCapabilityCommand | None = None
 
     async def send(self, command: GatewayCommand) -> None:
         match command:
@@ -53,13 +53,6 @@ class OperationSender(BridgeSender):
                 )
             case ProjectSessionCommand():
                 result = ProjectSessionResult(request_id=command.request_id)
-            case RuntimeCapabilityCommand():
-                self.capability_command = command
-                result = RuntimeCapabilityResult(
-                    request_id=command.request_id,
-                    status="accepted",
-                    cycle_binding_sha256="e" * 64,
-                )
             case (
                 ProjectInfoCommand()
                 | ListFilesCommand()
@@ -164,67 +157,6 @@ def test_new_chat_owner_gets_a_new_computer_session_generation() -> None:
     anyio.run(scenario)
 
 
-def test_capability_ack_binds_the_cycle_to_following_project_operations() -> None:
-    async def scenario() -> None:
-        broker = BindingBroker()
-        sender = OperationSender(broker)
-        await broker.attach(DeviceId("device-a"), sender)
-        scope = "codex-pro-project-a"
-        await broker.upsert(
-            DeviceId("device-a"),
-            sender,
-            ProjectUpsert(
-                project_scope=scope,
-                binding_id="binding-generation-project-a",
-                thread_id="thread-a",
-                project_name="project-a",
-                expires_at=datetime.now(UTC) + timedelta(minutes=10),
-            ),
-        )
-        _ = await broker.select("session-a", "subject-a", scope)
-
-        capability = await broker.observe_runtime_capability(
-            "session-a",
-            "subject-a",
-            inventory_sha256="f" * 64,
-            tool_count=47,
-            terminal_execute_present=True,
-            terminal_interact_present=True,
-        )
-        _ = await broker.project_operation(
-            "session-a",
-            "subject-a",
-            RepoStatusRequest(),
-        )
-
-        assert capability.cycle_binding_sha256 == "e" * 64
-        assert sender.capability_command is not None
-        capability_provenance = sender.capability_command.runtime_provenance
-        assert capability_provenance is not None
-        assert capability_provenance.cycle_binding_sha256 is None
-        assert sender.command is not None
-        operation_provenance = sender.command.runtime_provenance
-        assert operation_provenance is not None
-        assert (
-            operation_provenance.session_binding_sha256
-            == capability_provenance.session_binding_sha256
-        )
-        assert operation_provenance.cycle_binding_sha256 == "e" * 64
-
-        _ = await broker.select("session-b", "subject-a", scope)
-        _ = await broker.project_operation(
-            "session-b",
-            "subject-a",
-            RepoStatusRequest(),
-        )
-        assert sender.command is not None
-        replacement = sender.command.runtime_provenance
-        assert replacement is not None
-        assert replacement.cycle_binding_sha256 is None
-
-    anyio.run(scenario)
-
-
 def test_duplicate_inflight_request_is_sent_to_the_bridge_once() -> None:
     async def scenario() -> None:
         broker = BindingBroker()
@@ -267,3 +199,75 @@ def test_duplicate_inflight_request_is_sent_to_the_bridge_once() -> None:
         assert sender.send_count == 1
 
     anyio.run(scenario)
+
+
+def test_same_external_request_and_operation_keep_the_same_routed_id() -> None:
+    async def scenario() -> None:
+        broker, sender, _scope = await _selected_operation_broker()
+        base_id = RequestId("same-external-request")
+
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoStatusRequest(), request_id=base_id
+        )
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoStatusRequest(), request_id=base_id
+        )
+
+        assert sender.commands[-2].request_id == sender.commands[-1].request_id
+
+    anyio.run(scenario)
+
+
+def test_same_external_request_with_different_operation_gets_a_new_routed_id() -> None:
+    async def scenario() -> None:
+        broker, sender, _scope = await _selected_operation_broker()
+        base_id = RequestId("same-external-request")
+
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoStatusRequest(), request_id=base_id
+        )
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoDiffRequest(), request_id=base_id
+        )
+
+        assert sender.commands[-2].request_id != sender.commands[-1].request_id
+
+    anyio.run(scenario)
+
+
+def test_same_external_request_after_reselect_gets_a_new_routed_id() -> None:
+    async def scenario() -> None:
+        broker, sender, scope = await _selected_operation_broker()
+        base_id = RequestId("same-external-request")
+
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoStatusRequest(), request_id=base_id
+        )
+        await broker.select("session-a", "subject-a", scope)
+        _ = await broker.project_operation(
+            "session-a", "subject-a", RepoStatusRequest(), request_id=base_id
+        )
+
+        assert sender.commands[-2].request_id != sender.commands[-1].request_id
+
+    anyio.run(scenario)
+
+
+async def _selected_operation_broker() -> tuple[BindingBroker, OperationSender, str]:
+    broker = BindingBroker()
+    sender = OperationSender(broker)
+    await broker.attach(DeviceId("device-a"), sender)
+    scope = "codex-pro-project-a"
+    await broker.upsert(
+        DeviceId("device-a"),
+        sender,
+        ProjectUpsert(
+            project_scope=scope,
+            binding_id="binding-generation-project-a",
+            thread_id="thread-a",
+            project_name="project-a",
+            expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        ),
+    )
+    await broker.select("session-a", "subject-a", scope)
+    return broker, sender, scope

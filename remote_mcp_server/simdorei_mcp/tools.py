@@ -8,7 +8,6 @@ from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
 from remote_mcp_server.simdorei_mcp.capability_inventory import (
     CapabilityInventoryOutput,
     build_capability_inventory,
-    capability_inventory_sha256,
 )
 from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
 from remote_mcp_server.simdorei_mcp.tool_context import (
@@ -18,8 +17,8 @@ from remote_mcp_server.simdorei_mcp.tool_context import (
     WRITE_ANNOTATIONS,
     WRITE_AUTH_META,
     ToolContext,
-    bind_tool_request_id,
     tool_identity,
+    tool_request_id,
 )
 from simdorei_mcp_common.messages import (
     ListFilesOutput,
@@ -27,7 +26,6 @@ from simdorei_mcp_common.messages import (
     ProjectSelectionOutput,
     ReadFileCommand,
     ReadFileOutput,
-    RequestId,
     WriteFileCommand,
     WriteFileOutput,
 )
@@ -44,38 +42,8 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         ctx: ToolContext,
     ) -> CapabilityInventoryOutput:
         """Compare the release manifest with tools registered by this server."""
-        identity = tool_identity(ctx, READ_SCOPE)
-        registered = registered_tool_names(mcp)
-        inventory = build_capability_inventory(registered)
-        tool_count = inventory.registered_tool_count
-        terminal_execute_present = "terminal_exec" in registered
-        terminal_interact_present = all(
-            name in registered
-            for name in (
-                "terminal_window_capture",
-                "terminal_window_type",
-                "terminal_window_keys",
-                "terminal_window_interrupt",
-            )
-        )
-        if (
-            tool_count != 47
-            or not terminal_execute_present
-            or not terminal_interact_present
-        ):
-            raise ToolError("The MCP capability inventory is incomplete.")
-        try:
-            _ = await broker.observe_runtime_capability(
-                identity.session,
-                identity.subject,
-                inventory_sha256=capability_inventory_sha256(inventory),
-                tool_count=tool_count,
-                terminal_execute_present=terminal_execute_present,
-                terminal_interact_present=terminal_interact_present,
-            )
-        except BrokerError as exc:
-            raise ToolError(str(exc)) from exc
-        return inventory
+        _ = tool_identity(ctx, READ_SCOPE)
+        return build_capability_inventory(registered_tool_names(mcp))
 
     @mcp.tool(
         title="Select local project",
@@ -151,22 +119,18 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> ReadFileOutput:
         """Read a bounded UTF-8 section from a non-sensitive project file."""
         identity = tool_identity(ctx, READ_SCOPE)
-        command = bind_tool_request_id(
-            ctx,
-            identity,
-            ReadFileCommand(
-                request_id=RequestId("pending-tool-request"),
-                thread_id="pending-route",
-                path=path,
-                start_line=start_line,
-                max_lines=max_lines,
-            ),
-        )
+        request_id = tool_request_id(ctx, identity)
         try:
             return await broker.read_file(
                 identity.session,
                 identity.subject,
-                command,
+                ReadFileCommand(
+                    request_id=request_id,
+                    thread_id="pending-route",
+                    path=path,
+                    start_line=start_line,
+                    max_lines=max_lines,
+                ),
             )
         except BrokerError as exc:
             raise ToolError(str(exc)) from exc
@@ -185,22 +149,18 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     ) -> WriteFileOutput:
         """Write UTF-8 text with optimistic conflict protection inside the bound project."""
         identity = tool_identity(ctx, WRITE_SCOPE)
-        command = bind_tool_request_id(
-            ctx,
-            identity,
-            WriteFileCommand(
-                request_id=RequestId("pending-tool-request"),
-                thread_id="pending-route",
-                path=path,
-                content=content,
-                expected_sha256=expected_sha256,
-            ),
-        )
+        request_id = tool_request_id(ctx, identity)
         try:
             return await broker.write_file(
                 identity.session,
                 identity.subject,
-                command,
+                WriteFileCommand(
+                    request_id=request_id,
+                    thread_id="pending-route",
+                    path=path,
+                    content=content,
+                    expected_sha256=expected_sha256,
+                ),
             )
         except BrokerError as exc:
             raise ToolError(str(exc)) from exc

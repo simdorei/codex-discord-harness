@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import final
 
 from codex_remote_mcp_computer import ComputerController
@@ -38,8 +39,15 @@ class FakeComputerPlatform:
         assert window_id == self.window.window_id
         return self.window
 
-    def launch(self, app: str) -> None:
+    def launch(
+        self,
+        app: str,
+        *,
+        ensure_active: Callable[[], None] | None = None,
+    ) -> None:
         _ = app
+        if ensure_active is not None:
+            ensure_active()
 
     def close(self, permit: ComputerActionPermit) -> None:
         assert permit.identity.window_id == self.window.window_id
@@ -84,7 +92,8 @@ class FakeComputerPlatform:
     def set_clipboard(self, permit: ComputerActionPermit, text: str) -> None:
         self.clipboards.append((permit.identity.window_id, text))
 
-    def stop(self) -> None:
+    def stop(self, *, deadline_monotonic: float | None = None) -> None:
+        _ = deadline_monotonic
         self.stops.append(True)
 
 

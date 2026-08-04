@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Literal, final, override
+from typing import final, override
 from uuid import uuid4
 
 import anyio
@@ -30,7 +32,6 @@ from remote_mcp_server.simdorei_mcp.broker_registration import (
 )
 from remote_mcp_server.simdorei_mcp.broker_requests import BrokerRequestsMixin
 from remote_mcp_server.simdorei_mcp.broker_results import require_project_session_result
-from remote_mcp_server.simdorei_mcp.broker_results import runtime_capability_result
 from remote_mcp_server.simdorei_mcp.broker_routes import BrokerRouteRegistry
 from simdorei_mcp_common.messages import (
     BridgeResult,
@@ -40,16 +41,14 @@ from simdorei_mcp_common.messages import (
     ProjectSessionCommand,
     ProjectUpsert,
     RequestId,
-    RuntimeCapabilityCommand,
-    RuntimeCapabilityResult,
-)
-from simdorei_mcp_common.runtime_provenance import (
-    RuntimeProvenanceEnvelope,
-    runtime_session_binding_sha256,
 )
 from simdorei_mcp_common.request_deadlines import (
     GATEWAY_REQUEST_TIMEOUT_SECONDS,
 )
+
+
+logger = logging.getLogger(__name__)
+NowFactory = Callable[[], datetime]
 
 
 @final
@@ -60,26 +59,39 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         self,
         *,
         request_timeout_seconds: float = GATEWAY_REQUEST_TIMEOUT_SECONDS,
+        now: NowFactory = lambda: datetime.now(UTC),
     ) -> None:
         self._request_timeout_seconds = request_timeout_seconds
+        self._now = now
         self._lock = anyio.Lock()
         self._selection_lock = anyio.Lock()
         self._devices: dict[DeviceId, BridgeSender] = {}
         self._projects: dict[str, PendingProject] = {}
         self._sessions: dict[str, SessionRoute] = {}
         self._thread_sessions: dict[tuple[DeviceId, str], str] = {}
+        self._computer_session_generations: dict[tuple[DeviceId, str], int] = {}
         self._pending: dict[RequestId, PendingCall] = {}
-        self._runtime_cycle_bindings: dict[str, str] = {}
         self._routes = BrokerRouteRegistry(
             self._sessions,
             self._thread_sessions,
             self._pending,
-            self._runtime_cycle_bindings,
         )
 
     @property
     def pending_call_count(self) -> int:
         return len(self._pending)
+
+    @property
+    def registered_project_count(self) -> int:
+        return len(self._projects)
+
+    @property
+    def session_route_count(self) -> int:
+        return len(self._sessions)
+
+    @property
+    def thread_session_count(self) -> int:
+        return len(self._thread_sessions)
 
     async def is_device_connected(self, device_id: DeviceId) -> bool:
         async with self._lock:
@@ -110,11 +122,13 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         sender: BridgeSender,
         project: ProjectUpsert,
     ) -> None:
-        if project.expires_at <= datetime.now(UTC):
-            raise BindingCodeError("project scope is already expired")
         async with self._lock:
             if self._devices.get(device_id) is not sender:
                 raise BridgeUnavailableError("local bridge is disconnected")
+            now = self._now()
+            self._prune_expired_locked(now)
+            if project.expires_at <= now:
+                raise BindingCodeError("project scope is already expired")
             stale_scopes, stale_routes = stale_registration_targets(
                 self._projects,
                 self._sessions.values(),
@@ -129,6 +143,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 device_id=device_id,
                 value=project,
             )
+            self._prune_computer_session_generations_locked()
 
     async def select(
         self,
@@ -138,18 +153,28 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
     ) -> ProjectSelectionOutput:
         async with self._selection_lock:
             async with self._lock:
+                now = self._now()
+                self._prune_expired_locked(now)
                 pending = self._projects.get(project_scope)
-                if pending is None or pending.value.expires_at <= datetime.now(UTC):
+                if pending is None or pending.value.expires_at <= now:
                     raise BindingCodeError("project scope is unavailable or expired")
+                generation_key = (pending.device_id, pending.value.thread_id)
+                computer_session_generation = (
+                    self._computer_session_generations.get(generation_key, 0) + 1
+                )
+                self._computer_session_generations[generation_key] = (
+                    computer_session_generation
+                )
                 route = SessionRoute(
                     session=session,
                     device_id=pending.device_id,
                     thread_id=pending.value.thread_id,
                     subject=subject,
                     computer_session_id=uuid4().hex,
+                    computer_session_generation=computer_session_generation,
                     expires_at=pending.value.expires_at,
                 )
-                self._routes.require_compatible(route)
+                self._routes.require_compatible(route, now=now)
                 sender = self._devices.get(route.device_id)
                 if sender is None:
                     raise BridgeUnavailableError("local bridge is disconnected")
@@ -163,11 +188,8 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                         request_id=RequestId(uuid4().hex),
                         thread_id=route.thread_id,
                         computer_session_id=route.computer_session_id,
-                        runtime_provenance=RuntimeProvenanceEnvelope(
-                            session_binding_sha256=runtime_session_binding_sha256(
-                                session,
-                                subject,
-                            )
+                        computer_session_generation=(
+                            route.computer_session_generation
                         ),
                     ),
                 )
@@ -184,63 +206,6 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 thread_id=route.thread_id,
                 expires_at=route.expires_at,
             )
-
-    async def observe_runtime_capability(
-        self,
-        session: str,
-        subject: str,
-        *,
-        inventory_sha256: str,
-        tool_count: Literal[47],
-        terminal_execute_present: Literal[True],
-        terminal_interact_present: Literal[True],
-    ) -> RuntimeCapabilityResult:
-        route, sender = await self._route(session, subject)
-        result = runtime_capability_result(
-            await self._dispatch(
-                route,
-                sender,
-                RuntimeCapabilityCommand(
-                    request_id=RequestId(uuid4().hex),
-                    thread_id=route.thread_id,
-                    computer_session_id=route.computer_session_id,
-                    runtime_provenance=RuntimeProvenanceEnvelope(
-                        session_binding_sha256=runtime_session_binding_sha256(
-                            session,
-                            subject,
-                        )
-                    ),
-                    inventory_sha256=inventory_sha256,
-                    tool_count=tool_count,
-                    terminal_execute_present=terminal_execute_present,
-                    terminal_interact_present=terminal_interact_present,
-                ),
-            )
-        )
-        async with self._lock:
-            if self._sessions.get(session) is not route:
-                raise ActiveBindingMissingError(
-                    "ChatGPT project selection changed during capability proof"
-                )
-            if result.cycle_binding_sha256 is None:
-                _ = self._runtime_cycle_bindings.pop(
-                    route.computer_session_id,
-                    None,
-                )
-            else:
-                self._runtime_cycle_bindings[route.computer_session_id] = (
-                    result.cycle_binding_sha256
-                )
-        return result
-
-    @override
-    async def _runtime_cycle_binding(self, route: SessionRoute) -> str | None:
-        async with self._lock:
-            if self._sessions.get(route.session) is not route:
-                raise ActiveBindingMissingError(
-                    "ChatGPT session has no active project selection"
-                )
-            return self._runtime_cycle_bindings.get(route.computer_session_id)
 
     async def complete(
         self,
@@ -272,10 +237,6 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             del self._projects[scope]
         for route in stale_routes:
             del self._sessions[route.session]
-            _ = self._runtime_cycle_bindings.pop(
-                route.computer_session_id,
-                None,
-            )
             self._routes.cancel(
                 route,
                 BridgeUnavailableError("selected local bridge is disconnected"),
@@ -283,6 +244,58 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             _ = self._thread_sessions.pop(
                 (route.device_id, route.thread_id),
                 None,
+            )
+        self._prune_computer_session_generations_locked()
+
+    def _prune_expired_locked(self, now: datetime) -> None:
+        expired_scopes = tuple(
+            scope
+            for scope, pending in self._projects.items()
+            if pending.value.expires_at <= now
+        )
+        for scope in expired_scopes:
+            del self._projects[scope]
+        expired_routes = tuple(
+            route for route in self._sessions.values() if route.expires_at <= now
+        )
+        for route in expired_routes:
+            self._routes.remove(
+                route,
+                failure=ActiveBindingMissingError(
+                    "ChatGPT project selection expired"
+                ),
+            )
+        self._prune_computer_session_generations_locked()
+
+    def _prune_computer_session_generations_locked(self) -> None:
+        live_keys = {
+            (pending.device_id, pending.value.thread_id)
+            for pending in self._projects.values()
+        }
+        live_keys.update(
+            (route.device_id, route.thread_id) for route in self._sessions.values()
+        )
+        stale_keys = self._computer_session_generations.keys() - live_keys
+        for key in stale_keys:
+            del self._computer_session_generations[key]
+
+    async def _retire_sender_after_send_timeout(
+        self,
+        device_id: DeviceId,
+        sender: BridgeSender,
+    ) -> None:
+        with anyio.CancelScope(shield=True):
+            async with self._lock:
+                if self._devices.get(device_id) is sender:
+                    self._disconnect_device(device_id)
+        close_grace_seconds = min(0.1, self._request_timeout_seconds)
+        try:
+            with anyio.move_on_after(close_grace_seconds, shield=True):
+                await sender.close()
+        except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+            logger.warning(
+                "failed to close local bridge after send timeout",
+                exc_info=True,
             )
 
     @override
@@ -321,19 +334,25 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 )
             else:
                 pending.waiter_count += 1
+        remaining_seconds = (command.deadline_at - datetime.now(UTC)).total_seconds()
+        timeout_seconds = min(
+            self._request_timeout_seconds,
+            max(0.001, remaining_seconds),
+        )
+        send_completed = not should_send
         try:
-            if should_send:
-                await sender.send(command)
-            remaining_seconds = (
-                command.deadline_at - datetime.now(UTC)
-            ).total_seconds()
-            timeout_seconds = min(
-                self._request_timeout_seconds,
-                max(0.001, remaining_seconds),
-            )
             with anyio.fail_after(timeout_seconds):
+                if should_send:
+                    await sender.send(command)
+                    send_completed = True
                 await pending.event.wait()
         except TimeoutError as exc:
+            if should_send and not send_completed:
+                await self._retire_sender_after_send_timeout(
+                    route.device_id,
+                    sender,
+                )
+                raise BridgeTimeoutError("local bridge send timed out") from exc
             raise BridgeTimeoutError("local bridge response timed out") from exc
         finally:
             with anyio.CancelScope(shield=True):
@@ -357,10 +376,12 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         subject: str,
     ) -> tuple[SessionRoute, BridgeSender]:
         async with self._lock:
+            now = self._now()
+            self._prune_expired_locked(now)
             route = self._sessions.get(session)
             if (
                 route is None
-                or route.expires_at <= datetime.now(UTC)
+                or route.expires_at <= now
                 or route.subject != subject
             ):
                 raise ActiveBindingMissingError(

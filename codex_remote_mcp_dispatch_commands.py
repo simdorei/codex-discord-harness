@@ -5,12 +5,12 @@ from typing import assert_never
 
 from codex_remote_mcp_computer import ComputerController
 from codex_remote_mcp_files import ProjectFileAccess
-from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
-from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from codex_remote_mcp_operations import (
     execute_project_operation,
     write_file_with_checkpoint,
 )
+from codex_remote_mcp_terminal_engine import TerminalExecutionEngine
+from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import (
     BridgeResult,
     ListFilesCommand,
@@ -24,6 +24,7 @@ from simdorei_mcp_common.messages import (
     WriteFileCommand,
     WriteFileResult,
 )
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 BoundProjectCommand = (
     ProjectInfoCommand
@@ -41,7 +42,9 @@ def execute_bound_project_command(
     *,
     terminal: TerminalExecutionEngine | None = None,
     terminal_windows: TerminalWindowManager | None = None,
+    budget: RequestBudget,
 ) -> BridgeResult:
+    budget.ensure_active()
     access.verify_root()
     match command:
         case ProjectInfoCommand(thread_id=thread_id):
@@ -52,7 +55,11 @@ def execute_bound_project_command(
         case ListFilesCommand(pattern=pattern, limit=limit):
             return ListFilesResult(
                 request_id=command.request_id,
-                output=access.list_files(pattern, limit),
+                output=access.list_files(
+                    pattern,
+                    limit,
+                    ensure_active=budget.ensure_active,
+                ),
             )
         case ReadFileCommand(path=path, start_line=start_line, max_lines=max_lines):
             return ReadFileResult(
@@ -75,6 +82,7 @@ def execute_bound_project_command(
                     path,
                     content,
                     expected_sha256=expected_sha256,
+                    budget=budget,
                 ),
             )
         case ProjectOperationCommand(operation=operation):
@@ -86,6 +94,7 @@ def execute_bound_project_command(
                     computer=computer,
                     terminal=terminal,
                     terminal_windows=terminal_windows,
+                    budget=budget,
                 ),
             )
         case unreachable:

@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -20,26 +21,40 @@ from codex_remote_mcp_windows_launch_cleanup import (
 from codex_remote_mcp_windows_launch_types import (
     ApplicationLaunchCleanupError,
     FailedLaunchCleanup,
+    JobOwnedProcess,
     LaunchedApplication,
     OwnedProcess,
+    OwnedProcessTree,
 )
 from codex_remote_mcp_windows_native import USER32, EnumWindowsCallback
 from codex_remote_mcp_windows_process_stop import stop_retained_process
 from codex_remote_mcp_windows_windows import ResolvedWindow, resolve_allowed_window
+from codex_windows_job import (
+    WINDOWS_CREATE_SUSPENDED,
+    create_kill_on_close_job_for_suspended_process,
+)
 
 LAUNCH_TIMEOUT_SECONDS: Final = 8.0
 OWNED_PROCESS_CLOSE_SECONDS: Final = 1.0
 OWNED_PROCESS_KILL_SECONDS: Final = 5.0
 
 
-def launch_allowed_app(app: str) -> LaunchedApplication:
+def launch_allowed_app(
+    app: str,
+    *,
+    ensure_active: Callable[[], None] | None = None,
+) -> LaunchedApplication:
     executable = _app_executable(app)
     temporary_profile = (
         tempfile.mkdtemp(prefix="simdorei-mcp-chrome-") if app == "chrome" else None
     )
     command = _launch_command(executable, app, temporary_profile)
     try:
-        process = subprocess.Popen(command, close_fds=True)
+        raw_process = subprocess.Popen(
+            command,
+            close_fds=True,
+            creationflags=WINDOWS_CREATE_SUSPENDED,
+        )
     except OSError as exc:
         _cleanup_failed_launch(
             FailedLaunchCleanup(app, None, temporary_profile),
@@ -47,8 +62,22 @@ def launch_allowed_app(app: str) -> LaunchedApplication:
         )
         raise ComputerControlError(f"Could not launch {app}: {exc}") from exc
     try:
-        resolved = _wait_for_main_window(process)
-    except ComputerControlError as exc:
+        job = create_kill_on_close_job_for_suspended_process(raw_process.pid)
+        process: OwnedProcess = JobOwnedProcess(raw_process, job)
+    except OSError as exc:
+        _cleanup_failed_launch(
+            FailedLaunchCleanup(app, raw_process, temporary_profile),
+            exc,
+        )
+        raise ComputerControlError(
+            f"Could not own the {app} process tree: {exc}"
+        ) from exc
+    try:
+        if ensure_active is None:
+            resolved = _wait_for_main_window(process)
+        else:
+            resolved = _wait_for_main_window(process, ensure_active=ensure_active)
+    except BaseException as exc:
         _cleanup_failed_launch(
             FailedLaunchCleanup(app, process, temporary_profile),
             exc,
@@ -82,9 +111,15 @@ def _launch_command(
     ]
 
 
-def _wait_for_main_window(process: subprocess.Popen[bytes]) -> ResolvedWindow:
+def _wait_for_main_window(
+    process: OwnedProcess,
+    *,
+    ensure_active: Callable[[], None] | None = None,
+) -> ResolvedWindow:
     deadline = time.monotonic() + LAUNCH_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
+        if ensure_active is not None:
+            ensure_active()
         if process.poll() is not None:
             break
         for window_id in _visible_windows_for_process(process.pid):
@@ -116,8 +151,24 @@ def _visible_windows_for_process(process_id: int) -> tuple[int, ...]:
     return tuple(windows)
 
 
-def retry_failed_launch_cleanup(cleanup: FailedLaunchCleanup) -> None:
-    _retry_failed_launch_cleanup(cleanup, remove_temporary_profile)
+def retry_failed_launch_cleanup(
+    cleanup: FailedLaunchCleanup,
+    *,
+    deadline_monotonic: float | None = None,
+) -> None:
+    if deadline_monotonic is None:
+        remove_profile = remove_temporary_profile
+    else:
+        def remove_profile(directory: str | None) -> None:
+            remove_temporary_profile(
+                directory,
+                deadline_monotonic=deadline_monotonic,
+            )
+    _retry_failed_launch_cleanup(
+        cleanup,
+        remove_profile,
+        deadline_monotonic=deadline_monotonic,
+    )
 
 
 def _cleanup_failed_launch(
@@ -134,8 +185,23 @@ def stop_owned_process(
     window_id: int,
     process: OwnedProcess,
     process_path: str,
+    *,
+    deadline_monotonic: float | None = None,
 ) -> None:
     _ = window_id, process_path
+    if isinstance(process, OwnedProcessTree):
+        try:
+            timeout_seconds = (
+                OWNED_PROCESS_KILL_SECONDS
+                if deadline_monotonic is None
+                else max(0.0, deadline_monotonic - time.monotonic())
+            )
+            process.terminate_tree_and_close(timeout_seconds=timeout_seconds)
+        except (OSError, TimeoutError) as exc:
+            raise ComputerControlError(
+                "Stopping the owned application process tree failed."
+            ) from exc
+        return
     stop_retained_process(
         process,
         terminate_timeout_seconds=OWNED_PROCESS_CLOSE_SECONDS,

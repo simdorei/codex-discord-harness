@@ -17,9 +17,12 @@ import codex_remote_mcp_windows_file_guard as windows_file_guard
 import codex_remote_mcp_windows_file_native as windows_file_native
 import codex_remote_mcp_windows_file_staging as windows_file_staging
 import codex_remote_mcp_windows_file_write as windows_file_write
+import codex_remote_mcp_file_listing as project_listing
 from codex_remote_mcp_files import (
     FileConflictError,
     ProjectFileAccess,
+    ProjectFileLimitError,
+    ProjectFileSizeError,
     UnsafeProjectPathError,
 )
 
@@ -34,6 +37,193 @@ def test_read_file_rejects_parent_traversal(tmp_path: Path) -> None:
     # When / Then
     with pytest.raises(UnsafeProjectPathError):
         access.read_file("../outside.txt", start_line=1, max_lines=100)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    (
+        "../**/*",
+        r"..\**\*",
+        r"safe/..\outside/*",
+        "/etc/*",
+        r"C:\Windows\*",
+        r"\\server\share\*",
+        "//server/share/*",
+    ),
+)
+def test_list_files_rejects_escaping_glob_before_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pattern: str,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    access = ProjectFileAccess(root)
+
+    def fail_if_glob_runs(path: Path, value: str) -> Iterator[Path]:
+        _ = (path, value)
+        raise AssertionError("unsafe pattern reached filesystem enumeration")
+
+    monkeypatch.setattr(Path, "glob", fail_if_glob_runs)
+
+    with pytest.raises(UnsafeProjectPathError):
+        _ = access.list_files(pattern)
+
+
+def test_list_files_stops_before_unbounded_sort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "item.txt"
+    target.write_text("item", encoding="utf-8")
+    access = ProjectFileAccess(root)
+
+    def excessive_entries(path: Path, listing_root: Path) -> Iterator[Path]:
+        _ = path, listing_root
+        for _ in range(10_001):
+            yield target
+
+    monkeypatch.setattr(project_listing, "_iter_directory_entries", excessive_entries)
+
+    with pytest.raises(ProjectFileLimitError, match="too many"):
+        _ = access.list_files("**/*", limit=1)
+
+
+def test_list_files_accepts_exact_scan_budget_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "item.txt"
+    target.write_text("item", encoding="utf-8")
+
+    def boundary_entries(path: Path, listing_root: Path) -> Iterator[Path]:
+        _ = path, listing_root
+        for _ in range(10_000):
+            yield target
+
+    monkeypatch.setattr(project_listing, "_iter_directory_entries", boundary_entries)
+
+    output = ProjectFileAccess(root).list_files("**/*", limit=1)
+
+    assert [entry.path for entry in output.files] == ["item.txt"]
+
+
+def test_list_files_returns_sorted_bounded_results(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    for name in ("c.txt", "a.txt", "b.txt"):
+        (root / name).write_text(name, encoding="utf-8")
+
+    output = ProjectFileAccess(root).list_files("*.txt", limit=2)
+
+    assert [entry.path for entry in output.files] == ["a.txt", "b.txt"]
+    assert output.truncated is True
+
+
+def test_list_files_allows_two_dots_inside_a_filename(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "release..notes.txt").write_text("safe", encoding="utf-8")
+
+    output = ProjectFileAccess(root).list_files("release..*.txt")
+
+    assert [entry.path for entry in output.files] == ["release..notes.txt"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point semantics")
+def test_list_files_hides_a_directory_link_to_outside_project(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "private.txt").write_text("private", encoding="utf-8")
+    link = root / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc.winerror}")
+
+    output = ProjectFileAccess(root).list_files("**/*")
+
+    assert all(not entry.path.startswith("linked") for entry in output.files)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point semantics")
+def test_recursive_list_never_enumerates_inside_an_external_directory_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "private.txt").write_text("private", encoding="utf-8")
+    link = root / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc.winerror}")
+    real_entries = project_listing._iter_directory_entries
+
+    def tracked_entries(path: Path, listing_root: Path) -> Iterator[Path]:
+        if path.resolve() == outside.resolve():
+            raise AssertionError("recursive glob traversed an external directory link")
+        yield from real_entries(path, listing_root)
+
+    monkeypatch.setattr(project_listing, "_iter_directory_entries", tracked_entries)
+
+    output = ProjectFileAccess(root).list_files("**/*")
+
+    assert all(not entry.path.startswith("linked") for entry in output.files)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point semantics")
+def test_recursive_list_holds_directory_against_junction_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    target = root / "mutable"
+    saved = root / "saved"
+    root.mkdir()
+    outside.mkdir()
+    target.mkdir()
+    (outside / "private.txt").write_text("private", encoding="utf-8")
+    original_can_descend = project_listing._can_descend
+    swapped = False
+
+    def swap_after_check(
+        path: Path,
+        listing_root: Path,
+        excluded_directory_names: frozenset[str],
+    ) -> bool:
+        nonlocal swapped
+        allowed = original_can_descend(
+            path,
+            listing_root,
+            excluded_directory_names,
+        )
+        if path == target and allowed and not swapped:
+            target.rename(saved)
+            try:
+                target.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                saved.rename(target)
+                pytest.skip(f"symbolic links are unavailable: {exc.winerror}")
+            swapped = True
+        return allowed
+
+    monkeypatch.setattr(project_listing, "_can_descend", swap_after_check)
+
+    output = ProjectFileAccess(root).list_files("**/*")
+
+    assert swapped
+    assert all(entry.path != "mutable/private.txt" for entry in output.files)
 
 
 def test_write_file_requires_current_hash_for_existing_file(tmp_path: Path) -> None:
@@ -555,3 +745,39 @@ def test_read_rejects_a_directory_link_to_outside_project(tmp_path: Path) -> Non
 
     with pytest.raises(UnsafeProjectPathError, match="reparse"):
         ProjectFileAccess(root).read_bytes("linked/public.txt")
+
+def test_list_files_rejects_repeated_recursive_segments(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+
+    with pytest.raises(UnsafeProjectPathError, match="at most one"):
+        _ = ProjectFileAccess(root).list_files("**/**/target.txt")
+
+
+def test_bounded_byte_read_rejects_growth_past_limit(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "data.bin").write_bytes(b"x" * 11)
+
+    with pytest.raises(ProjectFileSizeError, match="exceeds 10 bytes"):
+        _ = ProjectFileAccess(root).read_bytes("data.bin", max_bytes=10)
+
+
+def test_list_files_checks_cancellation_during_walk(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    for index in range(3):
+        (root / f"item-{index}.txt").write_text("x", encoding="utf-8")
+    checks = 0
+
+    def cancel_during_walk() -> None:
+        nonlocal checks
+        checks += 1
+        if checks > 2:
+            raise TimeoutError("cancelled")
+
+    with pytest.raises(TimeoutError, match="cancelled"):
+        _ = ProjectFileAccess(root).list_files(
+            "**/*",
+            ensure_active=cancel_during_walk,
+        )

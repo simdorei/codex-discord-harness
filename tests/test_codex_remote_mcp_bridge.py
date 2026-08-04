@@ -134,6 +134,7 @@ def test_bridge_registers_project_and_dispatches_project_info(tmp_path: Path) ->
             request_id=RequestId("activate-1"),
             thread_id="thread-1",
             computer_session_id=session_id,
+            computer_session_generation=1,
         ).model_dump_json()
     )
     socket.inbound.put(
@@ -216,6 +217,7 @@ def test_bridge_disconnect_invalidates_local_observation_before_reconnect(
             request_id=RequestId("activate-computer-session-a"),
             thread_id="thread-1",
             computer_session_id="computer-session-a",
+            computer_session_generation=1,
         )
     )
     assert isinstance(activated, ProjectSessionResult)

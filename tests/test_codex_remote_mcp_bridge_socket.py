@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import threading
+from time import monotonic
 from types import TracebackType
 from typing import Self, final
 
 from codex_remote_mcp_bridge_connection import (
     SerializedBridgeConnection,
     SerializedBridgeSocket,
+    close_socket_before_deadline,
 )
 
 
@@ -104,3 +106,24 @@ def test_connector_context_exit_never_closes_during_a_send() -> None:
     assert not exiter.is_alive()
     assert raw.close_called.is_set()
     assert raw.close_overlapped_send is False
+
+
+def test_socket_close_returns_at_deadline_when_send_never_finishes() -> None:
+    raw = _BlockingSendSocket()
+    socket = SerializedBridgeSocket(raw)
+    sender = threading.Thread(target=socket.send, args=("hello",))
+    sender.start()
+    assert raw.send_started.wait(timeout=1)
+
+    started = monotonic()
+    attempt = close_socket_before_deadline(
+        socket,
+        deadline_monotonic=started + 0.05,
+    )
+
+    assert not attempt.completed
+    assert attempt.error is None
+    assert monotonic() - started < 0.5
+    raw.release_send.set()
+    sender.join(timeout=1)
+    assert not sender.is_alive()

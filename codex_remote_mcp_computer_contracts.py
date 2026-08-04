@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Protocol
 
 from simdorei_mcp_common.operation_outputs import ComputerWindowEntry
@@ -38,11 +39,16 @@ class ComputerCapture:
 
 
 class ComputerPlatform(Protocol):
-    def stop(self) -> None: ...
+    def stop(self, *, deadline_monotonic: float | None = None) -> None: ...
     def list_windows(self) -> tuple[ComputerWindowEntry, ...]: ...
     def screenshot(self, window_id: int) -> ComputerCapture: ...
     def activate(self, window_id: int) -> ComputerWindowEntry: ...
-    def launch(self, app: str) -> None: ...
+    def launch(
+        self,
+        app: str,
+        *,
+        ensure_active: Callable[[], None] | None = None,
+    ) -> None: ...
     def close(self, permit: ComputerActionPermit) -> None: ...
     def click(
         self, permit: ComputerActionPermit, x: int, y: int, button: str, click_count: int

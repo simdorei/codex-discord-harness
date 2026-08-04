@@ -12,6 +12,7 @@ from codex_remote_mcp_computer_contracts import ComputerWindowIdentity
 from codex_remote_mcp_computer_errors import ComputerControlError
 from codex_remote_mcp_windows_windows import ResolvedWindow
 from simdorei_mcp_common.operation_outputs import ComputerWindowEntry
+from simdorei_mcp_common.request_deadlines import RequestDeadlineExpired
 
 
 @final
@@ -55,6 +56,19 @@ class _BlockingProcess:
 
     def kill(self) -> None:
         self.killed = True
+
+
+@final
+class _OwnedJob:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.terminated = False
+        self.fail = fail
+
+    def terminate_and_close(self, *, timeout_seconds: float = 5.0) -> None:
+        _ = timeout_seconds
+        self.terminated = True
+        if self.fail:
+            raise TimeoutError("job did not empty")
 
 
 def _resolved() -> ResolvedWindow:
@@ -119,6 +133,11 @@ def test_failed_launch_double_timeout_retains_cleanup_for_retry(
         "Popen",
         lambda *_args, **_kwargs: process,
     )
+    monkeypatch.setattr(
+        windows_launch,
+        "create_kill_on_close_job_for_suspended_process",
+        lambda _pid: _OwnedJob(fail=True),
+    )
 
     def reject_window(_: windows_launch.OwnedProcess) -> ResolvedWindow:
         raise ComputerControlError("safe window did not appear")
@@ -136,6 +155,86 @@ def test_failed_launch_double_timeout_retains_cleanup_for_retry(
     assert type(captured.value).__name__ == "ApplicationLaunchCleanupError"
     assert cleanup_calls == ["profile"]
     assert captured.value.reason == "Failed application cleanup must be retried."
+
+
+def test_launch_assigns_suspended_process_to_owned_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _LaunchProcess()
+    job = _OwnedJob()
+    creation_flags: list[int] = []
+    monkeypatch.setattr(windows_launch, "_app_executable", lambda _: "chrome.exe")
+    monkeypatch.setattr(
+        windows_launch.tempfile,
+        "mkdtemp",
+        lambda **_: "profile",
+    )
+
+    def launch(*_args: object, **kwargs: object) -> _LaunchProcess:
+        creation_flags.append(int(kwargs["creationflags"]))
+        return process
+
+    monkeypatch.setattr(windows_launch.subprocess, "Popen", launch)
+    monkeypatch.setattr(
+        windows_launch,
+        "create_kill_on_close_job_for_suspended_process",
+        lambda _pid: job,
+    )
+    monkeypatch.setattr(windows_launch, "_wait_for_main_window", lambda _: _resolved())
+
+    launched = windows_launch.launch_allowed_app("chrome")
+    windows_launch.stop_owned_process(
+        launched.window.entry.window_id,
+        launched.process,
+        launched.window.identity.process_path,
+    )
+
+    assert creation_flags[0] & windows_launch.WINDOWS_CREATE_SUSPENDED
+    assert job.terminated is True
+
+
+def test_cancelled_launch_cleans_owned_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _LaunchProcess()
+    job = _OwnedJob()
+    profiles: list[str | None] = []
+    monkeypatch.setattr(windows_launch, "_app_executable", lambda _: "chrome.exe")
+    monkeypatch.setattr(
+        windows_launch.tempfile,
+        "mkdtemp",
+        lambda **_: "profile",
+    )
+    monkeypatch.setattr(
+        windows_launch.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: process,
+    )
+    monkeypatch.setattr(
+        windows_launch,
+        "create_kill_on_close_job_for_suspended_process",
+        lambda _pid: job,
+    )
+    monkeypatch.setattr(windows_launch, "remove_temporary_profile", profiles.append)
+
+    with pytest.raises(RequestDeadlineExpired):
+        _ = windows_launch.launch_allowed_app(
+            "chrome",
+            ensure_active=lambda: (_ for _ in ()).throw(
+                RequestDeadlineExpired("cancelled")
+            ),
+        )
+
+    assert job.terminated is True
+    assert profiles == ["profile"]
+
+
+def test_profile_cleanup_honors_expired_deadline() -> None:
+    with pytest.raises(TimeoutError, match="Timed out removing"):
+        windows_launch.remove_temporary_profile(
+            "profile",
+            deadline_monotonic=0.0,
+        )
 
 
 def test_process_identity_inspection_failure_is_not_reported_as_exit(

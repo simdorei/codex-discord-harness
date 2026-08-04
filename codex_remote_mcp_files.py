@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, override
@@ -10,6 +11,12 @@ from codex_remote_mcp_file_store import (
     ProjectFileStore,
     ProjectFileStoreConflict,
     ProjectFileStoreError,
+    ProjectFileStoreReadLimit,
+)
+from codex_remote_mcp_file_listing import (
+    ProjectGlobLimitError,
+    ProjectGlobPatternError,
+    iter_bounded_project_glob,
 )
 from codex_remote_mcp_redaction import redact
 from simdorei_mcp_common.messages import (
@@ -22,6 +29,19 @@ from simdorei_mcp_common.messages import (
 
 MAX_FILE_BYTES: Final = 1_048_576
 MAX_LIST_RESULTS: Final = 500
+LIST_SKIP_DIRECTORIES: Final = frozenset(
+    {
+        ".codex-remote-mcp",
+        ".git",
+        ".next",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "vendor",
+    }
+)
 SENSITIVE_PARTS: Final = frozenset(
     {
         ".aws",
@@ -62,6 +82,10 @@ class UnsafeProjectPathError(ProjectFileError):
 
 class ProjectFileSizeError(ProjectFileError):
     """Raised when a file exceeds the bridge transfer limit."""
+
+
+class ProjectFileLimitError(ProjectFileError):
+    """Raised when file enumeration exceeds its bounded work limit."""
 
 
 class ProjectFileEncodingError(ProjectFileError):
@@ -112,38 +136,58 @@ class ProjectFileAccess:
         """Resolve one non-sensitive path while keeping it inside the project."""
         return self._resolve(value, require_file=require_file)
 
-    def list_files(self, pattern: str = "**/*", limit: int = 200) -> ListFilesOutput:
+    def list_files(
+        self,
+        pattern: str = "**/*",
+        limit: int = 200,
+        *,
+        ensure_active: Callable[[], None] | None = None,
+    ) -> ListFilesOutput:
         bounded_limit = min(max(limit, 1), MAX_LIST_RESULTS)
         entries: list[FileEntry] = []
-        matched = sorted(self.root.glob(pattern))
-        for candidate in matched:
-            if len(entries) >= bounded_limit:
-                break
-            if self._is_sensitive(candidate):
-                continue
-            relative = candidate.relative_to(self.root).as_posix()
-            try:
-                size = self.file_size(relative)
-            except ProjectFileError:
-                continue
-            entries.append(
-                FileEntry(
-                    path=relative,
-                    size_bytes=size,
-                )
+        try:
+            matched = iter_bounded_project_glob(
+                self.root,
+                pattern,
+                excluded_directory_names=LIST_SKIP_DIRECTORIES,
+                ensure_active=ensure_active,
             )
+            for candidate in matched:
+                if ensure_active is not None:
+                    ensure_active()
+                if len(entries) > bounded_limit:
+                    break
+                try:
+                    _ = candidate.resolve().relative_to(self.root)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if self._is_sensitive(candidate):
+                    continue
+                relative = candidate.relative_to(self.root).as_posix()
+                try:
+                    size = self.file_size(relative)
+                except ProjectFileError:
+                    continue
+                entries.append(
+                    FileEntry(
+                        path=relative,
+                        size_bytes=size,
+                    )
+                )
+        except ProjectGlobPatternError as exc:
+            raise UnsafeProjectPathError(pattern, str(exc)) from exc
+        except ProjectGlobLimitError as exc:
+            raise ProjectFileLimitError(pattern, str(exc)) from exc
         return ListFilesOutput(
-            files=tuple(entries),
-            truncated=len(entries) == bounded_limit and len(matched) > len(entries),
+            files=tuple(entries[:bounded_limit]),
+            truncated=len(entries) > bounded_limit,
         )
 
     def read_file(
         self, path: str, *, start_line: int, max_lines: int
     ) -> ReadFileOutput:
         target = self._resolve(path)
-        raw = self.read_bytes(path)
-        if len(raw) > MAX_FILE_BYTES:
-            raise ProjectFileSizeError(path, f"file exceeds {MAX_FILE_BYTES} bytes")
+        raw = self.read_bytes(path, max_bytes=MAX_FILE_BYTES)
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -197,10 +241,27 @@ class ProjectFileAccess:
         except ProjectFileStoreError as exc:
             raise UnsafeProjectPathError(value, str(exc)) from exc
 
-    def read_bytes(self, value: str) -> bytes:
+    def read_bytes(
+        self,
+        value: str,
+        *,
+        max_bytes: int | None = None,
+        allow_truncated: bool = False,
+    ) -> bytes:
+        if allow_truncated and max_bytes is None:
+            raise ValueError("allow_truncated requires max_bytes")
         relative = self._relative(value)
         try:
-            return self._store.read_bytes(relative)
+            return self._store.read_bytes(
+                relative,
+                max_bytes=max_bytes,
+                allow_truncated=allow_truncated,
+            )
+        except ProjectFileStoreReadLimit as exc:
+            raise ProjectFileSizeError(
+                value,
+                f"file exceeds {max_bytes} bytes",
+            ) from exc
         except ProjectFileStoreError as exc:
             raise UnsafeProjectPathError(value, str(exc)) from exc
 

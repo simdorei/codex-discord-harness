@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 import os
-import tempfile
 from pathlib import Path
 from typing import final
 
+from codex_remote_mcp_posix_file_guard import (
+    PosixFileConflictError,
+    PosixFileReadLimitError,
+    PosixProjectFileGuard,
+)
 from codex_remote_mcp_windows_file_guard import (
     WindowsFileConflictError,
+    WindowsFileReadLimitError,
     WindowsProjectFileGuard,
 )
 
@@ -20,18 +24,27 @@ class ProjectFileStoreConflict(ProjectFileStoreError):
     """Raised when a retained file no longer meets its write condition."""
 
 
+class ProjectFileStoreReadLimit(ProjectFileStoreError):
+    """Raised before a backend read can exceed its byte limit."""
+
+
 @final
 class ProjectFileStore:
-    """Use retained Windows handles or resolved POSIX paths for file access."""
+    """Use retained platform handles for confined project file access."""
 
-    __slots__ = ("_windows", "root")
+    __slots__ = ("_posix", "_windows", "root")
 
     def __init__(self, root: Path) -> None:
         self.root: Path = root
         try:
-            self._windows: WindowsProjectFileGuard | None = (
-                WindowsProjectFileGuard(root) if os.name == "nt" else None
-            )
+            if os.name == "nt":
+                self._windows: WindowsProjectFileGuard | None = (
+                    WindowsProjectFileGuard(root)
+                )
+                self._posix: PosixProjectFileGuard | None = None
+            else:
+                self._windows = None
+                self._posix = PosixProjectFileGuard(root)
         except OSError as exc:
             raise ProjectFileStoreError(str(exc)) from exc
 
@@ -41,28 +54,49 @@ class ProjectFileStore:
                 return self._windows.ensure(relative, require_file=require_file)
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        target = (self.root / relative).resolve()
-        if not target.is_relative_to(self.root):
-            raise ProjectFileStoreError("path is outside the project root")
-        if require_file and not target.is_file():
-            raise ProjectFileStoreError("path is not a file")
-        return target
-
-    def verify_root(self) -> None:
-        if self._windows is None:
-            return
+        assert self._posix is not None
         try:
-            self._windows.verify_root()
+            return self._posix.ensure(relative, require_file=require_file)
         except OSError as exc:
             raise ProjectFileStoreError(str(exc)) from exc
 
-    def read_bytes(self, relative: Path) -> bytes:
+    def verify_root(self) -> None:
+        guard = self._windows if self._windows is not None else self._posix
+        assert guard is not None
+        try:
+            guard.verify_root()
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc
+
+    def read_bytes(
+        self,
+        relative: Path,
+        *,
+        max_bytes: int | None = None,
+        allow_truncated: bool = False,
+    ) -> bytes:
         if self._windows is not None:
             try:
-                return self._windows.read_bytes(relative)
+                return self._windows.read_bytes(
+                    relative,
+                    max_bytes=max_bytes,
+                    allow_truncated=allow_truncated,
+                )
+            except WindowsFileReadLimitError as exc:
+                raise ProjectFileStoreReadLimit(str(exc)) from exc
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        return self.ensure(relative, require_file=True).read_bytes()
+        assert self._posix is not None
+        try:
+            return self._posix.read_bytes(
+                relative,
+                max_bytes=max_bytes,
+                allow_truncated=allow_truncated,
+            )
+        except PosixFileReadLimitError as exc:
+            raise ProjectFileStoreReadLimit(str(exc)) from exc
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc
 
     def file_exists(self, relative: Path) -> bool:
         if self._windows is not None:
@@ -70,7 +104,11 @@ class ProjectFileStore:
                 return self._windows.file_exists(relative)
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        return self.ensure(relative, require_file=False).is_file()
+        assert self._posix is not None
+        try:
+            return self._posix.file_exists(relative)
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc
 
     def file_size(self, relative: Path) -> int:
         if self._windows is not None:
@@ -78,8 +116,11 @@ class ProjectFileStore:
                 return self._windows.file_size(relative)
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        target = self.ensure(relative, require_file=True)
-        return target.stat().st_size
+        assert self._posix is not None
+        try:
+            return self._posix.file_size(relative)
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc
 
     def write_bytes(
         self,
@@ -99,19 +140,17 @@ class ProjectFileStore:
                 raise ProjectFileStoreConflict(str(exc)) from exc
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        target = self.ensure(relative, require_file=False)
-        created = not target.exists()
-        if created and expected_sha256 is not None:
-            raise ProjectFileStoreConflict("new files require expected_sha256=null")
-        if not created:
-            current = hashlib.sha256(target.read_bytes()).hexdigest()
-            if expected_sha256 is None:
-                raise ProjectFileStoreConflict("existing files require expected_sha256")
-            if current != expected_sha256:
-                raise ProjectFileStoreConflict("file changed since it was read")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(target, content)
-        return created
+        assert self._posix is not None
+        try:
+            return self._posix.write_bytes(
+                relative,
+                content,
+                expected_sha256=expected_sha256,
+            )
+        except PosixFileConflictError as exc:
+            raise ProjectFileStoreConflict(str(exc)) from exc
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc
 
     def delete_file(self, relative: Path, *, expected_sha256: str) -> None:
         if self._windows is not None:
@@ -125,28 +164,13 @@ class ProjectFileStore:
                 raise ProjectFileStoreConflict(str(exc)) from exc
             except OSError as exc:
                 raise ProjectFileStoreError(str(exc)) from exc
-        target = self.ensure(relative, require_file=True)
-        if hashlib.sha256(target.read_bytes()).hexdigest() != expected_sha256:
-            raise ProjectFileStoreConflict("file changed since it was read")
-        target.unlink()
-
-
-def _atomic_write(target: Path, content: bytes) -> None:
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            _ = handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, target)
-        temporary = None
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        assert self._posix is not None
+        try:
+            self._posix.delete_file(
+                relative,
+                expected_sha256=expected_sha256,
+            )
+        except PosixFileConflictError as exc:
+            raise ProjectFileStoreConflict(str(exc)) from exc
+        except OSError as exc:
+            raise ProjectFileStoreError(str(exc)) from exc

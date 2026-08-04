@@ -43,7 +43,7 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=11,
+                    protocol_version=9,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )
@@ -58,7 +58,7 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
                 ).model_dump_json()
             )
             _ = parse_gateway_message(socket.receive_text())
-            access_token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
+            access_token = authorize(client)
             headers = {**MCP_HEADERS, "Authorization": f"Bearer {access_token}"}
             _select_project(client, socket, headers)
 
@@ -93,10 +93,10 @@ def test_terminal_tool_round_trips_typed_request_and_receipt() -> None:
     assert receipt["command_digest"] == "a" * 64
 
 
-def test_terminal_tool_requires_write_scope() -> None:
+def test_terminal_tool_reuses_project_write_oauth_scope() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        token = authorize(client, scopes=(READ_SCOPE,))
+        token = authorize(client, scopes=(READ_SCOPE, WRITE_SCOPE))
         response = client.post(
             "/mcp",
             headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
@@ -108,7 +108,9 @@ def test_terminal_tool_requires_write_scope() -> None:
     result = cast(dict[str, object], payload["result"])
     assert result["isError"] is True
     content = cast(list[dict[str, object]], result["content"])
-    assert "files:write" in str(content[0]["text"])
+    message = str(content[0]["text"])
+    assert "no active project selection" in message
+    assert "terminal:execute" not in message
 
 
 def _select_project(

@@ -95,15 +95,15 @@ def test_mcp_initialize_and_tool_listing() -> None:
         "set_computer_clipboard",
         "show_changes",
         "stop_computer_control",
-            "terminal_exec",
-            "terminal_window_activate",
-            "terminal_window_capture",
-            "terminal_window_close",
-            "terminal_window_interrupt",
-            "terminal_window_keys",
-            "terminal_window_list",
-            "terminal_window_open",
-            "terminal_window_type",
+        "terminal_exec",
+        "terminal_window_activate",
+        "terminal_window_capture",
+        "terminal_window_close",
+        "terminal_window_interrupt",
+        "terminal_window_keys",
+        "terminal_window_list",
+        "terminal_window_open",
+        "terminal_window_type",
         "type_computer_text",
         "write_project_file",
     }
@@ -155,7 +155,7 @@ def test_oauth_chat_session_selects_registered_local_project(tmp_path: Path) -> 
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=11,
+                    protocol_version=9,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

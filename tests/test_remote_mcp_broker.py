@@ -1,3 +1,5 @@
+"""Binding broker behavior tests. (# noqa: SIZE_OK)"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -10,6 +12,7 @@ from remote_mcp_server.simdorei_mcp.broker import BindingBroker
 from remote_mcp_server.simdorei_mcp.broker_errors import (
     ActiveBindingMissingError,
     BindingCodeError,
+    BridgeTimeoutError,
     BridgeUnavailableError,
     BrokerError,
 )
@@ -26,7 +29,6 @@ from simdorei_mcp_common.messages import (
     ProjectSessionResult,
     ProjectUpsert,
     ReadFileCommand,
-    RuntimeCapabilityCommand,
     WriteFileCommand,
 )
 
@@ -56,7 +58,6 @@ class ProjectInfoSender(BridgeSender):
             case (
                 ListFilesCommand()
                 | ReadFileCommand()
-                | RuntimeCapabilityCommand()
                 | WriteFileCommand()
                 | ProjectOperationCommand()
             ):
@@ -67,6 +68,7 @@ class ProjectInfoSender(BridgeSender):
         # When
         await self._broker.complete(DeviceId("device-a"), self, result)
 
+    @override
     async def close(self) -> None:
         return None
 
@@ -76,6 +78,7 @@ class CancellableProjectInfoSender(ProjectInfoSender):
         super().__init__(broker)
         self.project_info_started: anyio.Event = anyio.Event()
         self.release_project_info: anyio.Event = anyio.Event()
+        self.close_called: anyio.Event = anyio.Event()
 
     @override
     async def send(self, command: GatewayCommand) -> None:
@@ -84,6 +87,35 @@ class CancellableProjectInfoSender(ProjectInfoSender):
             await self.release_project_info.wait()
             return
         await super().send(command)
+
+    @override
+    async def close(self) -> None:
+        self.close_called.set()
+
+
+class ReplacingProjectInfoSender(CancellableProjectInfoSender):
+    def __init__(
+        self,
+        broker: BindingBroker,
+        replacement: BridgeSender,
+    ) -> None:
+        super().__init__(broker)
+        self._replacement = replacement
+
+    @override
+    async def send(self, command: GatewayCommand) -> None:
+        if not isinstance(command, ProjectInfoCommand):
+            await super().send(command)
+            return
+        self.project_info_started.set()
+        try:
+            await self.release_project_info.wait()
+        finally:
+            with anyio.CancelScope(shield=True):
+                _ = await self._broker.attach(
+                    DeviceId("device-a"),
+                    self._replacement,
+                )
 
 
 def _project(scope: str, thread_id: str = "thread-a") -> ProjectUpsert:
@@ -159,6 +191,7 @@ def test_device_disconnect_revokes_bound_sessions() -> None:
         await broker.detach(DeviceId("device-a"), sender)
 
         # Then
+        assert len(broker._computer_session_generations) == 0
         with pytest.raises(ActiveBindingMissingError):
             _ = await broker.project_info("session-a", "subject-a")
 
@@ -204,6 +237,55 @@ def test_cancelled_request_is_removed_from_pending_calls() -> None:
             await sender.project_info_started.wait()
             tasks.cancel_scope.cancel()
 
+        assert broker.pending_call_count == 0
+
+    anyio.run(scenario)
+
+
+def test_blocked_sender_send_times_out_retires_device_and_cleans_pending() -> None:
+    async def scenario() -> None:
+        broker = BindingBroker(request_timeout_seconds=0.05)
+        sender = CancellableProjectInfoSender(broker)
+        _ = await broker.attach(DeviceId("device-a"), sender)
+        project_scope = "codex-pro-project-a"
+        await broker.upsert(DeviceId("device-a"), sender, _project(project_scope))
+        _ = await broker.select("session-a", "subject-a", project_scope)
+
+        with anyio.fail_after(0.2):
+            with pytest.raises(BridgeTimeoutError, match="local bridge send timed out"):
+                _ = await broker.project_info("session-a", "subject-a")
+
+        assert sender.close_called.is_set()
+        assert not await broker.is_device_connected(DeviceId("device-a"))
+        assert broker.pending_call_count == 0
+        with pytest.raises(ActiveBindingMissingError):
+            _ = await broker.project_info("session-a", "subject-a")
+
+    anyio.run(scenario)
+
+
+def test_send_timeout_closes_only_old_sender_after_replacement_attaches() -> None:
+    async def scenario() -> None:
+        broker = BindingBroker(request_timeout_seconds=0.05)
+        replacement = CancellableProjectInfoSender(broker)
+        sender = ReplacingProjectInfoSender(broker, replacement)
+        _ = await broker.attach(DeviceId("device-a"), sender)
+        project_scope = "codex-pro-project-a"
+        await broker.upsert(DeviceId("device-a"), sender, _project(project_scope))
+        _ = await broker.select("session-a", "subject-a", project_scope)
+
+        with anyio.fail_after(0.2):
+            with pytest.raises(BridgeTimeoutError, match="local bridge send timed out"):
+                _ = await broker.project_info("session-a", "subject-a")
+
+        assert sender.close_called.is_set()
+        assert not replacement.close_called.is_set()
+        assert await broker.is_device_connected(DeviceId("device-a"))
+        await broker.upsert(
+            DeviceId("device-a"),
+            replacement,
+            _project("codex-pro-project-replacement"),
+        )
         assert broker.pending_call_count == 0
 
     anyio.run(scenario)

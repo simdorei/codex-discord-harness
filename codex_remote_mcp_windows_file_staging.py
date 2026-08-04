@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import secrets
 from pathlib import Path
@@ -8,7 +7,7 @@ from pathlib import Path
 from codex_remote_mcp_windows_file_condition import (
     FileIdentity,
     VerifyRegularFile,
-    read_verified,
+    hash_verified,
 )
 from codex_remote_mcp_windows_file_native import (
     CREATE_NEW,
@@ -68,8 +67,12 @@ def retain_temporary(
         information = verify_regular_file(handle)
         if file_identity(information) != expected_identity:
             raise OSError("temporary file identity changed before publication")
-        current = read_verified(temporary, verify_regular_file, exclusive=True)
-        if hashlib.sha256(current).hexdigest() != expected_sha256:
+        current_sha256 = hash_verified(
+            temporary,
+            verify_regular_file,
+            exclusive=True,
+        )
+        if current_sha256 != expected_sha256:
             raise OSError("temporary file content changed before publication")
     except OSError:
         close_handle(handle)
