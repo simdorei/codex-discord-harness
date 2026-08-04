@@ -172,8 +172,14 @@ SIMDOREI_MCP_OAUTH_DATABASE_PATH=/data/oauth.sqlite3
 SIMDOREI_MCP_OAUTH_ACCESS_TOKEN_SECONDS=3600
 SIMDOREI_MCP_OAUTH_REFRESH_TOKEN_SECONDS=2592000
 SIMDOREI_MCP_OAUTH_PENDING_AUTHORIZATION_LIMIT=100
+SIMDOREI_MCP_OAUTH_AUTHORIZATION_CODE_GLOBAL_LIMIT=1024
+SIMDOREI_MCP_OAUTH_AUTHORIZATION_CODE_PER_CLIENT_LIMIT=64
 SIMDOREI_MCP_OAUTH_CLIENT_LIMIT=500
-SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS=330
+SIMDOREI_MCP_OAUTH_TOKEN_FAMILY_GLOBAL_LIMIT=256
+SIMDOREI_MCP_OAUTH_TOKEN_FAMILY_PER_CLIENT_LIMIT=16
+SIMDOREI_MCP_OAUTH_REFRESH_HISTORY_GLOBAL_LIMIT=65536
+SIMDOREI_MCP_OAUTH_REFRESH_HISTORY_PER_FAMILY_LIMIT=1024
+SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS=3630
 SIMDOREI_MCP_LOG_LEVEL=INFO
 ```
 
@@ -181,14 +187,24 @@ The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed
 tokens persist in the Docker volume mounted at `/data`.
 
-### Protocol 11 rollout
+Refresh-token rotation also retains a bounded history of spent token hashes.
+Reusing any spent token revokes the currently active token family. If either
+history limit is reached, that family is revoked instead of weakening replay
+detection, and the connector must complete authorization again.
+
+The Dockerfile pins its Python and `uv` build images by readable version tag and
+multi-platform digest so a later rebuild cannot silently change either input.
+These pins do not update automatically: when applying a security update, verify
+the new release and change its version tag and digest together before rebuilding.
+
+### Protocol 9 rollout
 
 The expanded project-operation protocol intentionally rejects old bridge or
 gateway processes instead of mixing message formats. Upgrade in one coordinated
 maintenance window:
 
 1. Stop the local bridge.
-2. Deploy the gateway that reports bridge protocol 11.
+2. Deploy the gateway that reports bridge protocol 9.
 3. Restart the updated local bridge immediately.
 4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
    `project_status` round trip before allowing write tools.
