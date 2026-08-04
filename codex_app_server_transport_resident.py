@@ -13,7 +13,6 @@ from codex_plugin_runtime_fingerprint import (
     PluginRuntimeFingerprintError,
     capture_required_plugin_fingerprint,
 )
-from codex_process_runtime_identity import process_identity
 
 from codex_app_server_stderr_log import (
     APP_SERVER_STDERR_LOG_NAME,
@@ -65,8 +64,6 @@ WallTimeFunc = Callable[[], float]
 ExternalWorkGuard = Callable[[], bool]
 GenerationSeedFunc = Callable[[], int]
 PluginRuntimeFingerprintReader = Callable[[], str]
-ProcessIdentityReader = Callable[[int], str]
-ResidentInvalidationObserver = Callable[[], None]
 _decode_json_value: Callable[[str], JsonValue] = json.loads
 _MAX_FRESH_READ_RETRY_SECONDS = 25.0
 _AMBIGUOUS_TURN_START_GRACE_SECONDS = 25.0
@@ -90,7 +87,6 @@ class ResidentCodexAppServerTransport:
         plugin_runtime_fingerprint_reader: PluginRuntimeFingerprintReader = (
             capture_required_plugin_fingerprint
         ),
-        process_identity_reader: ProcessIdentityReader = process_identity,
         stderr_log_path: Path | None = None,
     ) -> None:
         self.executable_resolver: Callable[[], str] = executable_resolver
@@ -99,9 +95,6 @@ class ResidentCodexAppServerTransport:
         self.wall_time_func: WallTimeFunc = wall_time_func
         self.plugin_runtime_fingerprint_reader: PluginRuntimeFingerprintReader = (
             plugin_runtime_fingerprint_reader
-        )
-        self.process_identity_reader: ProcessIdentityReader = (
-            process_identity_reader
         )
         self.process: ResidentProcess | None = None
         self._stdout_thread: threading.Thread | None = None
@@ -143,10 +136,6 @@ class ResidentCodexAppServerTransport:
         self._accepting_since: float | None = None
         self._plugin_runtime_fingerprint: str | None = None
         self._plugin_runtime_error: str | None = None
-        self._process_identity: str | None = None
-        self._resident_invalidation_observers: list[
-            ResidentInvalidationObserver
-        ] = []
         self._cleanup_retry: ChildCleanupRetryCoordinator = ChildCleanupRetryCoordinator(
             retry=self._retry_child_cleanup_once,
             log=self._log,
@@ -159,23 +148,6 @@ class ResidentCodexAppServerTransport:
     def _log(self, text: str) -> None:
         if self.log_func is not None:
             self.log_func(text)
-
-    def add_resident_invalidation_observer(
-        self,
-        observer: ResidentInvalidationObserver,
-    ) -> None:
-        with self._lock:
-            self._resident_invalidation_observers.append(observer)
-
-    def _notify_resident_invalidated(self) -> None:
-        for observer in tuple(self._resident_invalidation_observers):
-            try:
-                observer()
-            except (OSError, RuntimeError, ValueError) as exc:
-                self._log(
-                    "app_server_resident_invalidation_observer_failed "
-                    + f"error={type(exc).__name__}"
-                )
 
     def start(self) -> None:
         _ = self._request_lock.acquire()
@@ -198,9 +170,6 @@ class ResidentCodexAppServerTransport:
             if not has_resident_app_server_stdio(self.process):
                 self.close_locked()
                 raise CodexAppServerTransportError("Resident Codex app-server stdio is unavailable.")
-            self._process_identity = self.process_identity_reader(
-                self.process.pid
-            )
 
             self._stderr_recorder = AppServerStderrRecorder(
                 self.process,
@@ -280,12 +249,6 @@ class ResidentCodexAppServerTransport:
                 and not quarantined
                 and not self._restart_pending
             )
-            raw_process_id = (
-                getattr(self.process, "pid", None) if healthy else None
-            )
-            resident_process_id = (
-                raw_process_id if isinstance(raw_process_id, int) else None
-            )
             return AppServerLifecycleSnapshot(
                 generation=self._generation,
                 healthy=healthy,
@@ -298,8 +261,6 @@ class ResidentCodexAppServerTransport:
                 consecutive_read_timeouts=self._consecutive_read_timeouts,
                 plugin_runtime_fingerprint=self._plugin_runtime_fingerprint,
                 plugin_runtime_error=self._plugin_runtime_error,
-                process_id=resident_process_id,
-                process_identity=self._process_identity if healthy else None,
             )
 
     def _raise_for_generation_mismatch(self, expected_generation: int) -> None:
@@ -327,17 +288,13 @@ class ResidentCodexAppServerTransport:
                     self._closed_error = f"reader failed: {exc}"
                     self._condition.notify_all()
         finally:
-            invalidated = False
             with self._condition:
                 if self.process is process:
                     self._initialized = False
                     self._accepting_since = None
-                    invalidated = True
                     if self._closed_error is None:
                         self._closed_error = "app-server exited"
                 self._condition.notify_all()
-            if invalidated:
-                self._notify_resident_invalidated()
 
     def _handle_raw_line(
         self,
@@ -480,7 +437,6 @@ class ResidentCodexAppServerTransport:
         process = self.process
         self._initialized = False
         self._accepting_since = None
-        self._notify_resident_invalidated()
         if process is None:
             self._children.reset(self._generation)
             self._subscriptions.clear()
@@ -491,7 +447,6 @@ class ResidentCodexAppServerTransport:
         if stderr_recorder is not None:
             stderr_recorder.close()
         self.process = None
-        self._process_identity = None
         self._stdout_thread = None
         self._stderr_recorder = None
         self._children.reset(self._generation)
@@ -962,7 +917,6 @@ class ResidentCodexAppServerTransport:
             "app_server_response_timeout_quarantined "
             + f"method={method} generation={generation}"
         )
-        self._notify_resident_invalidated()
         self._restart_retry.schedule(generation)
 
     def _request_started(

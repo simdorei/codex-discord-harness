@@ -4,34 +4,28 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-from codex_pro_runtime_receipt_models import RuntimeReceiptSet
-from codex_pro_resident_identity import ResidentRuntimeIdentity
-from codex_pro_runtime_receipts import (
-    NOT_APPLICABLE_CHECK_IDS,
-    RUNTIME_CHECK_IDS,
-    RuntimeReceiptEvaluation,
-    evaluate_runtime_receipts,
-)
 
-
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 REQUIRED_CHECK_IDS = (
     "repository_revision_stable",
     "plugin_manifest",
     "remote_mcp_capability_contract",
-    "runtime_receipt_contract",
     "host_installer_inventory_contract",
     "browser_evidence_contract",
     "pro_runtime_contract",
     "installed_plugin_inventory",
     "fresh_resident_preflight",
 )
-DEFERRED_CHECK_IDS = RUNTIME_CHECK_IDS
+DEFERRED_CHECK_IDS = (
+    "in_app_browser_live_evidence",
+    "chatgpt_tool_exposure",
+    "post_restart_runtime",
+    "other_platform_installer_contract",
+)
 
 
 class EvidenceStatus(StrEnum):
@@ -56,42 +50,15 @@ class ProReleaseEvidence:
     host_platform: str
     plugin_version: str
     checks: tuple[EvidenceCheck, ...]
-    resident_identity: ResidentRuntimeIdentity | None = None
 
     @property
     def pre_restart_ready(self) -> bool:
         return all(check.status == EvidenceStatus.PASSED for check in self.checks)
 
-    def release_readiness(
-        self,
-        runtime_receipts: RuntimeReceiptSet | None = None,
-        *,
-        evaluated_at: datetime | None = None,
-    ) -> RuntimeReceiptEvaluation:
-        return evaluate_runtime_receipts(
-            runtime_receipts,
-            repository_revision=self.repository_revision,
-            plugin_version=self.plugin_version,
-            pre_restart_ready=self.pre_restart_ready,
-            current_resident=self.resident_identity,
-            evaluated_at=evaluated_at,
-        )
-
-    def to_payload(
-        self,
-        runtime_receipts: RuntimeReceiptSet | None = None,
-        *,
-        evaluated_at: datetime | None = None,
-    ) -> dict[str, object]:
-        readiness = self.release_readiness(
-            runtime_receipts,
-            evaluated_at=evaluated_at,
-        )
+    def to_payload(self) -> dict[str, object]:
         return {
             "schema_version": SCHEMA_VERSION,
-            "certification_scope": (
-                "release" if runtime_receipts is not None else "pre_restart"
-            ),
+            "certification_scope": "pre_restart",
             "repository_revision": self.repository_revision,
             "workspace_state": self.workspace_state,
             "host_platform": self.host_platform,
@@ -106,36 +73,19 @@ class ProReleaseEvidence:
                 for check in self.checks
             ],
             "pre_restart_ready": self.pre_restart_ready,
-            "release_ready": readiness.ready,
-            "release_blockers": list(readiness.blockers),
-            "runtime_evidence": readiness.to_payload(),
-            "deferred_check_ids": list(readiness.missing_check_ids),
-            "not_applicable_check_ids": list(NOT_APPLICABLE_CHECK_IDS),
+            "release_ready": False,
+            "deferred_check_ids": list(DEFERRED_CHECK_IDS),
         }
 
-    def summary(
-        self,
-        runtime_receipts: RuntimeReceiptSet | None = None,
-        *,
-        evaluated_at: datetime | None = None,
-    ) -> str:
-        readiness = self.release_readiness(
-            runtime_receipts,
-            evaluated_at=evaluated_at,
-        )
+    def summary(self) -> str:
         headline = "PRE-RESTART READY" if self.pre_restart_ready else "PRE-RESTART BLOCKED"
         lines = [headline]
         lines.extend(
             f"{check.status.value.upper():9} {check.check_id}"
             for check in self.checks
         )
-        if readiness.missing_check_ids:
-            lines.append("DEFERRED  " + ", ".join(readiness.missing_check_ids))
-        lines.append(
-            "RELEASE READY: " + ("YES" if readiness.ready else "NO")
-        )
-        if readiness.blockers:
-            lines.append("BLOCKERS  " + ", ".join(readiness.blockers))
+        lines.append("DEFERRED  " + ", ".join(DEFERRED_CHECK_IDS))
+        lines.append("RELEASE READY: NO (live Browser, ChatGPT exposure, and restart remain)")
         return "\n".join(lines) + "\n"
 
 
@@ -162,22 +112,16 @@ def normalize_checks(checks: tuple[EvidenceCheck, ...]) -> tuple[EvidenceCheck, 
 def write_evidence_artifacts(
     evidence: ProReleaseEvidence,
     json_path: Path,
-    runtime_receipts: RuntimeReceiptSet | None = None,
-    *,
-    evaluated_at: datetime | None = None,
 ) -> tuple[Path, Path]:
     summary_path = json_path.with_suffix(".txt")
     payload = json.dumps(
-        evidence.to_payload(runtime_receipts, evaluated_at=evaluated_at),
+        evidence.to_payload(),
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
     ) + "\n"
     _atomic_write(json_path, payload)
-    _atomic_write(
-        summary_path,
-        evidence.summary(runtime_receipts, evaluated_at=evaluated_at),
-    )
+    _atomic_write(summary_path, evidence.summary())
     return json_path, summary_path
 
 

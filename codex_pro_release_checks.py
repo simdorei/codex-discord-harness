@@ -29,7 +29,6 @@ from codex_pro_runtime_preflight import (
     expected_remote_plugin_version,
     run_pro_runtime_preflight,
 )
-from codex_pro_resident_identity import ResidentRuntimeIdentity
 from verify_codex_plugin_inventory import InventoryVerificationError, verify_inventory
 
 MARKETPLACE_NAME = "codex-discord-remote"
@@ -47,23 +46,6 @@ _COMMON_SOURCE_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "pytest",
             "-q",
             "tests/test_remote_mcp_capability_inventory.py",
-        ),
-    ),
-    (
-        "runtime_receipt_contract",
-        (
-            "-m",
-            "pytest",
-            "-q",
-            "tests/test_codex_pro_runtime_receipts.py",
-            "tests/test_codex_pro_runtime_receipt_locking.py",
-            "tests/test_codex_pro_resident_identity.py",
-            "tests/test_codex_pro_runtime_receipt_schema.py",
-            "tests/test_codex_pro_runtime_observation_collector.py",
-            "tests/test_codex_pro_runtime_observation_runtime.py",
-            "tests/test_codex_pro_runtime_observation_emission.py",
-            "tests/test_codex_pro_browser_evidence_source.py",
-            "tests/test_collect_pro_release_evidence_runtime.py",
         ),
     ),
     (
@@ -111,7 +93,6 @@ def collect_current_release_evidence(
     *,
     command_runner: CommandRunner = run_command,
     resident_probe: ResidentProbe | None = None,
-    current_resident: ResidentRuntimeIdentity | None = None,
     python_executable: str = sys.executable,
 ) -> ProReleaseEvidence:
     root = repo_root.resolve()
@@ -137,18 +118,8 @@ def collect_current_release_evidence(
             _installed_inventory_check(root, command_runner),
         )
     )
-    if current_resident is None:
-        probe = resident_probe or probe_fresh_resident
-        resident_status = probe()
-    else:
-        resident_status = EvidenceStatus.PASSED
-    checks.append(
-        EvidenceCheck(
-            "fresh_resident_preflight",
-            "runtime",
-            resident_status,
-        )
-    )
+    probe = resident_probe or probe_fresh_resident
+    checks.append(EvidenceCheck("fresh_resident_preflight", "runtime", probe()))
 
     revision_after = git_revision(root, command_runner)
     workspace_digest_after = workspace_digest(root, command_runner)
@@ -171,7 +142,6 @@ def collect_current_release_evidence(
         host_platform=platform.system().casefold() or "unknown",
         plugin_version=plugin_version,
         checks=normalize_checks(tuple(checks)),
-        resident_identity=current_resident,
     )
 
 

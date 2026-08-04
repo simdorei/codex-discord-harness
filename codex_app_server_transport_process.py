@@ -7,6 +7,7 @@ from typing import IO, Callable, Protocol, final
 
 from codex_app_server_transport_replies import CodexAppServerTransportError
 from codex_windows_job import (
+    WINDOWS_CREATE_SUSPENDED,
     WindowsKillOnCloseJob,
     create_kill_on_close_job_for_suspended_process,
 )
@@ -92,7 +93,7 @@ class OwnedResidentProcess:
 def start_owned_app_server_command(command: Sequence[str]) -> OwnedResidentProcess:
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     if os.name == "nt":
-        creationflags |= getattr(subprocess, "CREATE_SUSPENDED", 0)
+        creationflags |= WINDOWS_CREATE_SUSPENDED
     process = subprocess.Popen(
         list(command),
         stdin=subprocess.PIPE,

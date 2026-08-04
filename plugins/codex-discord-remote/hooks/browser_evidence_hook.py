@@ -5,8 +5,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Callable, Iterable, Mapping
-from datetime import UTC, datetime
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -74,7 +73,6 @@ def process_post_tool_use(
     payload: Mapping[str, object],
     plugin_data: Path | None = None,
     plugin_root: Path = PLUGIN_ROOT,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> bool:
     if payload.get("hook_event_name") != "PostToolUse":
         return False
@@ -96,30 +94,16 @@ def process_post_tool_use(
         return False
     if not isinstance(turn_id, str) or not turn_id:
         return False
-    if not isinstance(tool_use_id, str) or not tool_use_id:
-        return False
-    recorded_at = clock()
-    if recorded_at.tzinfo is None:
-        return False
     receipt = {
         "protocol": PROTOCOL,
-        "browser_type": "iab",
-        "file_binding_sha256": _receipt_key(session_id, turn_id),
-        "session_binding_sha256": _binding_sha256([session_id]),
-        "source_binding_sha256": _binding_sha256(
-            [session_id, turn_id, tool_use_id]
-        ),
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "tool_use_id": tool_use_id if isinstance(tool_use_id, str) else "",
         "status": evidence["status"],
         "can_report_unavailable": evidence["can_report_unavailable"],
         "probe_sha256": EXPECTED_PROBE_SHA256,
-        "recorded_at": recorded_at.astimezone(UTC).isoformat(),
     }
-    return _write_receipt(
-        receipt,
-        plugin_data,
-        session_id=session_id,
-        turn_id=turn_id,
-    )
+    return _write_receipt(receipt, plugin_data)
 
 
 def process_stop(
@@ -235,20 +219,8 @@ def _claims_browser_unavailable(message: str) -> bool:
 
 
 def _receipt_path(session_id: str, turn_id: str, plugin_data: Path) -> Path:
-    return plugin_data / "browser-evidence" / f"{_receipt_key(session_id, turn_id)}.json"
-
-
-def _receipt_key(session_id: str, turn_id: str) -> str:
-    return hashlib.sha256(f"{session_id}\0{turn_id}".encode()).hexdigest()
-
-
-def _binding_sha256(values: list[str]) -> str:
-    canonical = json.dumps(
-        values,
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    key = hashlib.sha256(f"{session_id}\0{turn_id}".encode()).hexdigest()
+    return plugin_data / "browser-evidence" / f"{key}.json"
 
 
 def _data_path(plugin_data: Path | None) -> Path | None:
@@ -258,15 +230,13 @@ def _data_path(plugin_data: Path | None) -> Path | None:
     return Path(raw) if raw else None
 
 
-def _write_receipt(
-    receipt: Mapping[str, object],
-    plugin_data: Path | None,
-    *,
-    session_id: str,
-    turn_id: str,
-) -> bool:
+def _write_receipt(receipt: Mapping[str, object], plugin_data: Path | None) -> bool:
     data_path = _data_path(plugin_data)
     if data_path is None:
+        return False
+    session_id = receipt.get("session_id")
+    turn_id = receipt.get("turn_id")
+    if not isinstance(session_id, str) or not isinstance(turn_id, str):
         return False
     path = _receipt_path(session_id, turn_id, data_path)
     try:

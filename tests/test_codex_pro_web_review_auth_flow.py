@@ -2,7 +2,12 @@ from __future__ import annotations
 from collections.abc import Callable
 import unittest
 import codex_pro_web_review_auth_flow as auth_flow
-from codex_pro_web_review_login import EnvIssue, ProWebReviewEnvReport
+from codex_pro_web_review_login import (
+    BrowserName,
+    EnvIssue,
+    LoginState,
+    ProWebReviewEnvReport,
+)
 class ProWebReviewAuthFlowTests(unittest.TestCase):
     def test_run_auth_flow_returns_zero_when_login_ok(self) -> None:
         out: list[str] = []
@@ -23,7 +28,7 @@ class ProWebReviewAuthFlowTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertTrue(any("Timed out" in line for line in out))
     def test_run_auth_flow_returns_two_when_browser_cannot_open(self) -> None:
-        def fail_browser(_browser: auth_flow.BrowserName, _emit: Callable[[str], None]) -> bool:
+        def fail_browser(_browser: BrowserName, _emit: Callable[[str], None]) -> bool:
             return False
         result = auth_flow.run_auth_flow(
             auth_flow.AuthFlowOptions(wait_seconds=0),
@@ -47,7 +52,7 @@ def _deps(report: ProWebReviewEnvReport) -> auth_flow.AuthFlowDeps:
         monotonic=lambda: 0.0,
         sleep=lambda _seconds: None,
     )
-def _report(login: auth_flow.LoginState) -> ProWebReviewEnvReport:
+def _report(login: LoginState) -> ProWebReviewEnvReport:
     issues = () if login == "ok" else (EnvIssue("ChatGPT login missing", "Sign in."),)
     return ProWebReviewEnvReport(deps="ok", browser="ok", login=login, ok=(), issues=issues)
 if __name__ == "__main__":

@@ -118,11 +118,6 @@ class ProRuntimePreflightTests(unittest.TestCase):
         self.assertEqual(status.remote_plugin_version, EXPECTED_VERSION)
         self.assertEqual(status.browser_plugin_version, "9.8.7")
         self.assertEqual(status.resident_generation, 7)
-        self.assertEqual(status.resident_accepting_since, 1.0)
-        self.assertEqual(
-            status.resident_plugin_fingerprint,
-            "runtime-fingerprint",
-        )
 
     def test_rejects_missing_disabled_or_stale_plugins(self) -> None:
         cases: tuple[tuple[str, str, str, ProDiagnosticCode], ...] = (
@@ -401,8 +396,6 @@ class ProPromptPreflightTests(unittest.TestCase):
                 remote_plugin_version=EXPECTED_VERSION,
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
-                resident_accepting_since=1.0,
-                resident_plugin_fingerprint="runtime-fingerprint",
             ),
             registrar=_missing_bridge,
         )
@@ -418,8 +411,6 @@ class ProPromptPreflightTests(unittest.TestCase):
                 remote_plugin_version=EXPECTED_VERSION,
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
-                resident_accepting_since=1.0,
-                resident_plugin_fingerprint="runtime-fingerprint",
             ),
             registrar=_expired_ticket,
         )
@@ -435,8 +426,6 @@ class ProPromptPreflightTests(unittest.TestCase):
                 remote_plugin_version=EXPECTED_VERSION,
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
-                resident_accepting_since=1.0,
-                resident_plugin_fingerprint="runtime-fingerprint",
             ),
             registrar=_stale_bridge,
         )

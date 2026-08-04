@@ -13,10 +13,6 @@ from codex_pro_runtime_preflight import (
     ProRuntimeStatus,
     run_pro_runtime_preflight,
 )
-from codex_pro_runtime_observation_runtime import (
-    RuntimeObservationStartError,
-    start_pro_runtime_observation_cycle,
-)
 from codex_pro_runtime_diagnostics import (
     ProDiagnosticCode,
     ProDiagnosticStage,
@@ -32,7 +28,6 @@ from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
 LogFunc = Callable[[str], None]
 ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
 RuntimePreflight = Callable[[], ProRuntimeStatus]
-RuntimeCycleStarter = Callable[[ProRuntimeStatus, Path, str], object]
 PRO_SKILL_CALL: Final = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
 PRO_CONVERSATION_SCOPE_LENGTH: Final = 24
 PRO_REVIEW_MARKER: Final = "<pro-review>"
@@ -77,13 +72,12 @@ def rewrite_prompt(
     log: LogFunc,
     project_registrar: ProjectRegistrar = register_remote_mcp_project,
     runtime_preflight: RuntimePreflight = run_pro_runtime_preflight,
-    runtime_cycle_starter: RuntimeCycleStarter = start_pro_runtime_observation_cycle,
 ) -> mapped_delivery.PromptPreprocessResult:
     rewritten = _rewrite_pro_command(prompt)
     if rewritten is None:
         return mapped_delivery.keep_prompt(prompt)
     try:
-        runtime_status = runtime_preflight()
+        _ = runtime_preflight()
     except ProRuntimePreflightError as exc:
         return mapped_delivery.block_prompt(exc.diagnostic)
     if not target_thread_id:
@@ -141,18 +135,6 @@ def rewrite_prompt(
                 public_message="The local project access ticket expired before delivery.",
                 recovery_action="Retry !pro to request a fresh project ticket.",
                 internal_detail="remote MCP returned a project ticket that is already expired",
-            )
-        )
-    try:
-        _ = runtime_cycle_starter(runtime_status, cwd, target_thread_id)
-    except RuntimeObservationStartError as exc:
-        return mapped_delivery.block_prompt(
-            diagnostic(
-                stage=ProDiagnosticStage.RUNTIME_OBSERVATION,
-                code=ProDiagnosticCode.RUNTIME_OBSERVATION_START_FAILED,
-                public_message="Live Pro runtime observation could not start.",
-                recovery_action="Restart the remote bot, then retry !pro.",
-                internal_detail=str(exc),
             )
         )
     project_instruction = "\n".join(

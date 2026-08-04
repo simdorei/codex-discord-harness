@@ -4,8 +4,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
-from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar, Protocol, cast, override
 
@@ -17,7 +16,6 @@ HOOK_PATH = Path(
 
 class HookModule(Protocol):
     PROTOCOL: str
-    PROBE_RELATIVE_PATH: Path
 
     def canonical_probe_code(self, plugin_root: Path | None = None) -> str: ...
 
@@ -30,7 +28,6 @@ class HookModule(Protocol):
         payload: Mapping[str, object],
         plugin_data: Path | None = None,
         plugin_root: Path | None = None,
-        clock: Callable[[], datetime] = ...,
     ) -> bool: ...
 
     def process_stop(
@@ -38,7 +35,7 @@ class HookModule(Protocol):
     ) -> dict[str, str] | None: ...
 
 
-def load_hook() -> HookModule:
+def _load_hook() -> HookModule:
     spec = importlib.util.spec_from_file_location("browser_evidence_hook", HOOK_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("browser evidence hook could not be loaded")
@@ -47,7 +44,7 @@ def load_hook() -> HookModule:
     return cast(HookModule, cast(object, module))
 
 
-def post_payload(hook: HookModule, status: str = "unavailable") -> dict[str, object]:
+def _post_payload(hook: HookModule, status: str = "unavailable") -> dict[str, object]:
     can_report = status == "unavailable"
     evidence: dict[str, object] = {
         "protocol": hook.PROTOCOL,
@@ -88,13 +85,13 @@ class BrowserEvidenceHookTests(unittest.TestCase):
     @classmethod
     @override
     def setUpClass(cls) -> None:
-        cls.hook = load_hook()
+        cls.hook = _load_hook()
 
     def test_exact_probe_records_same_turn_unavailable_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             data_dir = Path(raw_dir)
             recorded = self.hook.process_post_tool_use(
-                post_payload(self.hook), data_dir
+                _post_payload(self.hook), data_dir
             )
 
             self.assertTrue(recorded)
@@ -105,7 +102,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
     def test_self_reported_code_cannot_record_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
-            payload = post_payload(self.hook)
+            payload = _post_payload(self.hook)
             payload["tool_input"] = "text(JSON.stringify({status: 'unavailable'}));"
 
             recorded = self.hook.process_post_tool_use(payload, Path(raw_dir))
@@ -121,7 +118,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
             )
             probe.parent.mkdir(parents=True)
             _ = probe.write_text("export const changed = true;\n", encoding="utf-8")
-            payload = post_payload(self.hook)
+            payload = _post_payload(self.hook)
             payload["tool_input"] = self.hook.canonical_probe_code(plugin_root)
 
             recorded = self.hook.process_post_tool_use(
@@ -130,51 +127,18 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
             self.assertFalse(recorded)
 
-    def test_available_receipt_has_aware_time_and_hashed_source_bindings(self) -> None:
-        recorded_at = datetime(2026, 8, 3, 2, 3, 4, tzinfo=UTC)
-        with tempfile.TemporaryDirectory() as raw_dir:
-            data_dir = Path(raw_dir)
-            self.assertTrue(
-                self.hook.process_post_tool_use(
-                    post_payload(self.hook, "available"),
-                    data_dir,
-                    clock=lambda: recorded_at,
-                )
-            )
-            files = tuple((data_dir / "browser-evidence").glob("*.json"))
-            self.assertEqual(len(files), 1)
-            source = cast(
-                dict[str, object],
-                json.loads(files[0].read_text(encoding="utf-8")),
-            )
-
-            self.assertEqual(source["browser_type"], "iab")
-            self.assertEqual(source["recorded_at"], recorded_at.isoformat())
-            session_binding = source["session_binding_sha256"]
-            source_binding = source["source_binding_sha256"]
-            self.assertIsInstance(session_binding, str)
-            self.assertIsInstance(source_binding, str)
-            if isinstance(session_binding, str) and isinstance(source_binding, str):
-                self.assertRegex(session_binding, r"^[a-f0-9]{64}$")
-                self.assertRegex(source_binding, r"^[a-f0-9]{64}$")
-            self.assertNotEqual(
-                source["source_binding_sha256"],
-                source["session_binding_sha256"],
-            )
-            serialized = json.dumps(source)
-            self.assertNotIn("session-a", serialized)
-            self.assertNotIn("turn-a", serialized)
-            self.assertNotIn("tool-a", serialized)
-
     def test_windows_line_endings_preserve_probe_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             plugin_root = Path(raw_dir) / "plugin"
-            source_probe = HOOK_PATH.parent.parent / self.hook.PROBE_RELATIVE_PATH
-            probe = plugin_root / self.hook.PROBE_RELATIVE_PATH
+            relative_probe = Path(
+                "skills/ask-chatgpt-pro/scripts/browser_evidence_probe.mjs"
+            )
+            source_probe = HOOK_PATH.parent.parent / relative_probe
+            probe = plugin_root / relative_probe
             probe.parent.mkdir(parents=True)
             source = source_probe.read_text(encoding="utf-8")
             _ = probe.write_bytes(source.replace("\n", "\r\n").encode("utf-8"))
-            payload = post_payload(self.hook)
+            payload = _post_payload(self.hook)
             payload["tool_input"] = self.hook.canonical_probe_code(plugin_root)
 
             recorded = self.hook.process_post_tool_use(
@@ -189,7 +153,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
                 data_dir = Path(raw_dir)
                 self.assertTrue(
                     self.hook.process_post_tool_use(
-                        post_payload(self.hook, status), data_dir
+                        _post_payload(self.hook, status), data_dir
                     )
                 )
 
@@ -240,7 +204,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
     def test_direct_node_tool_requires_exact_inner_probe(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
-            payload = post_payload(self.hook)
+            payload = _post_payload(self.hook)
             payload["tool_name"] = "mcp__node_repl__js"
             payload["tool_input"] = {"code": self.hook.canonical_inner_probe_code()}
 

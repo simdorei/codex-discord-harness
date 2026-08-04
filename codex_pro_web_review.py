@@ -62,7 +62,7 @@ class ProWebReviewResult:
     model_label: str
 class ProWebReviewer(Protocol):
     def submit_review(self, pack: ProWebReviewPack) -> str:
-        pass
+        ...
 def pack_pro_web_review(
     request: ProWebReviewRequest,
     *,

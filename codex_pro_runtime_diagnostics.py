@@ -12,7 +12,6 @@ class ProDiagnosticStage(StrEnum):
     RESIDENT_APP_SERVER = "resident_app_server"
     REMOTE_MCP = "remote_mcp"
     PROJECT_TICKET = "project_ticket"
-    RUNTIME_OBSERVATION = "runtime_observation"
 
 
 class ProDiagnosticCode(StrEnum):
@@ -39,7 +38,6 @@ class ProDiagnosticCode(StrEnum):
     REMOTE_MCP_NOT_CONFIGURED = "remote_mcp_not_configured"
     PROJECT_TICKET_TIMEZONE_INVALID = "project_ticket_timezone_invalid"
     PROJECT_TICKET_EXPIRED = "project_ticket_expired"
-    RUNTIME_OBSERVATION_START_FAILED = "runtime_observation_start_failed"
 
 
 @dataclass(frozen=True, slots=True)

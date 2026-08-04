@@ -37,10 +37,6 @@ class ProRuntimeStatus:
     remote_plugin_version: str
     browser_plugin_version: str
     resident_generation: int
-    resident_accepting_since: float
-    resident_plugin_fingerprint: str
-    resident_process_id: int | None = None
-    resident_process_identity: str | None = None
 
 
 def expected_remote_plugin_version(path: Path = PLUGIN_MANIFEST_PATH) -> str:
@@ -147,10 +143,6 @@ def _verify_resident_runtime(
         remote_plugin_version=plugin_status.remote_version,
         browser_plugin_version=plugin_status.browser_version,
         resident_generation=resident_snapshot.generation,
-        resident_accepting_since=resident_snapshot.accepting_since,
-        resident_plugin_fingerprint=resident_fingerprint,
-        resident_process_id=resident_snapshot.process_id,
-        resident_process_identity=resident_snapshot.process_identity,
     )
 
 
