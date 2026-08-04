@@ -21,6 +21,7 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 $RestartMarker = Join-Path $RepoRoot '.codex_discord_bot.restart'
 $Watchdog = Join-Path $RepoRoot 'codex-discord-watchdog.ps1'
+$AtomicFileRuntime = Join-Path $RepoRoot 'codex-discord-atomic-file-runtime.ps1'
 $IdentityRuntime = Join-Path $RepoRoot 'codex-discord-watchdog-identity-runtime.ps1'
 $BotScript = Join-Path $RepoRoot 'codex_discord_bot.py'
 $RuntimeLockPath = Join-Path $RepoRoot '.codex_discord_bot.runtime.lock'
@@ -30,9 +31,12 @@ $EffectiveDelaySeconds = [math]::Max($MinimumDelaySeconds, $DelaySeconds)
 if (-not (Test-Path -LiteralPath $Watchdog)) {
     throw "watchdog script not found: $Watchdog"
 }
-if (-not (Test-Path -LiteralPath $IdentityRuntime)) {
-    throw "identity runtime script not found: $IdentityRuntime"
+foreach ($runtimePath in @($AtomicFileRuntime, $IdentityRuntime)) {
+    if (-not (Test-Path -LiteralPath $runtimePath)) {
+        throw "restart runtime script not found: $runtimePath"
+    }
 }
+. $AtomicFileRuntime
 . $IdentityRuntime
 
 function Invoke-BoundRestart {
@@ -61,12 +65,9 @@ function Invoke-BoundRestart {
     if ($currentIdentity -ne $Identity) {
         throw 'bot process changed while validating restart readiness'
     }
-    $markerText = "identity=$Identity"
-    [System.IO.File]::WriteAllText(
-        $RestartMarker,
-        $markerText,
-        [System.Text.UTF8Encoding]::new($false)
-    )
+    Publish-AtomicTextFile `
+        -Path $RestartMarker `
+        -Content "identity=$Identity"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Watchdog `
         -RestartQuietSeconds $EffectiveQuietSeconds `
         -RestartWaitTimeoutSeconds $WaitTimeoutSeconds

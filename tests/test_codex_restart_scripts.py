@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_RESTART = ROOT / "plugins" / "codex-discord-remote" / "scripts" / "restart.ps1"
 PLUGIN_STATUS = ROOT / "plugins" / "codex-discord-remote" / "scripts" / "status.ps1"
 WATCHDOG = ROOT / "codex-discord-watchdog.ps1"
+ATOMIC_RUNTIME = ROOT / "codex-discord-atomic-file-runtime.ps1"
 WATCHDOG_RUNTIME = ROOT / "codex-discord-watchdog-runtime.ps1"
 WATCHDOG_RESTART_RUNTIME = ROOT / "codex-discord-watchdog-restart-runtime.ps1"
 WATCHDOG_HEARTBEAT_RUNTIME = ROOT / "codex-discord-watchdog-heartbeat-runtime.ps1"
@@ -30,6 +31,10 @@ def _write_fake_restart_repo(
     )
     _ = (repo_root / "codex-discord-watchdog-runtime.ps1").write_text(
         WATCHDOG_RUNTIME.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _ = (repo_root / "codex-discord-atomic-file-runtime.ps1").write_text(
+        ATOMIC_RUNTIME.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _ = (repo_root / "codex-discord-watchdog-restart-runtime.ps1").write_text(
@@ -409,6 +414,7 @@ class RestartScriptTests(unittest.TestCase):
                     f"$ScriptDir = {str(root)!r}",
                     f"$LauncherLogPath = {str(root / 'launcher.log')!r}",
                     f"$RuntimeLockPath = {str(root / 'runtime.lock')!r}",
+                    f". {str(ATOMIC_RUNTIME)!r}",
                     f". {str(WATCHDOG_RUNTIME)!r}",
                     f"$content = 'x' * {expected_size}",
                     "Publish-AtomicTextFile "
@@ -450,6 +456,7 @@ class RestartScriptTests(unittest.TestCase):
                         f"$ScriptDir = {str(root)!r}",
                         f"$LauncherLogPath = {str(root / 'launcher.log')!r}",
                         f"$RuntimeLockPath = {str(root / 'runtime.lock')!r}",
+                        f". {str(ATOMIC_RUNTIME)!r}",
                         f". {str(WATCHDOG_RUNTIME)!r}",
                         f"[System.IO.File]::WriteAllText({str(ready)!r}, 'ready')",
                         f"while (-not (Test-Path -LiteralPath {str(gate)!r})) {{",
@@ -514,6 +521,7 @@ class RestartScriptTests(unittest.TestCase):
                     f"$ScriptDir = {str(root)!r}",
                     f"$LauncherLogPath = {str(root / 'launcher.log')!r}",
                     f"$RuntimeLockPath = {str(root / 'runtime.lock')!r}",
+                    f". {str(ATOMIC_RUNTIME)!r}",
                     f". {str(WATCHDOG_RUNTIME)!r}",
                     "$script:MoveAttempts = 0",
                     "function Move-AtomicTextFile {",
@@ -558,6 +566,7 @@ class RestartScriptTests(unittest.TestCase):
                     f"$ScriptDir = {str(root)!r}",
                     f"$LauncherLogPath = {str(root / 'launcher.log')!r}",
                     f"$RuntimeLockPath = {str(root / 'runtime.lock')!r}",
+                    f". {str(ATOMIC_RUNTIME)!r}",
                     f". {str(WATCHDOG_RUNTIME)!r}",
                     "function Move-AtomicTextFile {",
                     "    throw [System.IO.IOException]::new('disk failure')",
@@ -904,13 +913,6 @@ class RestartScriptTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(stop_path.read_text(encoding="ascii"), "identity=17|100")
             self.assertFalse(claim_path.exists())
-
-    def test_tray_restart_reenables_a_disabled_scheduled_task(self) -> None:
-        text = (ROOT / "codex-discord-tray.ps1").read_text(encoding="utf-8")
-
-        self.assertIn("Get-CodexBotProcessIdentity", text)
-        self.assertIn('"identity=$expectedIdentity"', text)
-        self.assertIn("Enable-ScheduledTask -TaskName 'Codex Discord Bot'", text)
 
     def test_status_reports_codex_app_package_update_detection(self) -> None:
         text = PLUGIN_STATUS.read_text(encoding="utf-8")

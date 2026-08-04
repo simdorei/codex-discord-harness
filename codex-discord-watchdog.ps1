@@ -36,6 +36,7 @@ $StopClaimPattern = Join-Path $ScriptDir '.codex_discord_bot.stop.claimed.*'
 $DisablePath = Join-Path $ScriptDir '.codex_discord_bot.disabled'
 $HeadlessLauncher = Join-Path $ScriptDir 'codex-discord-bot-headless.vbs'
 $LauncherLogPath = Join-Path $ScriptDir 'discord_launcher.log'
+. (Join-Path $ScriptDir 'codex-discord-atomic-file-runtime.ps1')
 . (Join-Path $ScriptDir 'codex-discord-watchdog-runtime.ps1')
 . (Join-Path $ScriptDir 'codex-discord-watchdog-restart-runtime.ps1')
 . (Join-Path $ScriptDir 'codex-discord-watchdog-heartbeat-runtime.ps1')

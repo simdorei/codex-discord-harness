@@ -9,7 +9,9 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BotScript = Join-Path $ScriptDir 'codex_discord_bot.py'
 $RuntimeLockPath = Join-Path $ScriptDir '.codex_discord_bot.runtime.lock'
 $RestartRequestPath = Join-Path $ScriptDir '.codex_discord_bot.restart'
+$AtomicFileRuntimePath = Join-Path $ScriptDir 'codex-discord-atomic-file-runtime.ps1'
 $IdentityRuntimePath = Join-Path $ScriptDir 'codex-discord-watchdog-identity-runtime.ps1'
+$TrayRestartRuntimePath = Join-Path $ScriptDir 'codex-discord-tray-restart-runtime.ps1'
 $HeadlessLauncher = Join-Path $ScriptDir 'codex-discord-bot-headless.vbs'
 $LauncherLogPath = Join-Path $ScriptDir 'discord_launcher.log'
 $BotLogPath = Join-Path $ScriptDir 'codex_discord_bot.log'
@@ -18,10 +20,18 @@ $script:MissingSince = $null
 $script:LastRunningStatus = $null
 $script:LastTrayIcon = $null
 
-if (-not (Test-Path -LiteralPath $IdentityRuntimePath)) {
-    throw "identity runtime script not found: $IdentityRuntimePath"
+foreach ($runtimePath in @(
+    $AtomicFileRuntimePath,
+    $IdentityRuntimePath,
+    $TrayRestartRuntimePath
+)) {
+    if (-not (Test-Path -LiteralPath $runtimePath)) {
+        throw "tray runtime script not found: $runtimePath"
+    }
 }
+. $AtomicFileRuntimePath
 . $IdentityRuntimePath
+. $TrayRestartRuntimePath
 
 function Write-LauncherLog {
     param([string]$Message)
@@ -95,33 +105,6 @@ function Limit-TrayText {
         return $Text
     }
     return $Text.Substring(0, 60) + '...'
-}
-
-function Request-BotRestart {
-    $expectedIdentity = Get-CodexBotProcessIdentity `
-        -BotScript $BotScript `
-        -RuntimeLockPath $RuntimeLockPath
-    if (-not $expectedIdentity) {
-        throw 'running bot process identity could not be verified'
-    }
-    [System.IO.File]::WriteAllText(
-        $RestartRequestPath,
-        "identity=$expectedIdentity",
-        [System.Text.UTF8Encoding]::new($false)
-    )
-    $task = Get-ScheduledTask -TaskName 'Codex Discord Bot' -ErrorAction SilentlyContinue
-    if ($task -ne $null) {
-        if (-not $task.Settings.Enabled) {
-            Enable-ScheduledTask -TaskName 'Codex Discord Bot' | Out-Null
-        }
-        Start-ScheduledTask -TaskName 'Codex Discord Bot'
-        Write-LauncherLog "tray_restart_requested task='Codex Discord Bot'"
-        return
-    }
-    if (Test-Path -LiteralPath $HeadlessLauncher) {
-        Start-Process -FilePath 'wscript.exe' -ArgumentList @("`"$HeadlessLauncher`"") -WindowStyle Hidden
-        Write-LauncherLog "tray_restart_requested launcher=$HeadlessLauncher"
-    }
 }
 
 if ($Once) {
