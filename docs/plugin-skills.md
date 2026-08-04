@@ -34,4 +34,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\plugins\codex-discord-
 `restart.ps1` queues a deferred restart by default. The watchdog waits until every DB-root
 Codex thread is `idle` and no listed thread has recent activity before stopping the bot, so
 the current Discord-mirrored turn can finish. Use `-DryRun` to check readiness or `-Immediate`
-when you intentionally want the script to wait in the foreground.
+when you intentionally want the script to wait in the foreground. Both restart modes enforce
+at least 15 seconds of delay and 15 seconds of quiet time, and bind the stop request to the
+exact running bot process so a replacement process cannot be stopped accidentally. Status and
+restart checks choose Python in this order: explicit `CODEX_DISCORD_PYTHON`, process or repository
+`.env` `PYTHON_EXE`, then `.python-portable\python.exe` as the fallback.

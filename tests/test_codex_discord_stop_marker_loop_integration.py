@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from codex_process_identity import current_process_identity
+
 
 class RequestedExit(Exception):
     pass
@@ -94,7 +96,7 @@ class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_marker_waits_for_discord_delivery_drain(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
-            _ = marker_path.write_text("1", encoding="ascii")
+            _write_current_process_marker(marker_path)
             client = StopMarkerClient()
             exit_calls: list[tuple[int, str]] = []
 
@@ -123,12 +125,12 @@ class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 bot.clear_discord_delivery_stopping()
 
             self.assertTrue(client.closed)
-            self.assertEqual(exit_calls, [(0, "stop_marker_close_done")])
+            self.assertEqual(exit_calls, [])
 
     async def test_stop_marker_loop_closes_bot_and_removes_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
-            _ = marker_path.write_text("1", encoding="ascii")
+            _write_current_process_marker(marker_path)
             client = StopMarkerClient()
             exit_calls: list[tuple[int, str]] = []
 
@@ -146,13 +148,34 @@ class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 bot.clear_discord_delivery_stopping()
 
             self.assertEqual(client.close_calls, 1)
-            self.assertEqual(exit_calls, [(0, "stop_marker_close_done")])
+            self.assertEqual(exit_calls, [])
             self.assertFalse(marker_path.exists())
+
+    async def test_stop_marker_rejects_a_stale_process_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
+            _ = marker_path.write_text("identity=999999|1", encoding="utf-8")
+            client = StopMarkerClient()
+
+            with (
+                mock.patch.object(bot, "STOP_REQUEST_PATH", marker_path),
+                mock.patch.object(bot, "STOP_MARKER_POLL_SECONDS", 0.01),
+            ):
+                task = asyncio.create_task(_stop_marker_loop()(client))
+                for _ in range(100):
+                    if not marker_path.exists():
+                        break
+                    await asyncio.sleep(0.01)
+                client.closed = True
+                await asyncio.wait_for(task, timeout=1)
+
+            self.assertFalse(marker_path.exists())
+            self.assertEqual(client.close_calls, 0)
 
     async def test_stop_marker_close_timeout_requests_process_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             marker_path = Path(temp_dir) / ".codex_discord_bot.stop"
-            _ = marker_path.write_text("1", encoding="ascii")
+            _write_current_process_marker(marker_path)
             client = StopMarkerClient(close_delay=1.0, mark_closed=False)
             exit_calls: list[tuple[int, str]] = []
 
@@ -203,9 +226,16 @@ class DiscordStopMarkerLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreaterEqual(timeout_seconds, expected_minimum)
         self.assertIn(
-            "Wait-RuntimeBotExit -TimeoutSeconds $GracefulStopTimeoutSeconds",
+            "-ExpectedIdentity $ExpectedIdentity",
             watchdog_text,
         )
+
+
+def _write_current_process_marker(path: Path) -> None:
+    _ = path.write_text(
+        f"identity={current_process_identity()}",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

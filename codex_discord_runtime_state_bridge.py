@@ -14,11 +14,13 @@ import codex_discord_runtime_lock as discord_runtime_lock
 import codex_discord_runner_queue as discord_runner_queue
 import codex_discord_session_mirror as discord_session_mirror
 import codex_discord_session_mirror_output_targets as discord_session_mirror_output_targets
+from codex_remote_mcp_binding import close_remote_mcp_bridge
 
 LogFunc = Callable[[str], None]
 GetPathFunc = Callable[[], Path]
 ExitProcessFunc = Callable[[int], None]
 CloseAppServerFunc = Callable[[], None]
+CloseRemoteBridgeFunc = Callable[[], None]
 ExpiredOutputTargetHandler = Callable[[str, float], None]
 RunnerRecord = discord_runtime.RunnerState | discord_runner_queue.ThreadRunner
 
@@ -48,6 +50,7 @@ class RuntimeStateBridge:
     get_runtime_lock_path: GetPathFunc
     log: LogFunc
     on_expired_output_target: ExpiredOutputTargetHandler | None = None
+    close_remote_bridge: CloseRemoteBridgeFunc = close_remote_mcp_bridge
     close_app_server: CloseAppServerFunc = app_server_transport.DEFAULT_CLIENT.close
     exit_process: ExitProcessFunc = os._exit
 
@@ -160,12 +163,17 @@ class RuntimeStateBridge:
 
     def exit_bot_process(self, exit_code: int, *, reason: str) -> None:
         self.log(f"bot_process_exit_requested reason={reason} code={exit_code}")
-        try:
-            self.close_app_server()
-        except Exception as exc:  # noqa: BLE001 - process exit must still close the Job handle.
-            self.log(
-                "bot_process_app_server_close_failed "
-                + f"reason={reason} error_type={type(exc).__name__} error={str(exc)[:300]}"
-            )
+        for service_name, close_service in (
+            ("remote_bridge", self.close_remote_bridge),
+            ("app_server", self.close_app_server),
+        ):
+            try:
+                close_service()
+            except BaseException as exc:  # noqa: BLE001 - forced exit must attempt every cleanup.
+                self.log(
+                    f"bot_process_{service_name}_close_failed "
+                    + f"reason={reason} error_type={type(exc).__name__} "
+                    + f"error={str(exc)[:300]}"
+                )
         self.remove_runtime_lock_for_current_process(reason=reason)
         self.exit_process(exit_code)

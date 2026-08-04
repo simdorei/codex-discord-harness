@@ -10,6 +10,7 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 }
 
 $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
+. (Join-Path $RepoRoot 'codex-discord-python-runtime.ps1')
 $RuntimeLock = Join-Path $RepoRoot '.codex_discord_bot.runtime.lock'
 $RestartMarker = Join-Path $RepoRoot '.codex_discord_bot.restart'
 $StopMarker = Join-Path $RepoRoot '.codex_discord_bot.stop'
@@ -32,6 +33,10 @@ function Format-OptionalValue {
         return '-'
     }
     return $Value
+}
+
+function Get-CodexRuntimePythonExecutable {
+    return Resolve-CodexRuntimePythonExecutable -RepoRoot $RepoRoot
 }
 
 function Write-CodexAppPackageUpdateStatus {
@@ -140,5 +145,6 @@ if (Test-Path -LiteralPath $LauncherLogPath) {
 if (Test-Path -LiteralPath $BridgePath) {
     Write-Output ''
     Write-Output 'bridge_threads:'
-    & py -3 $BridgePath list --db-root --limit 8
+    $pythonExecutable = Get-CodexRuntimePythonExecutable
+    & $pythonExecutable $BridgePath list --db-root --limit 8
 }

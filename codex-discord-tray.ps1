@@ -9,6 +9,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BotScript = Join-Path $ScriptDir 'codex_discord_bot.py'
 $RuntimeLockPath = Join-Path $ScriptDir '.codex_discord_bot.runtime.lock'
 $RestartRequestPath = Join-Path $ScriptDir '.codex_discord_bot.restart'
+$IdentityRuntimePath = Join-Path $ScriptDir 'codex-discord-watchdog-identity-runtime.ps1'
 $HeadlessLauncher = Join-Path $ScriptDir 'codex-discord-bot-headless.vbs'
 $LauncherLogPath = Join-Path $ScriptDir 'discord_launcher.log'
 $BotLogPath = Join-Path $ScriptDir 'codex_discord_bot.log'
@@ -16,6 +17,11 @@ $StoppedGraceSeconds = 30
 $script:MissingSince = $null
 $script:LastRunningStatus = $null
 $script:LastTrayIcon = $null
+
+if (-not (Test-Path -LiteralPath $IdentityRuntimePath)) {
+    throw "identity runtime script not found: $IdentityRuntimePath"
+}
+. $IdentityRuntimePath
 
 function Write-LauncherLog {
     param([string]$Message)
@@ -92,7 +98,17 @@ function Limit-TrayText {
 }
 
 function Request-BotRestart {
-    [System.IO.File]::WriteAllText($RestartRequestPath, '')
+    $expectedIdentity = Get-CodexBotProcessIdentity `
+        -BotScript $BotScript `
+        -RuntimeLockPath $RuntimeLockPath
+    if (-not $expectedIdentity) {
+        throw 'running bot process identity could not be verified'
+    }
+    [System.IO.File]::WriteAllText(
+        $RestartRequestPath,
+        "identity=$expectedIdentity",
+        [System.Text.UTF8Encoding]::new($false)
+    )
     $task = Get-ScheduledTask -TaskName 'Codex Discord Bot' -ErrorAction SilentlyContinue
     if ($task -ne $null) {
         if (-not $task.Settings.Enabled) {

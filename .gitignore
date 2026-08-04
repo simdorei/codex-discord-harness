@@ -9,6 +9,7 @@ HANDOFF.md
 ERROR_HANDOFF.md
 MIRROR.md
 .codex_discord_bot.restart.claimed.*
+.codex_discord_bot.stop.claimed.*
 ..omoulw-loop*
 *.log
 *.log.bak
@@ -27,5 +28,4 @@ __pycache__/
 discord_attachments/
 generated_images/
 .pro-web-review/
-.release-evidence/
 .codex-remote-mcp/

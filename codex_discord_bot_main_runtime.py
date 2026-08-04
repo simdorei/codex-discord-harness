@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from builtins import BaseExceptionGroup
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -29,6 +30,9 @@ class BotFactory(Protocol):
         enable_prefix_commands: bool,
         plain_ask_mention_user_ids: set[int],
     ) -> BotRunner: ...
+
+
+RuntimeCloser = Callable[[], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,9 +87,50 @@ def main(deps: BotMainDeps) -> int:
                 )
             )
         )
-        try:
-            bot.run(token, log_handler=None)
-        finally:
-            close_remote_mcp_bridge()
-            app_server_transport.DEFAULT_CLIENT.close()
+        _run_bot_and_close_services(
+            bot,
+            token,
+            close_bridge=close_remote_mcp_bridge,
+            close_app_server=app_server_transport.DEFAULT_CLIENT.close,
+        )
     return 0
+
+
+def _run_bot_and_close_services(
+    bot: BotRunner,
+    token: str,
+    *,
+    close_bridge: RuntimeCloser,
+    close_app_server: RuntimeCloser,
+) -> None:
+    try:
+        bot.run(token, log_handler=None)
+    except BaseException as run_error:  # noqa: BLE001 - cleanup must include shutdowns.
+        cleanup_errors = _close_runtime_services(close_bridge, close_app_server)
+        if cleanup_errors:
+            raise BaseExceptionGroup(
+                "Discord bot runtime and cleanup failures",
+                (run_error, *cleanup_errors),
+            ) from None
+        raise
+    cleanup_errors = _close_runtime_services(close_bridge, close_app_server)
+    if len(cleanup_errors) == 1:
+        raise cleanup_errors[0]
+    if cleanup_errors:
+        raise BaseExceptionGroup(
+            "Discord bot cleanup failures",
+            cleanup_errors,
+        )
+
+
+def _close_runtime_services(
+    close_bridge: RuntimeCloser,
+    close_app_server: RuntimeCloser,
+) -> tuple[BaseException, ...]:
+    errors: list[BaseException] = []
+    for close_service in (close_bridge, close_app_server):
+        try:
+            close_service()
+        except BaseException as exc:  # noqa: BLE001 - report every cleanup failure.
+            errors.append(exc)
+    return tuple(errors)

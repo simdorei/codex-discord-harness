@@ -24,6 +24,7 @@ class ExitBotProcess(Protocol):
 class StopMarkerLoopDeps:
     stop_request_path: Path
     heartbeat_path: Path
+    process_identity: str
     poll_seconds: float
     drain_timeout_seconds: float
     close_timeout_seconds: float
@@ -46,6 +47,9 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
                 + f"error_type={type(exc).__name__}"
             )
         if deps.stop_request_path.exists():
+            if not _marker_matches_process(deps):
+                await deps.sleep(deps.poll_seconds)
+                continue
             deps.log(f"stop_marker_detected path={deps.stop_request_path}")
             try:
                 deps.stop_request_path.unlink()
@@ -69,7 +73,29 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
                     f"stop_marker_close_timeout timeout_seconds={deps.close_timeout_seconds:g}"
                 )
                 deps.exit_bot_process(0, reason="stop_marker_close_timeout")
+                return
             deps.log("stop_marker_close_done")
-            deps.exit_bot_process(0, reason="stop_marker_close_done")
             return
         await deps.sleep(deps.poll_seconds)
+
+
+def _marker_matches_process(deps: StopMarkerLoopDeps) -> bool:
+    try:
+        marker = deps.stop_request_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        deps.log(
+            f"stop_marker_read_failed path={deps.stop_request_path} "
+            + f"error_type={type(exc).__name__}"
+        )
+        return False
+    if marker == f"identity={deps.process_identity}":
+        return True
+    deps.log(f"stop_marker_stale path={deps.stop_request_path}")
+    try:
+        deps.stop_request_path.unlink()
+    except OSError as exc:
+        deps.log(
+            f"stop_marker_remove_failed path={deps.stop_request_path} "
+            + f"error_type={type(exc).__name__}"
+        )
+    return False

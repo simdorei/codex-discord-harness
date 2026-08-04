@@ -1,3 +1,7 @@
+if (-not (Get-Command Resolve-CodexRuntimePythonExecutable -ErrorAction SilentlyContinue)) {
+    . (Join-Path $ScriptDir 'codex-discord-python-runtime.ps1')
+}
+
 function Get-CodexThreadUpdatedAt {
     param([string]$UpdatedAtText)
 
@@ -39,10 +43,11 @@ function Get-CodexThreadRestartBlockers {
         throw "Cannot verify Codex thread state before restart; bridge script not found: $BridgePath"
     }
 
+    $pythonExecutable = Get-CodexRuntimePythonExecutable
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $bridgeOutput = & py -3 $BridgePath list --db-root --limit 0 2>&1
+        $bridgeOutput = & $pythonExecutable $BridgePath list --db-root --limit 0 2>&1
         $bridgeExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -70,16 +75,33 @@ function Get-CodexThreadRestartBlockers {
             continue
         }
 
-        if ($QuietSeconds -gt 0 -and $parts.Count -ge 9) {
-            $updatedAt = Get-CodexThreadUpdatedAt -UpdatedAtText $parts[8].Trim()
-            if ($updatedAt -ne $null) {
-                $ageSeconds = [math]::Floor(($now - $updatedAt).TotalSeconds)
-                if ($ageSeconds -lt $QuietSeconds) {
-                    Write-LauncherLog (
-                        "watchdog_restart_idle_recent_allowed quiet_seconds=$QuietSeconds " +
-                        ("detail={0} | updated_age_seconds={1}" -f ([string]$line).Trim(), $ageSeconds)
+        if ($QuietSeconds -gt 0) {
+            if ($parts.Count -lt 9) {
+                $blockers += [pscustomobject]@{
+                    Reason = 'unknown_timestamp'
+                    Detail = ([string]$line).Trim()
+                }
+                continue
+            }
+            $updatedAtText = $parts[8].Trim()
+            $updatedAt = Get-CodexThreadUpdatedAt -UpdatedAtText $updatedAtText
+            if ($updatedAt -eq $null) {
+                $blockers += [pscustomobject]@{
+                    Reason = 'unknown_timestamp'
+                    Detail = "{0} | updated_at={1}" -f ([string]$line).Trim(), $updatedAtText
+                }
+                continue
+            }
+            $ageSeconds = [math]::Floor(($now - $updatedAt).TotalSeconds)
+            if ($ageSeconds -lt $QuietSeconds) {
+                $blockers += [pscustomobject]@{
+                    Reason = 'recent'
+                    Detail = (
+                        "{0} | updated_age_seconds={1} quiet_seconds={2}" -f `
+                            ([string]$line).Trim(), $ageSeconds, $QuietSeconds
                     )
                 }
+                continue
             }
         }
     }
@@ -101,7 +123,7 @@ function Assert-CodexThreadsQuietForRestart {
     $blockers = @(Get-CodexThreadRestartBlockers -QuietSeconds $RestartQuietSeconds)
     if ($blockers.Count -gt 0) {
         $lines = Format-CodexThreadRestartBlockers -Blockers $blockers
-        throw "Refusing to restart Codex Discord bot because Codex threads are busy.`n$($lines -join "`n")"
+        throw "Refusing to restart Codex Discord bot because Codex threads are busy or not quiet.`n$($lines -join "`n")"
     }
 }
 
@@ -140,7 +162,7 @@ function Claim-RestartRequest {
         return ""
     }
     try {
-        Move-Item -LiteralPath $RestartRequestPath -Destination $RestartClaimPath -Force -ErrorAction Stop
+        Move-Item -LiteralPath $RestartRequestPath -Destination $RestartClaimPath -ErrorAction Stop
         Write-LauncherLog "watchdog_restart_claimed marker=$RestartRequestPath claim=$RestartClaimPath"
         return $RestartClaimPath
     } catch {
@@ -153,25 +175,48 @@ function Claim-RestartRequest {
     }
 }
 
+function Get-CodexRuntimePythonExecutable {
+    return Resolve-CodexRuntimePythonExecutable -RepoRoot $ScriptDir
+}
+
 function Restore-RestartRequest {
     param([string]$ClaimPath)
 
     if ([string]::IsNullOrWhiteSpace($ClaimPath) -or -not (Test-Path -LiteralPath $ClaimPath)) {
         return
     }
-    [System.IO.File]::WriteAllText($RestartRequestPath, '')
-    Remove-Item -LiteralPath $ClaimPath -Force -ErrorAction Stop
-    Write-LauncherLog "watchdog_restart_restored marker=$RestartRequestPath claim=$ClaimPath"
+    if (Test-Path -LiteralPath $RestartRequestPath) {
+        Write-LauncherLog "watchdog_restart_restore_deferred marker=$RestartRequestPath claim=$ClaimPath"
+        return
+    }
+    try {
+        Move-Item `
+            -LiteralPath $ClaimPath `
+            -Destination $RestartRequestPath `
+            -ErrorAction Stop
+        Write-LauncherLog "watchdog_restart_restored marker=$RestartRequestPath claim=$ClaimPath"
+    } catch {
+        if (Test-Path -LiteralPath $RestartRequestPath) {
+            Write-LauncherLog "watchdog_restart_restore_raced marker=$RestartRequestPath claim=$ClaimPath"
+            return
+        }
+        throw
+    }
 }
 
 function Restore-OrphanedRestartClaims {
     foreach ($claim in @(Get-ChildItem -Path $RestartClaimPattern -File -ErrorAction SilentlyContinue)) {
-        $ownerAlive = $false
-        if ($claim.Name -match '\.(\d+)$') {
-            $ownerAlive = $null -ne (Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue)
-        }
+        $ownerAlive = Test-WatchdogClaimOwnerAlive -ClaimName $claim.Name
         if (-not $ownerAlive) {
-            Restore-RestartRequest -ClaimPath $claim.FullName
+            if (Test-RestartClaimMatchesCurrentBot `
+                -ClaimPath $claim.FullName `
+                -BotScript $BotScript `
+                -RuntimeLockPath $RuntimeLockPath) {
+                Restore-RestartRequest -ClaimPath $claim.FullName
+            } else {
+                Remove-Item -LiteralPath $claim.FullName -Force -ErrorAction SilentlyContinue
+                Write-LauncherLog "watchdog_restart_orphan_stale claim=$($claim.FullName)"
+            }
         }
     }
 }

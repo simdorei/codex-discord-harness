@@ -62,6 +62,16 @@ class WatchdogHealthTests(unittest.TestCase):
                 }}
             }}
             function Write-LauncherLog {{ param([string]$Message) }}
+            function Get-BotProcessAgeSeconds {{ return 300 }}
+            function Get-WatchdogHeartbeatIssue {{
+                param(
+                    [string]$HeartbeatPath,
+                    [int]$MaxAgeSeconds,
+                    [int]$StartupGraceSeconds,
+                    [double]$ProcessAgeSeconds
+                )
+                return ''
+            }}
 
             $HealthCpuPercent = 95
             $HealthFreeMemoryMb = 768

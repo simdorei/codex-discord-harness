@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol, TypeAlias
 
 import codex_discord_stop_marker as discord_stop_marker
+from codex_process_identity import current_process_identity
 
 ModuleValue: TypeAlias = object
 
@@ -61,6 +62,7 @@ class BotStopRuntime:
                 heartbeat_path=stop_request_path.with_name(
                     ".codex_discord_bot.heartbeat"
                 ),
+                process_identity=current_process_identity(),
                 poll_seconds=self.deps.get_poll_seconds(),
                 drain_timeout_seconds=self.deps.get_drain_timeout_seconds(),
                 close_timeout_seconds=close_timeout_seconds,

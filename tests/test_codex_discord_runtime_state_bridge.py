@@ -29,6 +29,7 @@ class RuntimeStateBridgeTests(unittest.TestCase):
                 runtime_mutex_name="unit",
                 get_runtime_lock_path=lambda: lock_path,
                 log=logs.append,
+                close_remote_bridge=lambda: None,
                 close_app_server=lambda: (_ for _ in ()).throw(
                     RuntimeError("unexpected close failure")
                 ),
@@ -68,6 +69,7 @@ class RuntimeStateBridgeTests(unittest.TestCase):
                 runtime_mutex_name="unit",
                 get_runtime_lock_path=lambda: lock_path,
                 log=logs.append,
+                close_remote_bridge=lambda: shutdown_order.append("remote-bridge"),
                 close_app_server=lambda: shutdown_order.append("app-server"),
                 exit_process=exit_process,
             )
@@ -75,7 +77,10 @@ class RuntimeStateBridgeTests(unittest.TestCase):
             bridge.exit_bot_process(7, reason="unit")
 
             self.assertEqual(exit_codes, [7])
-            self.assertEqual(shutdown_order, ["app-server", "process"])
+            self.assertEqual(
+                shutdown_order,
+                ["remote-bridge", "app-server", "process"],
+            )
             self.assertFalse(lock_path.exists())
             self.assertTrue(
                 any("bot_process_exit_requested reason=unit code=7" in line for line in logs)

@@ -63,6 +63,51 @@ function Get-BotProcesses {
     }
 }
 
+function Get-BotProcessStartTime {
+    $runtimePid = Get-RuntimePid
+    if ($runtimePid -ne $null) {
+        $runtimeProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$runtimePid" -ErrorAction SilentlyContinue
+        if (Test-IsBotProcess $runtimeProcess -AllowRuntimeLockFallback) {
+            return [datetime]$runtimeProcess.CreationDate
+        }
+    }
+
+    $process = Get-BotProcesses |
+        Sort-Object -Property CreationDate |
+        Select-Object -First 1
+    if ($process -eq $null) {
+        return $null
+    }
+    return [datetime]$process.CreationDate
+}
+
+function Get-BotProcessAgeSeconds {
+    $runtimePid = Get-RuntimePid
+    if ($runtimePid -eq $null) {
+        $process = Get-BotProcesses |
+            Sort-Object -Property CreationDate |
+            Select-Object -First 1
+        if ($process -eq $null) {
+            return $null
+        }
+        $runtimePid = [int]$process.ProcessId
+    }
+    try {
+        $performance = Get-CimInstance `
+            Win32_PerfFormattedData_PerfProc_Process `
+            -Filter "IDProcess=$runtimePid" `
+            -ErrorAction Stop |
+            Select-Object -First 1
+        if ($performance -eq $null -or $performance.ElapsedTime -eq $null) {
+            return $null
+        }
+        return [math]::Max(0, [math]::Floor([double]$performance.ElapsedTime))
+    } catch {
+        Write-LauncherLog "runtime_age_probe_failed pid=$runtimePid error=$($_.Exception.GetType().Name)"
+        return $null
+    }
+}
+
 function Test-RuntimeMutexHeld {
     $created = $false
     $mutex = $null
@@ -83,26 +128,110 @@ function Test-RuntimeMutexHeld {
 }
 
 function Wait-RuntimeBotExit {
-    param([int]$TimeoutSeconds = $GracefulStopTimeoutSeconds)
+    param(
+        [string]$ExpectedIdentity,
+        [int]$TimeoutSeconds = $GracefulStopTimeoutSeconds
+    )
 
     for ($i = 0; $i -lt $TimeoutSeconds; $i++) {
         Start-Sleep -Seconds 1
-        if (-not (Test-BotProcessAlive)) {
+        $expectedPid = [int]($ExpectedIdentity -split '\|', 2)[0]
+        $currentIdentity = Get-CodexBotProcessIdentityById `
+            -BotScript $BotScript `
+            -ProcessId $expectedPid
+        if ($currentIdentity -ne $ExpectedIdentity) {
             return $true
         }
     }
     return $false
 }
 
-function Request-GracefulRuntimeStop {
+function Move-AtomicTextFile {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    [System.IO.File]::Move($Source, $Destination)
+}
+
+function Publish-AtomicTextFile {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $directory = [System.IO.Path]::GetDirectoryName($Path)
+    $name = [System.IO.Path]::GetFileName($Path)
+    $temporaryPath = Join-Path `
+        $directory `
+        ('.' + $name + '.' + [Guid]::NewGuid().ToString('N') + '.tmp')
     try {
-        Set-Content -LiteralPath $StopRequestPath -Encoding ASCII -Value '1'
+        [System.IO.File]::WriteAllText(
+            $temporaryPath,
+            $Content,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        $lastCollision = $null
+        for ($attempt = 0; $attempt -lt 32; $attempt++) {
+            try {
+                Move-AtomicTextFile `
+                    -Source $temporaryPath `
+                    -Destination $Path
+                return
+            } catch [System.IO.IOException] {
+                $nativeError = $_.Exception.HResult -band 0xFFFF
+                if ($nativeError -notin @(80, 183)) {
+                    throw
+                }
+                $lastCollision = $_.Exception
+            }
+            try {
+                $publishedContent = [System.IO.File]::ReadAllText(
+                    $Path,
+                    [System.Text.UTF8Encoding]::new($false)
+                )
+            } catch [System.IO.FileNotFoundException] {
+                continue
+            }
+            if ([string]::Equals(
+                $publishedContent,
+                $Content,
+                [StringComparison]::Ordinal
+            )) {
+                return
+            }
+            throw $lastCollision
+        }
+        throw $lastCollision
+    } finally {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Request-GracefulRuntimeStop {
+    param([string]$ExpectedIdentity)
+
+    $expectedPid = [int]($ExpectedIdentity -split '\|', 2)[0]
+    $currentIdentity = Get-CodexBotProcessIdentityById `
+        -BotScript $BotScript `
+        -ProcessId $expectedPid
+    if ($currentIdentity -ne $ExpectedIdentity) {
+        Write-LauncherLog "watchdog_graceful_stop_stale expected=$ExpectedIdentity current=$currentIdentity"
+        return $true
+    }
+    try {
+        Publish-AtomicTextFile `
+            -Path $StopRequestPath `
+            -Content "identity=$ExpectedIdentity"
     } catch {
         Write-LauncherLog "watchdog_graceful_stop_marker_failed marker=$StopRequestPath error=$($_.Exception.GetType().Name)"
         return $false
     }
     Write-LauncherLog "watchdog_graceful_stop_requested marker=$StopRequestPath"
-    if (Wait-RuntimeBotExit -TimeoutSeconds $GracefulStopTimeoutSeconds) {
+    if (Wait-RuntimeBotExit `
+        -ExpectedIdentity $ExpectedIdentity `
+        -TimeoutSeconds $GracefulStopTimeoutSeconds) {
         Remove-Item -LiteralPath $StopRequestPath -Force -ErrorAction SilentlyContinue
         Write-LauncherLog "watchdog_graceful_stop_done marker=$StopRequestPath"
         return $true
@@ -112,43 +241,48 @@ function Request-GracefulRuntimeStop {
 }
 
 function Stop-RuntimeBotProcess {
-    if (Request-GracefulRuntimeStop) {
+    param([string]$ExpectedIdentity)
+
+    if ($ExpectedIdentity -notmatch '^\d+\|\d+$') {
+        throw 'A verified bot process identity is required before stopping the runtime.'
+    }
+    if (Request-GracefulRuntimeStop -ExpectedIdentity $ExpectedIdentity) {
         return
     }
     Remove-Item -LiteralPath $StopRequestPath -Force -ErrorAction SilentlyContinue
 
-    $runtimePid = Get-RuntimePid
-    if ($runtimePid -ne $null) {
-        $runtimeProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$runtimePid" -ErrorAction SilentlyContinue
-        if ($runtimeProcess -eq $null) {
-            Write-LauncherLog "watchdog_restart_pid_not_running pid=$runtimePid"
-            Remove-Item -LiteralPath $RuntimeLockPath -Force -ErrorAction SilentlyContinue
-        } elseif (Test-IsBotProcess $runtimeProcess -AllowRuntimeLockFallback) {
-            Write-LauncherLog "watchdog_restart_stop pid=$runtimePid name=$($runtimeProcess.Name)"
-            Stop-Process -Id $runtimePid -Force -ErrorAction Stop
-            Start-Sleep -Seconds 2
-            Remove-Item -LiteralPath $RuntimeLockPath -Force -ErrorAction SilentlyContinue
-            return
-        } else {
-            Write-LauncherLog "watchdog_restart_pid_mismatch pid=$runtimePid name=$($runtimeProcess.Name)"
-            Remove-Item -LiteralPath $RuntimeLockPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    $matchedProcesses = @(Get-BotProcesses)
-    if ($matchedProcesses.Count -eq 0) {
-        if (Test-RuntimeMutexHeld) {
-            Write-LauncherLog "watchdog_restart_mutex_still_held mutex=$RuntimeMutexName lock=$RuntimeLockPath"
-        } else {
-            Write-LauncherLog "watchdog_restart_no_runtime_pid lock=$RuntimeLockPath"
-        }
+    $expectedPid = [int]($ExpectedIdentity -split '\|', 2)[0]
+    $ownedProcess = Get-Process -Id $expectedPid -ErrorAction SilentlyContinue
+    if ($ownedProcess -eq $null) {
+        Write-LauncherLog "watchdog_restart_expected_process_gone identity=$ExpectedIdentity"
         return
     }
-    foreach ($process in $matchedProcesses) {
-        Write-LauncherLog "watchdog_restart_stop_scan pid=$($process.ProcessId) name=$($process.Name)"
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    try {
+        $retainedHandle = $ownedProcess.Handle
+        $startedAt = $ownedProcess.StartTime.ToUniversalTime()
+        $startedTicks = $startedAt.Ticks - ($startedAt.Ticks % 10)
+        $ownedIdentity = "$expectedPid|$startedTicks"
+        $verifiedIdentity = Get-CodexBotProcessIdentityById `
+            -BotScript $BotScript `
+            -ProcessId $expectedPid
+        if (
+            $ownedIdentity -ne $ExpectedIdentity -or
+            $verifiedIdentity -ne $ExpectedIdentity
+        ) {
+            Write-LauncherLog (
+                "watchdog_restart_exact_identity_mismatch " +
+                "expected=$ExpectedIdentity owned=$ownedIdentity verified=$verifiedIdentity"
+            )
+            return
+        }
+        Write-LauncherLog "watchdog_restart_stop_exact identity=$ExpectedIdentity handle=$retainedHandle"
+        $ownedProcess.Kill()
+        if (-not $ownedProcess.WaitForExit(5000)) {
+            throw "Timed out waiting for exact bot process to exit: $ExpectedIdentity"
+        }
+    } finally {
+        $ownedProcess.Dispose()
     }
-    Start-Sleep -Seconds 2
 }
 
 function Test-BotProcessAlive {

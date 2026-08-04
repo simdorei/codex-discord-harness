@@ -14,5 +14,7 @@ def test_runtime_control_artifacts_are_ignored_by_git() -> None:
     assert {
         ".codex_discord_bot.disabled",
         ".codex_discord_bot.heartbeat",
+        ".codex_discord_bot.restart.claimed.*",
         ".codex_discord_bot.stop",
+        ".codex_discord_bot.stop.claimed.*",
     } <= ignored_paths
