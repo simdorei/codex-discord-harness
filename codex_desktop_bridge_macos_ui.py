@@ -44,16 +44,21 @@ class _MacOSBackend(Protocol):
 
 @runtime_checkable
 class _MacOSInputModule(Protocol):
-    MACOS_UI_BACKEND: _MacOSBackend
+    MACOS_UI_BACKEND: object
 
 
-def _resolve_backend(backend: _MacOSBackend | None) -> _MacOSBackend:
+def _resolve_backend(backend: object | None) -> _MacOSBackend:
     if backend is not None:
+        if not isinstance(backend, _MacOSBackend):
+            raise RuntimeError("macOS UI backend is unavailable")
         return backend
     macos_input = importlib.import_module("codex_desktop_bridge_macos_input")
     if not isinstance(macos_input, _MacOSInputModule):
         raise RuntimeError("macOS UI backend is unavailable")
-    return macos_input.MACOS_UI_BACKEND
+    resolved = macos_input.MACOS_UI_BACKEND
+    if not isinstance(resolved, _MacOSBackend):
+        raise RuntimeError("macOS UI backend is unavailable")
+    return resolved
 
 
 def _click_named_ui(

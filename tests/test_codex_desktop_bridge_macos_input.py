@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+from collections.abc import Callable
 from unittest.mock import patch
 
 import codex_desktop_bridge_macos_input as macos_input
@@ -106,6 +107,20 @@ class MacOSInputTests(unittest.TestCase):
             )
 
         self.assertEqual(result.stdout, "OK:Codex - Direct")
+
+    def test_ui_runner_rejects_invalid_backends_clearly(self) -> None:
+        runner: Callable[..., subprocess.CompletedProcess[str]] = (
+            macos_ui.run_header_verification_process
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "macOS UI backend is unavailable"):
+            _ = runner(["ignored"], backend=object())
+
+        with (
+            patch.object(macos_input, "MACOS_UI_BACKEND", object()),
+            self.assertRaisesRegex(RuntimeError, "macOS UI backend is unavailable"),
+        ):
+            _ = macos_ui.run_header_verification_process(["ignored"])
 
 
 if __name__ == "__main__":
