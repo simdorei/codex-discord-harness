@@ -55,6 +55,10 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         )
         browser_hook = plugin_root / "hooks/browser_evidence_hook.py"
         browser_hook_manifest = plugin_root / "hooks/browser-evidence.json"
+        ask_metadata = plugin_root / "skills/ask-chatgpt-pro/agents/openai.yaml"
+        source_metadata = Path(
+            ".agents/skills/ask-chatgpt-pro/agents/openai.yaml"
+        )
 
         self.assertEqual(manifest.skills, "./skills/")
         self.assertRegex(manifest.version, r"^0\.1\.0\+codex\.\d{14}$")
@@ -73,6 +77,11 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertEqual(manifest.hooks, ["./hooks/browser-evidence.json"])
         self.assertTrue(browser_hook.is_file())
         self.assertTrue(browser_hook_manifest.is_file())
+        self.assertTrue(ask_metadata.is_file())
+        self.assertEqual(
+            ask_metadata.read_text(encoding="utf-8"),
+            source_metadata.read_text(encoding="utf-8"),
+        )
         self.assertIn("name: deep-interview", skill_text)
         self.assertTrue(auto_research.is_file())
         self.assertTrue(auto_answer.is_file())
