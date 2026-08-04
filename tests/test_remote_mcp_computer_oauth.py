@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,6 +96,45 @@ def test_file_only_refresh_token_cannot_add_computer_scopes() -> None:
 
     assert response.status_code == 400
     assert response.json()["error"] == "invalid_scope"
+
+
+def test_existing_oauth_client_can_request_new_server_scopes() -> None:
+    app = create_app(oauth_settings())
+    redirect_uri = "https://chatgpt.com/connector/oauth/test"
+    with TestClient(app, base_url="http://localhost") as client:
+        registered = client.post(
+            "/register",
+            json={
+                "redirect_uris": [redirect_uri],
+                "token_endpoint_auth_method": "client_secret_post",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "scope": f"{READ_SCOPE} {WRITE_SCOPE}",
+                "client_name": "Existing ChatGPT client",
+            },
+        )
+        assert registered.status_code == 201, registered.text
+
+        authorization = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": registered.json()["client_id"],
+                "redirect_uri": redirect_uri,
+                "state": "existing-client-state",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "scope": (
+                    f"{READ_SCOPE} {WRITE_SCOPE} "
+                    f"{COMPUTER_OBSERVE_SCOPE} {COMPUTER_CONTROL_SCOPE}"
+                ),
+                "resource": "https://simdorei.duckdns.org/mcp",
+            },
+            follow_redirects=False,
+        )
+
+    assert authorization.status_code == 302, authorization.text
+    assert urlparse(authorization.headers["location"]).path == "/oauth/approve"
 
 
 def test_oauth_request_without_scope_grants_full_local_computer_access() -> None:

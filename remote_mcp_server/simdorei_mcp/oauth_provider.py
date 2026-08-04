@@ -24,6 +24,7 @@ from pydantic import SecretStr
 
 from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     DEFAULT_OAUTH_SCOPES,
+    OAUTH_SCOPES,
     OAuthProviderConfigurationError,
 )
 from remote_mcp_server.simdorei_mcp.oauth_store import (
@@ -100,7 +101,15 @@ class SingleUserOAuthProvider(
 
     @override
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        return await self._store.get_client(client_id)
+        client = await self._store.get_client(client_id)
+        if client is None:
+            return None
+        current_scope = " ".join(OAUTH_SCOPES)
+        if client.scope == current_scope:
+            return client
+        migrated_client = client.model_copy(update={"scope": current_scope})
+        await self._store.save_client(migrated_client)
+        return migrated_client
 
     @override
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
