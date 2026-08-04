@@ -20,7 +20,7 @@ from simdorei_mcp_common.messages import (
     WriteFileResult,
 )
 from simdorei_mcp_common.operation_outputs import FileApplyPatchOutput
-from simdorei_mcp_common.operation_requests import FileApplyPatchRequest
+from simdorei_mcp_common.operation_requests import FileApplyPatchRequest, FileChange
 from tests.remote_mcp_dispatch_support import (
     TEST_PROJECT_SESSION_ID,
     activate_test_session,
@@ -38,14 +38,14 @@ def test_patch_updates_file_with_matching_hash(tmp_path: Path) -> None:
     result = dispatcher.execute(
         _command(
             "update",
-            "*** Begin Patch\n"
-            "*** Update File: notes.txt\n"
-            "@@\n"
-            " first\n"
-            "-second\n"
-            "+changed\n"
-            "*** End Patch",
-            {"notes.txt": current_hash},
+            (
+                FileChange(
+                    action="update",
+                    path="notes.txt",
+                    content="first\nchanged\n",
+                    expected_sha256=current_hash,
+                ),
+            ),
         )
     )
 
@@ -65,10 +65,13 @@ def test_patch_deletes_file_with_matching_hash(tmp_path: Path) -> None:
     result = dispatcher.execute(
         _command(
             "delete",
-            "*** Begin Patch\n"
-            "*** Delete File: gone.txt\n"
-            "*** End Patch",
-            {"gone.txt": current_hash},
+            (
+                FileChange(
+                    action="delete",
+                    path="gone.txt",
+                    expected_sha256=current_hash,
+                ),
+            ),
         )
     )
 
@@ -88,11 +91,14 @@ def test_patch_moves_file_with_matching_hash(tmp_path: Path) -> None:
     result = dispatcher.execute(
         _command(
             "move",
-            "*** Begin Patch\n"
-            "*** Update File: old.txt\n"
-            "*** Move to: new.txt\n"
-            "*** End Patch",
-            {"old.txt": current_hash},
+            (
+                FileChange(
+                    action="move",
+                    path="old.txt",
+                    destination="new.txt",
+                    expected_sha256=current_hash,
+                ),
+            ),
         )
     )
 
@@ -122,13 +128,10 @@ def test_patch_rolls_back_when_checkpoint_persist_fails(
         dispatcher.execute(
             _command(
                 "rollback",
-                "*** Begin Patch\n"
-                "*** Add File: first.txt\n"
-                "+first\n"
-                "*** Add File: second.txt\n"
-                "+second\n"
-                "*** End Patch",
-                {},
+                (
+                    FileChange(action="create", path="first.txt", content="first\n"),
+                    FileChange(action="create", path="second.txt", content="second\n"),
+                ),
             )
         )
 
@@ -160,17 +163,13 @@ def _hash(root: Path, path: str) -> str:
 
 def _command(
     suffix: str,
-    patch: str,
-    precondition_hashes: dict[str, str],
+    changes: tuple[FileChange, ...],
 ) -> ProjectOperationCommand:
     return ProjectOperationCommand(
         request_id=RequestId(f"request-{suffix}"),
         thread_id="thread-a",
         computer_session_id=TEST_PROJECT_SESSION_ID,
-        operation=FileApplyPatchRequest(
-            patch=patch,
-            precondition_hashes=precondition_hashes,
-        ),
+        operation=FileApplyPatchRequest(changes=changes),
     )
 
 

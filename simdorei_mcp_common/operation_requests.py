@@ -4,6 +4,10 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, HttpUrl, model_validator
 
+from simdorei_mcp_common.file_changes import (
+    FileApplyPatchRequest as FileApplyPatchRequest,
+    FileChange as FileChange,
+)
 from simdorei_mcp_common.operation_base import OperationRequest
 from simdorei_mcp_common.terminal_window_interaction_protocol import (
     TerminalWindowInteractionRequest,
@@ -23,12 +27,6 @@ class CodeSearchRequest(OperationRequest):
     kind: Literal["code_search"] = "code_search"
     query: str = Field(min_length=1, max_length=500)
     max_results: int = Field(default=100, ge=1, le=200)
-
-
-class FileApplyPatchRequest(OperationRequest):
-    kind: Literal["file_apply_patch"] = "file_apply_patch"
-    patch: str = Field(min_length=1, max_length=10_485_760)
-    precondition_hashes: dict[str, str] = Field(default_factory=dict)
 
 
 class FileCreateRequest(OperationRequest):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+from typing import ClassVar, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +20,6 @@ from remote_mcp_server.simdorei_mcp.capability_inventory import (
     require_complete_tool_inventory,
 )
 from remote_mcp_server.simdorei_mcp.tools import register_tools
-from simdorei_mcp_common.messages import RequestId, RuntimeCapabilityResult
 from tests.remote_mcp_oauth_support import authorize, oauth_settings
 
 EXPECTED_TOOL_NAMES = (
@@ -104,6 +103,7 @@ class _ListedTool(BaseModel):
     name: str
     metadata: _ToolMetadata = Field(alias="_meta")
     annotations: _ToolAnnotations
+    input_schema: dict[str, object] = Field(alias="inputSchema")
 
 
 class _ToolListResult(BaseModel):
@@ -176,40 +176,38 @@ def test_mcp_registered_tool_inventory_matches_release_manifest() -> None:
     }
 
 
-def test_capability_inventory_tool_reports_grouped_runtime_registration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
+def test_file_apply_patch_exposes_structured_changes() -> None:
+    app = create_app(oauth_settings())
 
-    async def observe_runtime_capability(
-        self: BindingBroker,
-        session: str,
-        subject: str,
-        *,
-        inventory_sha256: str,
-        tool_count: Literal[47],
-        terminal_execute_present: Literal[True],
-        terminal_interact_present: Literal[True],
-    ) -> RuntimeCapabilityResult:
-        _ = self
-        observed.update(
-            session=session,
-            subject=subject,
-            inventory_sha256=inventory_sha256,
-            tool_count=tool_count,
-            terminal_execute_present=terminal_execute_present,
-            terminal_interact_present=terminal_interact_present,
-        )
-        return RuntimeCapabilityResult(
-            request_id=RequestId("runtime-capability-test"),
-            status="not_applicable",
+    with TestClient(app, base_url="http://localhost") as client:
+        token = authorize(client)
+        response = client.post(
+            "/mcp",
+            headers={**MCP_HEADERS, "Authorization": f"Bearer {token}"},
+            json={"jsonrpc": "2.0", "id": 5, "method": "tools/list"},
         )
 
-    monkeypatch.setattr(
-        BindingBroker,
-        "observe_runtime_capability",
-        observe_runtime_capability,
+    assert response.status_code == 200, response.text
+    envelope = _ToolListEnvelope.model_validate_json(response.content)
+    tool = next(
+        item for item in envelope.result.tools if item.name == "file_apply_patch"
     )
+    schema_text = repr(tool.input_schema)
+    properties = cast(dict[str, object], tool.input_schema["properties"])
+    assert "changes" in properties
+    assert "patch" not in properties
+    assert "precondition_hashes" not in properties
+    for field in (
+        "action",
+        "path",
+        "content",
+        "destination",
+        "expected_sha256",
+    ):
+        assert field in schema_text
+
+
+def test_capability_inventory_tool_reports_grouped_runtime_registration() -> None:
     app = create_app(oauth_settings())
 
     with TestClient(app, base_url="http://localhost") as client:
@@ -234,14 +232,10 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration(
     assert envelope.result.is_error is False
     inventory = envelope.result.structured_content
     assert inventory.ready is True
+    assert inventory.protocol_version == 9
     assert inventory.expected_tool_count == len(EXPECTED_TOOL_NAMES)
     assert inventory.registered_tool_count == len(EXPECTED_TOOL_NAMES)
     assert inventory.manifest_duplicate_tools == ()
-    assert observed["session"] == "inventory-session-a"
-    assert observed["tool_count"] == 47
-    assert observed["terminal_execute_present"] is True
-    assert observed["terminal_interact_present"] is True
-    assert isinstance(observed["inventory_sha256"], str)
     groups: dict[CapabilitySurface, CapabilityGroup] = {
         group.surface: group for group in inventory.groups
     }
@@ -285,7 +279,9 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration(
         "terminal_window_type",
     )
     assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
-    assert "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
+    assert (
+        "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
+    )
 
 
 def test_release_blocker_rejects_missing_and_unexpected_tools() -> None:

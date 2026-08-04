@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Literal, assert_never
 
 from codex_remote_mcp_checkpoint_transaction import (
     CheckpointTarget,
@@ -17,19 +17,12 @@ from codex_remote_mcp_checkpoints import (
 )
 from codex_remote_mcp_files import (
     FileConflictError,
+    MAX_FILE_BYTES,
     ProjectFileAccess,
 )
-from codex_remote_mcp_patch_parser import (
-    AddOperation,
-    DeleteOperation,
-    PatchFormatError,
-    PatchHunk,
-    PatchOperation,
-    UpdateOperation,
-    parse_patch,
-)
 from simdorei_mcp_common.operation_outputs import FileApplyPatchOutput, PatchEntry
-from simdorei_mcp_common.operation_requests import FileApplyPatchRequest
+from simdorei_mcp_common.operation_requests import FileApplyPatchRequest, FileChange
+from simdorei_mcp_common.request_deadlines import RequestBudget
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,17 +37,19 @@ class PlannedMutation:
 def apply_project_patch(
     root: Path,
     request: FileApplyPatchRequest,
+    *,
+    budget: RequestBudget,
 ) -> FileApplyPatchOutput:
     """Apply a bounded Codex patch with SHA checks and rollback checkpoints."""
     access = ProjectFileAccess(root)
     planned = tuple(
-        _plan_mutation(access, operation, request.precondition_hashes)
-        for operation in parse_patch(request.patch)
+        _plan_mutation(access, change) for change in request.changes
     )
     checkpoint_targets = _checkpoint_targets(planned)
+    budget.ensure_active()
     draft = begin_checkpoint(root, "patch", checkpoint_targets)
     with checkpoint_transaction(draft) as transaction:
-        _apply_mutations(access, planned, transaction)
+        _apply_mutations(access, planned, transaction, budget)
         checkpoint_id = finish_checkpoint(draft)
     return FileApplyPatchOutput(
         applied=tuple(mutation.entry for mutation in planned),
@@ -64,11 +59,11 @@ def apply_project_patch(
 
 def _plan_mutation(
     access: ProjectFileAccess,
-    operation: PatchOperation,
-    hashes: dict[str, str],
+    change: FileChange,
 ) -> PlannedMutation:
-    match operation:
-        case AddOperation(path=path, content=content):
+    match change:
+        case FileChange(action="create", path=path, content=content):
+            assert content is not None
             target = access.resolve_path(path, require_file=False)
             if access.file_exists(path):
                 raise FileConflictError(path, "added file already exists")
@@ -84,9 +79,13 @@ def _plan_mutation(
                 content=content,
                 expected_sha256=None,
             )
-        case DeleteOperation(path=path):
+        case FileChange(
+            action="delete",
+            path=path,
+            expected_sha256=expected_sha256,
+        ):
             target = access.resolve_path(path)
-            expected = _require_hash(access, path, hashes)
+            expected = _require_hash(access, path, expected_sha256)
             return PlannedMutation(
                 entry=PatchEntry(
                     path=path,
@@ -99,87 +98,97 @@ def _plan_mutation(
                 content=None,
                 expected_sha256=expected,
             )
-        case UpdateOperation(path=path, destination=destination, hunks=hunks):
+        case FileChange(
+            action="update",
+            path=path,
+            content=content,
+            expected_sha256=expected_sha256,
+        ):
+            assert content is not None
             source = access.resolve_path(path)
-            expected = _require_hash(access, path, hashes)
-            original = access.read_bytes(path).decode("utf-8")
-            content = _apply_hunks(original, hunks) if hunks else original
-            destination_target = None
-            action: Literal["update", "move"] = "update"
-            if destination is not None:
-                target = access.resolve_path(destination, require_file=False)
-                if access.file_exists(destination):
-                    raise FileConflictError(
-                        destination, "move destination already exists"
-                    )
-                destination_target = CheckpointTarget(
-                    path=destination,
-                    absolute_path=target,
-                )
-                action = "move"
-            added, removed = _count_delta(hunks)
+            expected = _require_hash(access, path, expected_sha256)
+            original = access.read_bytes(
+                path,
+                max_bytes=MAX_FILE_BYTES,
+            ).decode("utf-8")
+            added, removed = _count_content_delta(original, content)
             return PlannedMutation(
                 entry=PatchEntry(
                     path=path,
-                    action=action,
+                    action="update",
+                    added_lines=added,
+                    removed_lines=removed,
+                ),
+                source=CheckpointTarget(path=path, absolute_path=source),
+                destination=None,
+                content=content,
+                expected_sha256=expected,
+            )
+        case FileChange(
+            action="move",
+            path=path,
+            content=content,
+            destination=destination,
+            expected_sha256=expected_sha256,
+        ):
+            assert destination is not None
+            source = access.resolve_path(path)
+            expected = _require_hash(access, path, expected_sha256)
+            original = access.read_bytes(
+                path,
+                max_bytes=MAX_FILE_BYTES,
+            ).decode("utf-8")
+            moved_content = original if content is None else content
+            target = access.resolve_path(destination, require_file=False)
+            if access.file_exists(destination):
+                raise FileConflictError(
+                    destination, "move destination already exists"
+                )
+            added, removed = _count_content_delta(original, moved_content)
+            return PlannedMutation(
+                entry=PatchEntry(
+                    path=path,
+                    action="move",
                     destination=destination,
                     added_lines=added,
                     removed_lines=removed,
                 ),
                 source=CheckpointTarget(path=path, absolute_path=source),
-                destination=destination_target,
-                content=content,
+                destination=CheckpointTarget(
+                    path=destination,
+                    absolute_path=target,
+                ),
+                content=moved_content,
                 expected_sha256=expected,
             )
-        case unreachable:
-            assert_never(unreachable)
+        case _:
+            raise ValueError(f"unsupported file change action: {change.action}")
 
 
 def _require_hash(
     access: ProjectFileAccess,
     path: str,
-    hashes: dict[str, str],
+    expected: str | None,
 ) -> str:
-    expected = hashes.get(path)
     if expected is None:
         raise FileConflictError(path, "existing files require a precondition hash")
-    current = hashlib.sha256(access.read_bytes(path)).hexdigest()
+    current = hashlib.sha256(
+        access.read_bytes(path, max_bytes=MAX_FILE_BYTES)
+    ).hexdigest()
     if current != expected:
         raise FileConflictError(path, "file changed since it was read")
     return expected
 
 
-def _apply_hunks(original: str, hunks: tuple[PatchHunk, ...]) -> str:
-    lines = original.splitlines()
-    trailing_newline = original.endswith("\n")
-    search_from = 0
-    for hunk in hunks:
-        searched = tuple(
-            line.text for line in hunk.lines if line.kind in {"context", "remove"}
-        )
-        replacement = tuple(
-            line.text for line in hunk.lines if line.kind in {"context", "add"}
-        )
-        position = _find_sequence(lines, searched, search_from)
-        lines[position : position + len(searched)] = replacement
-        search_from = position + len(replacement)
-    result = "\n".join(lines)
-    return result + ("\n" if trailing_newline else "")
-
-
-def _find_sequence(lines: list[str], wanted: tuple[str, ...], start: int) -> int:
-    if not wanted:
-        return len(lines)
-    limit = len(lines) - len(wanted) + 1
-    for index in range(start, max(start, limit)):
-        if tuple(lines[index : index + len(wanted)]) == wanted:
-            return index
-    raise PatchFormatError("<patch>", "update context was not found")
-
-
-def _count_delta(hunks: tuple[PatchHunk, ...]) -> tuple[int, int]:
-    added = sum(line.kind == "add" for hunk in hunks for line in hunk.lines)
-    removed = sum(line.kind == "remove" for hunk in hunks for line in hunk.lines)
+def _count_content_delta(original: str, updated: str) -> tuple[int, int]:
+    matcher = SequenceMatcher(a=original.splitlines(), b=updated.splitlines())
+    added = 0
+    removed = 0
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag in {"replace", "delete"}:
+            removed += old_end - old_start
+        if tag in {"replace", "insert"}:
+            added += new_end - new_start
     return added, removed
 
 
@@ -198,11 +207,15 @@ def _apply_mutations(
     access: ProjectFileAccess,
     mutations: tuple[PlannedMutation, ...],
     transaction: CheckpointTransaction,
+    budget: RequestBudget,
 ) -> None:
     for mutation in mutations:
         if mutation.expected_sha256 is not None:
             current = hashlib.sha256(
-                access.read_bytes(mutation.source.path)
+                access.read_bytes(
+                    mutation.source.path,
+                    max_bytes=MAX_FILE_BYTES,
+                )
             ).hexdigest()
             if current != mutation.expected_sha256:
                 raise FileConflictError(
@@ -210,6 +223,7 @@ def _apply_mutations(
                     "file changed since the patch was planned",
                 )
         if mutation.entry.action == "delete":
+            budget.ensure_active()
             access.delete_file(
                 mutation.source.path,
                 expected_sha256=mutation.expected_sha256 or "",
@@ -217,18 +231,21 @@ def _apply_mutations(
             transaction.record_delete(mutation.source.path)
             continue
         if mutation.destination is not None:
+            budget.ensure_active()
             written = access.write_file(
                 mutation.destination.path,
                 mutation.content or "",
                 expected_sha256=None,
             )
             transaction.record_write(mutation.destination.path, written.sha256)
+            budget.ensure_active()
             access.delete_file(
                 mutation.source.path,
                 expected_sha256=mutation.expected_sha256 or "",
             )
             transaction.record_delete(mutation.source.path)
             continue
+        budget.ensure_active()
         written = access.write_file(
             mutation.source.path,
             mutation.content or "",
