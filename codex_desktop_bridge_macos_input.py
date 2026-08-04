@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 from codex_thread_models import WindowInfo
 
@@ -169,7 +168,7 @@ def _refresh_windows() -> list[MacOSWindowSnapshot]:
 def _get_window(hwnd: int) -> MacOSWindowSnapshot:
     window = _WINDOWS.get(hwnd)
     if window is None:
-        _refresh_windows()
+        _ = _refresh_windows()
         window = _WINDOWS.get(hwnd)
     if window is None:
         raise MacOSAutomationError(f"macOS window handle not found: {hwnd}")
@@ -217,7 +216,7 @@ def get_foreground_window() -> int:
 
 def _raise_window(hwnd: int) -> None:
     window = _get_window(hwnd)
-    _osascript(
+    _ = _osascript(
         [
             'tell application "System Events"',
             f"tell process {_quote(window.process_name)}",
@@ -271,9 +270,9 @@ def send_key_event(vk: int, keyup: bool = False) -> None:
         letter = _LETTER_KEYS.get(vk)
         if letter is None:
             raise MacOSAutomationError(f"Unsupported macOS key event: {vk}")
-        _osascript(['tell application "System Events"', f"keystroke {_quote(letter)}", "end tell"])
+        _ = _osascript(['tell application "System Events"', f"keystroke {_quote(letter)}", "end tell"])
         return
-    _osascript(['tell application "System Events"', f"key code {key_code}", "end tell"])
+    _ = _osascript(['tell application "System Events"', f"key code {key_code}", "end tell"])
 
 
 def send_hotkey(*keys: int) -> None:
@@ -284,10 +283,10 @@ def send_hotkey(*keys: int) -> None:
     key = normal_keys[-1]
     using = " using {" + ", ".join(modifiers) + "}" if modifiers else ""
     if key in _LETTER_KEYS:
-        _osascript(['tell application "System Events"', f"keystroke {_quote(_LETTER_KEYS[key])}{using}", "end tell"])
+        _ = _osascript(['tell application "System Events"', f"keystroke {_quote(_LETTER_KEYS[key])}{using}", "end tell"])
         return
     if key in _KEY_CODES:
-        _osascript(['tell application "System Events"', f"key code {_KEY_CODES[key]}{using}", "end tell"])
+        _ = _osascript(['tell application "System Events"', f"key code {_KEY_CODES[key]}{using}", "end tell"])
         return
     raise MacOSAutomationError(f"Unsupported macOS hotkey: {keys}")
 
@@ -295,7 +294,7 @@ def send_hotkey(*keys: int) -> None:
 def click_window(window: WindowInfo, x_ratio: float, y_offset: int) -> tuple[int, int]:
     x = int(window.left + ((window.right - window.left) * x_ratio))
     y = int(window.top + y_offset)
-    _osascript(['tell application "System Events"', f"click at {{{x}, {y}}}", "end tell"])
+    _ = _osascript(['tell application "System Events"', f"click at {{{x}, {y}}}", "end tell"])
     return (x, y)
 
 
@@ -323,28 +322,34 @@ class _MacOSUIBackend:
         return _refresh_windows()
 
 
-_MACOS_UI_BACKEND = _MacOSUIBackend()
+MACOS_UI_BACKEND = _MacOSUIBackend()
 
 
-def run_composer_focus_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def run_composer_focus_process(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_composer_focus_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
+    return macos_ui.run_composer_focus_process(args, backend=MACOS_UI_BACKEND)
 
 
-def run_header_verification_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def run_header_verification_process(
+    args: list[str], *, env: Mapping[str, str] | None = None, **_kwargs: object
+) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_header_verification_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
+    return macos_ui.run_header_verification_process(args, backend=MACOS_UI_BACKEND, env=env)
 
 
-def run_sidebar_activation_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def run_sidebar_activation_process(
+    args: list[str], *, env: Mapping[str, str] | None = None, **_kwargs: object
+) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_sidebar_activation_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
+    return macos_ui.run_sidebar_activation_process(args, backend=MACOS_UI_BACKEND, env=env)
 
 
-def run_permission_approval_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+def run_permission_approval_process(
+    args: list[str], *, env: Mapping[str, str] | None = None, **_kwargs: object
+) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_permission_approval_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
+    return macos_ui.run_permission_approval_process(args, backend=MACOS_UI_BACKEND, env=env)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# pyright: reportAny=false, reportAttributeAccessIssue=false, reportUnknownArgumentType=false, reportUnknownMemberType=false
 import unittest
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager

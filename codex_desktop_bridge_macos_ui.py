@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
-from collections.abc import Sequence
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Protocol, cast
 
 
 class _WindowSnapshot(Protocol):
@@ -40,7 +41,20 @@ class _MacOSBackend(Protocol):
     def refresh_windows(self) -> Sequence[_WindowSnapshot]: ...
 
 
-def _click_named_ui(process_name: str, needles: Sequence[str], *, backend: _MacOSBackend) -> str:
+def _resolve_backend(backend: _MacOSBackend | None) -> _MacOSBackend:
+    if backend is not None:
+        return backend
+    macos_input = importlib.import_module("codex_desktop_bridge_macos_input")
+    return cast(_MacOSBackend, getattr(macos_input, "MACOS_UI_BACKEND"))
+
+
+def _click_named_ui(
+    process_name: str,
+    needles: Sequence[str],
+    *,
+    backend: _MacOSBackend | None = None,
+) -> str:
+    backend = _resolve_backend(backend)
     tests = " or ".join(f"elementName contains {backend.quote(needle)}" for needle in needles)
     script = [
         'tell application "System Events"',
@@ -65,24 +79,29 @@ def _click_named_ui(process_name: str, needles: Sequence[str], *, backend: _MacO
 
 
 def run_composer_focus_process(
-    args: list[str], *, backend: _MacOSBackend, **_kwargs: Any
+    args: list[str], *, backend: _MacOSBackend | None = None, **_kwargs: object
 ) -> subprocess.CompletedProcess[str]:
+    backend = _resolve_backend(backend)
     try:
         window = backend.find_codex_window()
         backend.raise_window(window.handle)
         x = int(window.left + ((window.right - window.left) * 0.5))
         y = max(window.top + 40, window.bottom - 88)
-        backend.osascript(['tell application "System Events"', f"click at {{{x}, {y}}}", "end tell"])
+        _ = backend.osascript(['tell application "System Events"', f"click at {{{x}, {y}}}", "end tell"])
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="OK\n", stderr="")
     except RuntimeError as exc:
         return subprocess.CompletedProcess(args=args, returncode=4, stdout=str(exc), stderr="")
 
 
 def run_header_verification_process(
-    args: list[str], *, backend: _MacOSBackend, **kwargs: Any
+    args: list[str],
+    *,
+    backend: _MacOSBackend | None = None,
+    env: Mapping[str, str] | None = None,
+    **_kwargs: object,
 ) -> subprocess.CompletedProcess[str]:
-    env = kwargs.get("env")
-    target = str(env.get("CODEX_THREAD_NAME", "") if isinstance(env, dict) else "").strip()
+    backend = _resolve_backend(backend)
+    target = (env.get("CODEX_THREAD_NAME", "") if env is not None else "").strip()
     if not target:
         return subprocess.CompletedProcess(args=args, returncode=2, stdout="NO_THREAD_NAME", stderr="")
     try:
@@ -98,11 +117,15 @@ def run_header_verification_process(
 
 
 def run_sidebar_activation_process(
-    args: list[str], *, backend: _MacOSBackend, **kwargs: Any
+    args: list[str],
+    *,
+    backend: _MacOSBackend | None = None,
+    env: Mapping[str, str] | None = None,
+    **_kwargs: object,
 ) -> subprocess.CompletedProcess[str]:
-    env = kwargs.get("env")
-    thread_name = str(env.get("CODEX_THREAD_NAME", "") if isinstance(env, dict) else "").strip()
-    project_name = str(env.get("CODEX_PROJECT_NAME", "") if isinstance(env, dict) else "").strip()
+    backend = _resolve_backend(backend)
+    thread_name = (env.get("CODEX_THREAD_NAME", "") if env is not None else "").strip()
+    project_name = (env.get("CODEX_PROJECT_NAME", "") if env is not None else "").strip()
     if not thread_name:
         return subprocess.CompletedProcess(args=args, returncode=2, stdout="NO_THREAD_NAME", stderr="")
     needles = [thread_name] + ([project_name] if project_name else [])
@@ -114,10 +137,14 @@ def run_sidebar_activation_process(
 
 
 def run_permission_approval_process(
-    args: list[str], *, backend: _MacOSBackend, **kwargs: Any
+    args: list[str],
+    *,
+    backend: _MacOSBackend | None = None,
+    env: Mapping[str, str] | None = None,
+    **_kwargs: object,
 ) -> subprocess.CompletedProcess[str]:
-    env = kwargs.get("env")
-    action = str(env.get("CODEX_APPROVAL_DECISION", "") if isinstance(env, dict) else "").strip()
+    backend = _resolve_backend(backend)
+    action = (env.get("CODEX_APPROVAL_DECISION", "") if env is not None else "").strip()
     labels = {
         "accept": ("Approve", "Allow", "Yes", "Run"),
         "accept-remember": ("Always allow", "Allow and remember", "Remember"),

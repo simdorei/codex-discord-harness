@@ -43,12 +43,17 @@ class QaNoStaleBlockModule(ModuleType):
         self.__spec__ = module.__spec__
         self._module = module
         self.send_busy_stale_block_message = qa_no_stale_block
+        setattr(
+            self,
+            "_make_persistent_busy_steer_action_deps",
+            self.make_persistent_busy_steer_action_deps,
+        )
 
     @override
     def __getattr__(self, name: str) -> ModuleAttribute:
         return cast(ModuleAttribute, getattr(self._module, name))
 
-    def _make_persistent_busy_steer_action_deps(
+    def make_persistent_busy_steer_action_deps(
         self,
         steering_runner: discord_button_qa_steer_case.SteeringRunner,
         steering_streamer: discord_button_qa_steer_case.SteeringStreamer,
@@ -98,7 +103,6 @@ class BotButtonQaBusyChoiceMixin(Protocol):
         steering_streamer: discord_button_qa_steer_case.SteeringStreamer,
     ) -> bool:
         qa_module = QaNoStaleBlockModule(self.module, self._qa_no_stale_block)
-        _ = qa_module._make_persistent_busy_steer_action_deps
         runtime = discord_bot_persistent_busy_component_runtime.BotPersistentBusyComponentRuntime(
             qa_module,
         )

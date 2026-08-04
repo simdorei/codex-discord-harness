@@ -1,5 +1,5 @@
 import asyncio as _asyncio
-from collections.abc import Mapping as _Mapping
+from typing import TypeAlias as _TypeAlias
 from typing import override as _override
 
 import discord as _discord
@@ -37,7 +37,11 @@ from codex_discord_bot_prompt_transport_adapter_runtime import SteeringResult as
 from codex_discord_bot_prompt_transport_runtime import BotPromptTransportRuntime as _BotPromptTransportRuntime
 from codex_discord_bot_prompt_watch_approval_adapter_runtime import BotPromptWatchApprovalAdapterRuntime as _BotPromptWatchApprovalAdapterRuntime
 from codex_discord_bot_session_mirror_delegation_runtime import BotSessionMirrorDelegationRuntime as _BotSessionMirrorDelegationRuntime
+from codex_discord_bot_session_mirror_runtime import SessionMirrorTargetMapping as _SessionMirrorTargetMapping
 from codex_discord_bot_skill_slash_adapter_runtime import BotSkillSlashAdapterRuntime as _BotSkillSlashAdapterRuntime
+from codex_discord_bot_shapes import DiscordMessageableChannel as _DiscordMessageableChannel
+from codex_discord_bot_socket_runtime import SocketEventData as _SocketEventData
+from codex_discord_bot_socket_runtime import SocketEventPayload as _SocketEventPayload
 from codex_discord_bot_stale_busy_adapter_runtime import BotStaleBusyAdapterRuntime as _BotStaleBusyAdapterRuntime
 from codex_discord_bot_steering_ack_runtime import BotSteeringAckRuntime as _BotSteeringAckRuntime
 from codex_discord_bridge_command_runtime import BridgeCommandRuntime as _BridgeCommandRuntime
@@ -45,6 +49,7 @@ from codex_discord_busy_choice_view import BusyChoiceView as _BusyChoiceView
 from codex_discord_busy_choice_view import BusyChoiceViewMessage as _BusyChoiceViewMessage
 from codex_discord_busy_component_runtime import BusyComponentRuntime as _BusyComponentRuntime
 from codex_discord_delivery_runtime import DiscordDeliveryRuntime as _DiscordDeliveryRuntime
+from codex_discord_channel_gate import MessageChannelLike as _MessageChannelLike
 from codex_discord_interaction_channel_runtime import InteractionChannelRuntime as _InteractionChannelRuntime
 from codex_discord_interaction_component_runtime import InteractionComponentRuntime as _InteractionComponentRuntime
 from codex_discord_input_choice_view import InputChoiceView as _InputChoiceView
@@ -64,6 +69,7 @@ from codex_discord_runner_runtime import RunnerRuntime as _RunnerRuntime
 from codex_discord_runtime_config_accessors import RuntimeConfigAccessors as _RuntimeConfigAccessors
 from codex_discord_runtime_state_bridge import RuntimeStateBridge as _RuntimeStateBridge
 from codex_discord_session_context_runtime import SessionContextRuntime as _SessionContextRuntime
+from codex_discord_session_mirror_item_delivery import SessionMirrorItem as _SessionMirrorItem
 from codex_discord_session_mirror_state_runtime import SessionMirrorStateRuntime as _SessionMirrorStateRuntime
 from codex_discord_bot_socket_runtime import BotSocketRuntime as _BotSocketRuntime
 from codex_discord_steering import SteeringPromptResult as SteeringPromptResult
@@ -74,6 +80,8 @@ from codex_thread_models import ThreadInfo as _ThreadInfo
 
 discord_mirror_status = _discord_mirror_status
 discord_stream = _discord_stream
+
+_CachedChannel: _TypeAlias = _discord.abc.GuildChannel | _discord.abc.PrivateChannel | _discord.Thread
 
 
 class ApprovalView(_ApprovalView):
@@ -112,7 +120,12 @@ class DiscordAskRelay(_DiscordAskRelay):
 
 
 class LoggingCommandTree:
-    async def on_error(self, interaction: object, error: BaseException, /) -> None: ...
+    async def on_error(
+        self,
+        interaction: _discord.Interaction[_discord.Client],
+        error: BaseException,
+        /,
+    ) -> None: ...
 
 
 class CodexDiscordBot(_discord.Client):
@@ -125,11 +138,11 @@ class CodexDiscordBot(_discord.Client):
     plain_ask_mention_user_ids: set[int]
     history_poll_seconds: float
     session_mirror_poll_seconds: float
-    _history_poll_task: object | None
-    _stop_marker_task: object | None
+    _history_poll_task: _asyncio.Task[None] | None
+    _stop_marker_task: _asyncio.Task[None] | None
     _history_poll_primed_channels: set[int]
     _history_poll_last_at: str
-    _session_mirror_task: object | None
+    _session_mirror_task: _asyncio.Task[None] | None
     _session_mirror_last_at: str
     _session_mirror_seen_agent_messages: dict[str, dict[str, float]]
     _session_mirror_seen_user_messages: dict[str, dict[str, float]]
@@ -152,13 +165,13 @@ class CodexDiscordBot(_discord.Client):
     ) -> None: ...
 
     def is_allowed_channel(self, channel_id: int | None) -> bool: ...
-    def is_allowed_message_channel(self, channel: object) -> bool: ...
+    def is_allowed_message_channel(self, channel: _MessageChannelLike) -> bool: ...
     def is_allowed_user(self, user_id: int | None) -> bool: ...
 
     @_override
     async def setup_hook(self) -> None: ...
 
-    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[object | None, str]: ...
+    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[_CachedChannel | None, str]: ...
     async def probe_channel_access(self, label: str, channel_id: int) -> None: ...
     async def cleanup_stale_busy_choice_components(self) -> None: ...
     async def log_startup_diagnostics(self) -> None: ...
@@ -167,21 +180,24 @@ class CodexDiscordBot(_discord.Client):
     async def start_stop_marker_watcher(self) -> None: ...
     async def stop_marker_loop(self) -> None: ...
     async def poll_history_channel(self, label: str, channel_id: int) -> None: ...
-    async def process_history_poll_message(self, message: object, channel_id: int) -> None: ...
+    async def process_history_poll_message(self, message: _discord.Message, channel_id: int) -> None: ...
     async def start_session_mirroring(self) -> None: ...
     async def session_mirror_loop(self) -> None: ...
-    async def resolve_session_mirror_channel(self, discord_thread_id: int) -> object | None: ...
+    async def resolve_session_mirror_channel(
+        self,
+        discord_thread_id: int,
+    ) -> _DiscordMessageableChannel | None: ...
     def get_session_mirror_seen_agent_messages(self, codex_thread_id: str) -> dict[str, float]: ...
     def get_session_mirror_seen_user_messages(self, codex_thread_id: str) -> dict[str, float]: ...
     async def send_session_mirror_item(
         self,
-        channel: object,
-        item: object,
+        channel: _DiscordMessageableChannel,
+        item: _SessionMirrorItem,
         *,
         target_thread_id: str,
         target_ref: str,
     ) -> None: ...
-    async def mirror_session_target(self, target: _Mapping[str, object]) -> None: ...
+    async def mirror_session_target(self, target: _SessionMirrorTargetMapping) -> None: ...
 
     async def on_ready(self) -> None: ...
 
@@ -189,15 +205,15 @@ class CodexDiscordBot(_discord.Client):
 
     async def on_socket_raw_receive(self, message: str | bytes) -> None: ...
 
-    async def on_socket_response(self, payload: object) -> None: ...
+    async def on_socket_response(self, payload: _SocketEventPayload) -> None: ...
 
     def is_tracked_socket_message_channel(self, channel_id: int | None) -> tuple[bool, str]: ...
-    async def log_socket_payload(self, payload: object) -> None: ...
-    def format_socket_interaction_user(self, data: object) -> str: ...
+    async def log_socket_payload(self, payload: _SocketEventData) -> None: ...
+    def format_socket_interaction_user(self, data: _SocketEventData) -> str: ...
 
-    async def on_message(self, message: object) -> None: ...
+    async def on_message(self, message: _discord.Message) -> None: ...
 
-    async def process_discord_message(self, message: object, *, source: str) -> None: ...
+    async def process_discord_message(self, message: _discord.Message, *, source: str) -> None: ...
 
 _busy_interaction_adapter: _BotBusyInteractionAdapterRuntime
 build_busy_choice_message = _busy_interaction_adapter.build_busy_choice_message
@@ -403,7 +419,7 @@ run_steering_watch_stream = _prompt_watch_runtime.run_steering_watch_stream
 stream_steering_prompt_result_to_channel = _prompt_watch_runtime.stream_steering_prompt_result_to_channel
 
 async def send_context_exhausted_prompt_notice_if_needed(
-    channel: object,
+    channel: _DiscordMessageableChannel,
     target_thread_id: str | None,
     target_ref: str,
 ) -> bool: ...

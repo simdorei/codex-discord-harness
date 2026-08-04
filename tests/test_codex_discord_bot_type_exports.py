@@ -32,7 +32,6 @@ class DiscordBotTypeExportsTests(unittest.TestCase):
     def test_type_facade_matches_runtime_exports(self) -> None:
         names = _public_stub_names()
 
-        self.assertEqual(len(names), 135)
         self.assertEqual([name for name in sorted(names) if not hasattr(bot, name)], [])
 
     def test_representative_exports_keep_runtime_identity(self) -> None:

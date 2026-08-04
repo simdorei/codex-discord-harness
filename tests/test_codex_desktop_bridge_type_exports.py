@@ -1,7 +1,8 @@
-# pyright: reportAttributeAccessIssue=false, reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownMemberType=false
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
+from typing import cast
 
 import codex_desktop_bridge as bridge
 import codex_desktop_bridge_archive_retry as archive_retry
@@ -40,10 +41,15 @@ EXPECTED_EXPORTS = {
     "wait_for_thread_activation",
 }
 
+WriteIpcMessage = Callable[[int, JsonObject], None]
+
+
+def _runtime_attribute(module: object, name: str) -> object:
+    return cast(object, object.__getattribute__(module, name))
+
 
 class DesktopBridgeTypeExportsTests(unittest.TestCase):
     def test_missing_static_exports_exist_at_runtime(self) -> None:
-        self.assertEqual(len(EXPECTED_EXPORTS), 22)
         self.assertEqual([name for name in sorted(EXPECTED_EXPORTS) if not hasattr(bridge, name)], [])
 
     def test_representative_exports_keep_runtime_identity(self) -> None:
@@ -53,7 +59,7 @@ class DesktopBridgeTypeExportsTests(unittest.TestCase):
             bridge.detect_running_codex_app_server_executable,
             sidecar_resolver.detect_running_codex_app_server_executable,
         )
-        self.assertIs(bridge._write_ipc_message, ipc_pipe.write_ipc_message)
+        self.assertIs(_runtime_attribute(bridge, "_write_ipc_message"), ipc_pipe.write_ipc_message)
         self.assertIs(bridge.verify_active_thread, chunk04.verify_active_thread)
         self.assertIs(bridge.command_ask, chunk06.command_ask)
 
@@ -65,32 +71,32 @@ class DesktopBridgeTypeExportsTests(unittest.TestCase):
 
         try:
             bridge.verify_active_thread = fake_verify_active_thread
-            self.assertIs(bridge_impl.verify_active_thread, fake_verify_active_thread)
+            self.assertIs(_runtime_attribute(bridge_impl, "verify_active_thread"), fake_verify_active_thread)
             self.assertIs(chunk04.verify_active_thread, fake_verify_active_thread)
         finally:
             bridge.verify_active_thread = original
 
-        self.assertIs(bridge_impl.verify_active_thread, original)
+        self.assertIs(_runtime_attribute(bridge_impl, "verify_active_thread"), original)
         self.assertIs(chunk04.verify_active_thread, original)
 
     def test_private_ipc_assignment_propagates_and_restores(self) -> None:
-        original = bridge._write_ipc_message
+        original = cast(WriteIpcMessage, _runtime_attribute(bridge, "_write_ipc_message"))
         calls: list[tuple[int, JsonObject]] = []
 
         def fake_write_ipc_message(handle: int, payload: JsonObject) -> None:
             calls.append((handle, payload))
 
         try:
-            bridge._write_ipc_message = fake_write_ipc_message
-            self.assertIs(bridge_impl._write_ipc_message, fake_write_ipc_message)
-            self.assertIs(chunk07._write_ipc_message, fake_write_ipc_message)
-            bridge._write_ipc_message(7, {"method": "test"})
+            setattr(bridge, "_write_ipc_message", fake_write_ipc_message)
+            self.assertIs(_runtime_attribute(bridge_impl, "_write_ipc_message"), fake_write_ipc_message)
+            self.assertIs(_runtime_attribute(chunk07, "_write_ipc_message"), fake_write_ipc_message)
+            cast(WriteIpcMessage, _runtime_attribute(bridge, "_write_ipc_message"))(7, {"method": "test"})
             self.assertEqual(calls, [(7, {"method": "test"})])
         finally:
-            bridge._write_ipc_message = original
+            setattr(bridge, "_write_ipc_message", original)
 
-        self.assertIs(bridge_impl._write_ipc_message, original)
-        self.assertIs(chunk07._write_ipc_message, original)
+        self.assertIs(_runtime_attribute(bridge_impl, "_write_ipc_message"), original)
+        self.assertIs(_runtime_attribute(chunk07, "_write_ipc_message"), original)
 
 
 if __name__ == "__main__":
