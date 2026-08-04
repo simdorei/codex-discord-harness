@@ -35,6 +35,56 @@ _SaveRow = tuple[str | None]
 _ReleaseRow = tuple[str | None, str | None]
 
 
+def _row_values(value: object, expected: int) -> tuple[object, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, tuple):
+        raise ConversationMapError("The conversation store contains invalid data.")
+    row = cast(tuple[object, ...], value)
+    if len(row) != expected:
+        raise ConversationMapError("The conversation store contains invalid data.")
+    return row
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    raise ConversationMapError("The conversation store contains invalid data.")
+
+
+def _optional_integer(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise ConversationMapError("The conversation store contains invalid data.")
+
+
+def _acquire_row(value: object) -> _AcquireRow | None:
+    row = _row_values(value, 3)
+    if row is None:
+        return None
+    return (
+        _optional_text(row[0]),
+        _optional_text(row[1]),
+        _optional_integer(row[2]),
+    )
+
+
+def _save_row(value: object) -> _SaveRow | None:
+    row = _row_values(value, 1)
+    if row is None:
+        return None
+    return (_optional_text(row[0]),)
+
+
+def _release_row(value: object) -> _ReleaseRow | None:
+    row = _row_values(value, 2)
+    if row is None:
+        return None
+    return (_optional_text(row[0]), _optional_text(row[1]))
+
+
 def database_path() -> Path:
     override = os.environ.get("SIMDOREI_PRO_CONVERSATION_DB", "").strip()
     if override:
@@ -53,26 +103,23 @@ def acquire(scope: str) -> dict[str, str]:
     now = int(time.time())
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
-        row = cast(
-            _AcquireRow | None,
+        raw_row = cast(
+            object,
             connection.execute(
                 """
-            SELECT conversation_url, lease_hash, lease_expires_at
-            FROM conversations
-            WHERE scope = ?
-            """,
+                SELECT conversation_url, lease_hash, lease_expires_at
+                FROM conversations
+                WHERE scope = ?
+                """,
                 (scope,),
             ).fetchone(),
         )
+        row = _acquire_row(raw_row)
         conversation_url = row[0] if row is not None else None
         if conversation_url:
             connection.commit()
             return {"status": "found", "url": str(conversation_url)}
-        if (
-            row is not None
-            and row[1]
-            and (row[2] or 0) >= now
-        ):
+        if row is not None and row[1] and (row[2] or 0) >= now:
             connection.commit()
             return {"status": "busy"}
         lease_token = "lease_" + secrets.token_urlsafe(24)
@@ -104,17 +151,18 @@ def save(scope: str, url: str, lease_token: str) -> dict[str, str]:
     now = int(time.time())
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
-        row = cast(
-            _SaveRow | None,
+        raw_row = cast(
+            object,
             connection.execute(
                 """
-            SELECT lease_hash
-            FROM conversations
-            WHERE scope = ?
-            """,
+                SELECT lease_hash
+                FROM conversations
+                WHERE scope = ?
+                """,
                 (scope,),
             ).fetchone(),
         )
+        row = _save_row(raw_row)
         if row is None or not secrets.compare_digest(
             str(row[0] or ""),
             _token_hash(lease_token),
@@ -140,13 +188,14 @@ def release(scope: str, lease_token: str) -> dict[str, str]:
     _validate_lease_token(lease_token)
     with _connect() as connection:
         _ = connection.execute("BEGIN IMMEDIATE")
-        row = cast(
-            _ReleaseRow | None,
+        raw_row = cast(
+            object,
             connection.execute(
                 "SELECT lease_hash, conversation_url FROM conversations WHERE scope = ?",
                 (scope,),
             ).fetchone(),
         )
+        row = _release_row(raw_row)
         if row is not None and secrets.compare_digest(
             str(row[0] or ""),
             _token_hash(lease_token),
@@ -251,7 +300,9 @@ def main() -> int:
                 result = acquire(arguments.scope)
             case "set":
                 if arguments.url is None or arguments.lease_token is None:
-                    raise ConversationMapError("The set command arguments are incomplete.")
+                    raise ConversationMapError(
+                        "The set command arguments are incomplete."
+                    )
                 result = save(
                     arguments.scope,
                     arguments.url,

@@ -6,7 +6,6 @@ import runpy
 import sqlite3
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 from unittest import mock
@@ -58,12 +57,10 @@ def test_generated_lease_token_cannot_be_parsed_as_an_option(tmp_path: Path) -> 
         mock.patch.dict(os.environ, environment, clear=True),
         mock.patch("secrets.token_urlsafe", return_value="-leading-hyphen-token-value"),
     ):
-        script_globals = runpy.run_path(str(SCRIPT))
-        acquire = cast(
-            Callable[[str], dict[str, str]],
-            cast(object, script_globals["acquire"]),
-        )
-        lease = acquire(SCOPE)
+        script_globals: object = runpy.run_path(str(SCRIPT))
+        acquire = _object_mapping(script_globals)["acquire"]
+        assert callable(acquire)
+        lease = _string_mapping(acquire(SCOPE))
 
     lease_token = str(lease["lease_token"])
     completed = _run_process(
@@ -137,6 +134,35 @@ def test_reacquired_lease_fences_stale_creator_but_current_creator_can_save_afte
     assert saved == {"status": "saved"}
 
 
+def test_malformed_store_rows_fail_closed(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+    _ = _run(environment, "acquire", "--scope", SCOPE)
+    database = environment["SIMDOREI_PRO_CONVERSATION_DB"]
+
+    with sqlite3.connect(database) as connection:
+        _ = connection.execute(
+            "UPDATE conversations SET lease_expires_at = ? WHERE scope = ?",
+            ("not-an-integer", SCOPE),
+        )
+    invalid_expiry = _run_process(environment, "acquire", "--scope", SCOPE)
+
+    with sqlite3.connect(database) as connection:
+        _ = connection.execute(
+            """
+            UPDATE conversations
+            SET conversation_url = ?, lease_hash = NULL, lease_expires_at = NULL
+            WHERE scope = ?
+            """,
+            (sqlite3.Binary(b"not-text"), SCOPE),
+        )
+    invalid_url = _run_process(environment, "acquire", "--scope", SCOPE)
+
+    assert invalid_expiry.returncode == 2
+    assert "store contains invalid data" in invalid_expiry.stderr
+    assert invalid_url.returncode == 2
+    assert "store contains invalid data" in invalid_url.stderr
+
+
 def _environment(tmp_path: Path) -> dict[str, str]:
     return {
         **os.environ,
@@ -159,9 +185,23 @@ def _run(
     completed = _run_process(environment, *arguments)
     assert completed.returncode == 0, completed.stderr
     value = cast(object, json.loads(completed.stdout))
+    return _string_mapping(value)
+
+
+def _object_mapping(value: object) -> dict[object, object]:
     assert isinstance(value, dict)
     mapping = cast(dict[object, object], value)
-    return {str(key): str(item) for key, item in mapping.items()}
+    return mapping
+
+
+def _string_mapping(value: object) -> dict[str, str]:
+    mapping = _object_mapping(value)
+    result: dict[str, str] = {}
+    for key, item in mapping.items():
+        assert isinstance(key, str)
+        assert isinstance(item, str)
+        result[key] = item
+    return result
 
 
 def _run_process(
