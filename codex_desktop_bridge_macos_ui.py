@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib
 import subprocess
 from collections.abc import Mapping, Sequence
-from typing import Protocol, cast
+from typing import Protocol, runtime_checkable
 
 
 class _WindowSnapshot(Protocol):
@@ -29,6 +29,7 @@ class _WindowSnapshot(Protocol):
     def bottom(self) -> int: ...
 
 
+@runtime_checkable
 class _MacOSBackend(Protocol):
     def quote(self, value: str) -> str: ...
 
@@ -45,7 +46,10 @@ def _resolve_backend(backend: _MacOSBackend | None) -> _MacOSBackend:
     if backend is not None:
         return backend
     macos_input = importlib.import_module("codex_desktop_bridge_macos_input")
-    return cast(_MacOSBackend, getattr(macos_input, "MACOS_UI_BACKEND"))
+    resolved: object = getattr(macos_input, "MACOS_UI_BACKEND")
+    if not isinstance(resolved, _MacOSBackend):
+        raise RuntimeError("macOS UI backend is unavailable")
+    return resolved
 
 
 def _click_named_ui(

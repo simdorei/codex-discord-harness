@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Callable
-from typing import cast
+from types import ModuleType
 
 import codex_desktop_bridge as bridge
 import codex_desktop_bridge_archive_retry as archive_retry
@@ -41,11 +40,9 @@ EXPECTED_EXPORTS = {
     "wait_for_thread_activation",
 }
 
-WriteIpcMessage = Callable[[int, JsonObject], None]
-
-
-def _runtime_attribute(module: object, name: str) -> object:
-    return cast(object, object.__getattribute__(module, name))
+def _runtime_attribute(module: ModuleType, name: str) -> object:
+    value: object = getattr(module, name)
+    return value
 
 
 class DesktopBridgeTypeExportsTests(unittest.TestCase):
@@ -80,7 +77,7 @@ class DesktopBridgeTypeExportsTests(unittest.TestCase):
         self.assertIs(chunk04.verify_active_thread, original)
 
     def test_private_ipc_assignment_propagates_and_restores(self) -> None:
-        original = cast(WriteIpcMessage, _runtime_attribute(bridge, "_write_ipc_message"))
+        original = _runtime_attribute(bridge, "_write_ipc_message")
         calls: list[tuple[int, JsonObject]] = []
 
         def fake_write_ipc_message(handle: int, payload: JsonObject) -> None:
@@ -90,7 +87,11 @@ class DesktopBridgeTypeExportsTests(unittest.TestCase):
             setattr(bridge, "_write_ipc_message", fake_write_ipc_message)
             self.assertIs(_runtime_attribute(bridge_impl, "_write_ipc_message"), fake_write_ipc_message)
             self.assertIs(_runtime_attribute(chunk07, "_write_ipc_message"), fake_write_ipc_message)
-            cast(WriteIpcMessage, _runtime_attribute(bridge, "_write_ipc_message"))(7, {"method": "test"})
+            writer = _runtime_attribute(bridge, "_write_ipc_message")
+            self.assertTrue(callable(writer))
+            if not callable(writer):
+                self.fail("_write_ipc_message is not callable")
+            writer(7, {"method": "test"})
             self.assertEqual(calls, [(7, {"method": "test"})])
         finally:
             setattr(bridge, "_write_ipc_message", original)
