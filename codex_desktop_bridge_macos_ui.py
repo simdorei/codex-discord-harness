@@ -42,14 +42,18 @@ class _MacOSBackend(Protocol):
     def refresh_windows(self) -> Sequence[_WindowSnapshot]: ...
 
 
+@runtime_checkable
+class _MacOSInputModule(Protocol):
+    MACOS_UI_BACKEND: _MacOSBackend
+
+
 def _resolve_backend(backend: _MacOSBackend | None) -> _MacOSBackend:
     if backend is not None:
         return backend
     macos_input = importlib.import_module("codex_desktop_bridge_macos_input")
-    resolved: object = getattr(macos_input, "MACOS_UI_BACKEND")
-    if not isinstance(resolved, _MacOSBackend):
+    if not isinstance(macos_input, _MacOSInputModule):
         raise RuntimeError("macOS UI backend is unavailable")
-    return resolved
+    return macos_input.MACOS_UI_BACKEND
 
 
 def _click_named_ui(

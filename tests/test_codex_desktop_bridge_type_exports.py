@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import ModuleType
+from typing import cast
 
 import codex_desktop_bridge as bridge
 import codex_desktop_bridge_archive_retry as archive_retry
@@ -41,8 +42,7 @@ EXPECTED_EXPORTS = {
 }
 
 def _runtime_attribute(module: ModuleType, name: str) -> object:
-    value: object = getattr(module, name)
-    return value
+    return cast(object, getattr(module, name))
 
 
 class DesktopBridgeTypeExportsTests(unittest.TestCase):
@@ -91,7 +91,7 @@ class DesktopBridgeTypeExportsTests(unittest.TestCase):
             self.assertTrue(callable(writer))
             if not callable(writer):
                 self.fail("_write_ipc_message is not callable")
-            writer(7, {"method": "test"})
+            _ = writer(7, {"method": "test"})
             self.assertEqual(calls, [(7, {"method": "test"})])
         finally:
             setattr(bridge, "_write_ipc_message", original)
