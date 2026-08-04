@@ -52,10 +52,11 @@ running because a hosted server cannot directly read files that remain on a PC.
   configuration and credentials. Credentials are never sent through the MCP.
 - Fixed test/check commands remain available as the bounded `command_run` path.
   A connector with both file read and file write authority can also use
-  `terminal_exec` for unrestricted shell text with the local bot process's host
-  permissions. Terminal execution is bound to the selected project and ChatGPT
-  session, returns a public-safe receipt, and does not prompt for per-command
-  approval.
+  `terminal_exec` for unrestricted PowerShell, cmd, sh, or bash text with the
+  local bot process's host permissions. It can launch child processes and use an
+  explicit absolute working directory outside the selected project. Terminal
+  execution remains bound to the selected ChatGPT session and returns a
+  public-safe receipt without prompting for per-command approval.
 - During an active project binding, ChatGPT can launch, list, and activate an
   isolated Chrome or blank Notepad window owned by that selection. Notepad can
   return native screenshots, click, drag, scroll, type Unicode text, press
@@ -66,8 +67,10 @@ running because a hosted server cannot directly read files that remain on a PC.
   one action, so stale coordinates cannot be replayed.
 - Selecting the project from a new ChatGPT conversation or OAuth connector
   revokes screenshot tokens issued to the previous selection for that thread.
-- The selected ChatGPT session can open, list, capture, activate, type into,
-  send keys to, interrupt, and close terminal windows that it owns. Every
+- The selected ChatGPT session can use `terminal_window_open`,
+  `terminal_window_list`, `terminal_window_capture`, `terminal_window_activate`,
+  `terminal_window_type`, `terminal_window_keys`, `terminal_window_interrupt`,
+  and `terminal_window_close` on visible terminal windows it owns. Every
   state-changing terminal-window action is bound to a fresh capture observation.
   Password managers, ChatGPT/Codex, remote-desktop apps, Windows security
   surfaces, sign-in/password/OTP windows, and credential extraction remain
@@ -91,11 +94,10 @@ running because a hosted server cannot directly read files that remain on a PC.
 - Computer observation and computer control use dedicated OAuth scopes. A
   connector authorized before these scopes were added must be reconnected and
   approved again; an old file-only token cannot acquire desktop authority.
-- Terminal execution and terminal-window interaction deliberately reuse the
-  existing `files:read` plus `files:write` authority. This lets an already
-  authorized project connector use the session-owned terminal surface without
-  a second OAuth approval while preserving project, route, session, cycle, and
-  runtime-provenance checks.
+- Terminal execution and terminal-window interaction reuse the existing
+  `files:read` plus `files:write` authority. An already authorized project
+  connector therefore receives the full session-owned terminal surface without
+  a second OAuth approval.
 - Window screenshots are captured from the selected window handle, not from the
   desktop underneath overlays. Keyboard and pointer actions are sent to the
   verified Notepad editor control rather than global Windows input. Input is
@@ -139,10 +141,11 @@ https://simdorei.duckdns.org/mcp
 
 After that, send `!pro <question>` or `!pro review <review request>` from a
 mapped Discord thread. Codex opens ChatGPT Pro and includes the short-lived
-project scope. ChatGPT calls `select_project` before using the project file
-tools. It can then search and edit files, inspect images, run allowlisted
-project checks, review Git changes, create commits, and push an already
-configured remote. On the first connector use, ChatGPT opens the OAuth approval page; enter
+project scope. ChatGPT calls `select_project` before using the project tools. It
+can then search and edit files, inspect images, run fixed project checks or
+unrestricted terminal commands, operate visible session-owned terminal windows,
+review Git changes, create commits, and push an already configured remote. On
+the first connector use, ChatGPT opens the OAuth approval page; enter
 the server's owner token there once. The browser workflow keeps normal Chat mode
 with Pro reasoning; it does
 not switch to Work, agent mode, deep research, or another model. If the

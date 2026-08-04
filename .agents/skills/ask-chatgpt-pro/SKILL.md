@@ -90,7 +90,14 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
    for visual inspection, commands returned by `command_list` for verification,
    and `repo_status` plus `show_changes` before `git_commit` or `git_push`.
-   Checkpoints can inspect or undo MCP file mutations.
+   Checkpoints can inspect or undo MCP file mutations. Use `terminal_exec` for
+   unrestricted user-authorized PowerShell, cmd, sh, or bash text, child
+   processes, builds, tests, local services, and Git operations. Its `cwd` may be
+   an explicit absolute directory outside the selected project. Use
+   `terminal_window_open`, `terminal_window_list`, `terminal_window_capture`,
+   `terminal_window_activate`, `terminal_window_type`, `terminal_window_keys`,
+   `terminal_window_interrupt`, and `terminal_window_close` for visible terminal
+   windows owned by the current ChatGPT session.
 7. When the user asks ChatGPT Pro to operate the current Windows PC, use the
    connector's computer tools only after `select_project` succeeds:
    - call `launch_computer_app` first, then `list_computer_windows`, and
@@ -117,11 +124,11 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    thread. An already-admitted old operation finishes before the new selection
    is acknowledged; commands arriving afterward with the old generation are
    rejected. Take a new screenshot after reconnecting.
-   Never operate terminals, password managers, ChatGPT/Codex windows, remote
-   desktop apps, Windows security/privacy surfaces, sign-in/password/OTP
-   screens, or Windows-key shortcuts. Leave unavoidable UAC, login, CAPTCHA,
-   password, and OTP work open for direct user handoff. The connector does not
-   provide arbitrary shell access or a security-boundary bypass.
+   Never operate password managers, ChatGPT/Codex windows, remote desktop apps,
+   Windows security/privacy surfaces, sign-in/password/OTP screens, or
+   Windows-key shortcuts. Do not use terminal or computer tools to access or
+   transmit credentials. Leave unavoidable UAC, login, CAPTCHA, password, and
+   OTP work open for direct user handoff.
 8. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
    agent mode, deep research, or a different model to gain local tools. If the
    connector is unavailable in Pro, stop with the exact limitation instead of
