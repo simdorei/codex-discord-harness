@@ -24,27 +24,27 @@ class FakeTyping:
         _ = (exc_type, exc, tb)
 
 
-class TestChannelLike(Protocol):
+class PrefixChannelLike(Protocol):
     @property
     def id(self) -> int: ...
 
 
-class TestAuthorLike(Protocol):
+class PrefixAuthorLike(Protocol):
     @property
     def id(self) -> int: ...
 
 
-class TestChannelMessageLike(Protocol):
+class PrefixChannelMessageLike(Protocol):
     @property
-    def channel(self) -> TestChannelLike: ...
+    def channel(self) -> PrefixChannelLike: ...
 
 
-class TestMessageLike(TestChannelMessageLike, Protocol):
+class PrefixMessageLike(PrefixChannelMessageLike, Protocol):
     @property
-    def author(self) -> TestAuthorLike: ...
+    def author(self) -> PrefixAuthorLike: ...
 
 
-class TestBotLike(Protocol):
+class PrefixBotLike(Protocol):
     pass
 
 
@@ -66,35 +66,35 @@ class FakeMessage:
 
 class PrefixCommandDepsFactoryTests(unittest.TestCase):
     def test_factory_builds_prefix_command_deps_with_same_callables(self) -> None:
-        async def send_chunks(target: TestChannelLike, text: str, *, context: str = "send_chunks") -> int:
+        async def send_chunks(target: PrefixChannelLike, text: str, *, context: str = "send_chunks") -> int:
             _ = (target, text, context)
             return 1
 
         async def handle_plain_ask(
-            message: TestMessageLike,
+            message: PrefixMessageLike,
             prompt: str,
             *,
             target_thread_id: str | None = None,
         ) -> None:
             _ = (message, prompt, target_thread_id)
 
-        async def refresh_bridge_session(bot: TestBotLike, *, limit: int | None = None) -> str:
+        async def refresh_bridge_session(bot: PrefixBotLike, *, limit: int | None = None) -> str:
             _ = (bot, limit)
             return "refresh"
 
-        async def sync_mirror(bot: TestBotLike, *, limit: int | None = None) -> str:
+        async def sync_mirror(bot: PrefixBotLike, *, limit: int | None = None) -> str:
             _ = (bot, limit)
             return "sync"
 
-        def build_mirror(bot: TestBotLike, limit: int | None = None, *, channel_id: int | None = None) -> str:
+        def build_mirror(bot: PrefixBotLike, limit: int | None = None, *, channel_id: int | None = None) -> str:
             _ = (bot, limit, channel_id)
             return "mirror"
 
-        async def prepare_output(channel: TestChannelLike, target_thread_id: str | None) -> bool:
+        async def prepare_output(channel: PrefixChannelLike, target_thread_id: str | None) -> bool:
             _ = (channel, target_thread_id)
             return True
 
-        def channel_typing(channel: TestChannelLike, *, context: str = "typing") -> AbstractAsyncContextManager[None]:
+        def channel_typing(channel: PrefixChannelLike, *, context: str = "typing") -> AbstractAsyncContextManager[None]:
             _ = (channel, context)
             return FakeTyping()
 
@@ -106,7 +106,7 @@ class PrefixCommandDepsFactoryTests(unittest.TestCase):
             _ = target_thread_id
 
         async def stream_steering(
-            channel: TestChannelLike,
+            channel: PrefixChannelLike,
             steering_result: SteeringPromptResult,
             target_thread_id: str | None,
             *,
@@ -153,7 +153,7 @@ class PrefixCommandDepsFactoryTests(unittest.TestCase):
             return "approval", "thread-1", "ref"
 
         async def send_interactive_prompt(
-            channel: TestChannelLike,
+            channel: PrefixChannelLike,
             target_thread_id: str | None,
             target_ref: str,
             state: str,
@@ -162,18 +162,18 @@ class PrefixCommandDepsFactoryTests(unittest.TestCase):
         ) -> None:
             _ = (channel, target_thread_id, target_ref, state, prompt_text, choices)
 
-        async def run_button_qa(bot: TestBotLike, message: TestChannelMessageLike) -> str:
+        async def run_button_qa(bot: PrefixBotLike, message: PrefixChannelMessageLike) -> str:
             _ = (bot, message)
             return "qa"
 
-        async def run_new_thread(bot: TestBotLike, channel_id: int | None, prompt: str) -> tuple[int, str]:
+        async def run_new_thread(bot: PrefixBotLike, channel_id: int | None, prompt: str) -> tuple[int, str]:
             _ = (bot, channel_id, prompt)
             return 0, "new"
 
         def host_reboot_allowed_user_ids_configured() -> bool:
             return True
 
-        factory: deps_factory.PrefixCommandDepsFactory[TestBotLike] = deps_factory.PrefixCommandDepsFactory(
+        factory: deps_factory.PrefixCommandDepsFactory[PrefixBotLike] = deps_factory.PrefixCommandDepsFactory(
             prompt_send_chunks=send_chunks,
             mirror_send_chunks=send_chunks,
             steer_send_chunks=send_chunks,

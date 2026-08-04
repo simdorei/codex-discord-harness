@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+import codex_discord_history_poll as history_poll
 from codex_discord_history_poll import PollHistoryChannelDeps, poll_history_channel
 
 
@@ -36,6 +37,11 @@ class PollState:
     watermark: tuple[datetime, int] | None = None
     processed: list[int] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+
+
+class IntLikeMessageId:
+    def __int__(self) -> int:
+        return 102
 
 
 def _deps(state: PollState) -> PollHistoryChannelDeps[Message]:
@@ -72,6 +78,27 @@ def _deps(state: PollState) -> PollHistoryChannelDeps[Message]:
 
 
 class HistoryPollWatermarkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_message_watermark_preserves_supported_id_conversions(self) -> None:
+        created_at = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
+
+        string_id_message = type("Message", (), {"id": "101", "created_at": created_at})()
+        int_like_message = type(
+            "Message",
+            (),
+            {"id": IntLikeMessageId(), "created_at": created_at},
+        )()
+
+        self.assertEqual(history_poll.message_watermark(string_id_message), (created_at, 101))
+        self.assertEqual(history_poll.message_watermark(int_like_message), (created_at, 102))
+
+    async def test_message_watermark_rejects_missing_or_invalid_id(self) -> None:
+        created_at = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
+        missing_id_message = type("Message", (), {"created_at": created_at})()
+        invalid_id_message = type("Message", (), {"id": "invalid", "created_at": created_at})()
+
+        self.assertIsNone(history_poll.message_watermark(missing_id_message))
+        self.assertIsNone(history_poll.message_watermark(invalid_id_message))
+
     async def test_first_prime_captures_boundary_before_fetch_and_only_processes_newer_message(self) -> None:
         boundary = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
         events: list[str] = []

@@ -1,55 +1,68 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, cast, override, runtime_checkable
 import tempfile
 import unittest
 
+import discord
+
 import codex_discord_bot as bot
+import codex_discord_bot_shapes as discord_bot_shapes
 
-from tests.test_codex_discord_bot import EnvPatch, FakeInteraction, FakeTarget
-from tests.test_codex_discord_busy_choice_steer_callback_integration import BusyMessage
+from tests.test_codex_discord_bot import EnvPatch, FakeInteraction
 
 
+@runtime_checkable
 class QueueButton(Protocol):
-    label: str
+    @property
+    def label(self) -> str | None: ...
 
-    async def callback(self, interaction: FakeInteraction) -> None:
-        ...
-
-
-class BusyChoiceQueueViewWithChildren(Protocol):
-    children: Sequence[QueueButton]
+    async def callback(self, interaction: FakeInteraction, /) -> object: ...
 
 
-QueueCall = tuple[FakeTarget, str, str | None, bool, bool, BusyMessage | None]
+QueueCall = tuple[
+    discord.abc.Messageable,
+    str,
+    str | None,
+    bool,
+    bool,
+    discord_bot_shapes.RuntimeBusyChoiceSourceMessage | None,
+]
+AppServerTransportEnabled = Callable[[], bool]
 
 
 class RunPromptFlow(Protocol):
     def __call__(
         self,
-        channel: FakeTarget,
+        channel: discord.abc.Messageable,
         prompt: str,
         *,
         queued: bool = False,
-        source_message: BusyMessage | None = None,
+        source_message: discord_bot_shapes.RuntimeBusyChoiceSourceMessage | None = None,
         target_thread_id: str | None = None,
     ) -> Awaitable[None]:
         ...
 
 
-def find_queue_button(view: BusyChoiceQueueViewWithChildren) -> QueueButton:
-    return next(item for item in view.children if item.label == "Queue next")
+def find_queue_button(view: discord.ui.View) -> QueueButton:
+    for item in view.children:
+        if isinstance(item, QueueButton) and item.label == "Queue next":
+            return item
+    raise StopIteration
+
+
+def _restore_app_server_transport_enabled(original: AppServerTransportEnabled) -> None:
+    bot.app_server_transport_enabled = original
 
 
 class DiscordBusyChoiceQueueViewIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    @override
     def setUp(self) -> None:
-        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        original: AppServerTransportEnabled = bot.app_server_transport_enabled
+        self.addCleanup(_restore_app_server_transport_enabled, original)
         bot.app_server_transport_enabled = lambda: False
-
-    def tearDown(self) -> None:
-        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
 
     async def test_queue_next_immediate_uses_runner_queue(self) -> None:
         original_get_busy_state = bot.get_busy_state_for_thread
@@ -66,23 +79,23 @@ class DiscordBusyChoiceQueueViewIntegrationTests(unittest.IsolatedAsyncioTestCas
                 return False
 
             async def fake_enqueue_thread_ask(
-                channel: FakeTarget,
+                channel: discord.abc.Messageable,
                 prompt: str,
                 target_thread_id: str | None,
                 *,
                 queued: bool = False,
                 ack_sent: bool = False,
-                source_message: BusyMessage | None = None,
+                source_message: discord_bot_shapes.RuntimeBusyChoiceSourceMessage | None = None,
             ) -> int:
                 calls.append((channel, prompt, target_thread_id, queued, ack_sent, source_message))
                 return 1
 
             async def fail_run_prompt_flow(
-                channel: FakeTarget,
+                channel: discord.abc.Messageable,
                 prompt: str,
                 *,
                 queued: bool = False,
-                source_message: BusyMessage | None = None,
+                source_message: discord_bot_shapes.RuntimeBusyChoiceSourceMessage | None = None,
                 target_thread_id: str | None = None,
             ) -> None:
                 _ = channel, prompt, queued, source_message, target_thread_id
@@ -93,18 +106,23 @@ class DiscordBusyChoiceQueueViewIntegrationTests(unittest.IsolatedAsyncioTestCas
             bot.enqueue_thread_ask = fake_enqueue_thread_ask
             bot.run_prompt_flow = fail_run_prompt_flow
 
-            message = BusyMessage()
-            view = cast(
-                BusyChoiceQueueViewWithChildren,
-                bot.BusyChoiceView(message, "please queue", target_thread_id="thread-1"),
+            discord_client = discord.Client(intents=discord.Intents.none())
+            self.addAsyncCleanup(discord_client.close)
+            message = discord_bot_shapes.RuntimeBusyChoiceSourceMessage(
+                author=discord_bot_shapes.RuntimeBusyChoiceAuthor(
+                    id=242286902982606848,
+                    bot=False,
+                ),
+                channel=discord_client.get_partial_messageable(222),
             )
+            view = bot.BusyChoiceView(message, "please queue", target_thread_id="thread-1")
             button = find_queue_button(view)
             interaction = FakeInteraction(command_name="ask", channel_id=222)
 
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
-                    await button.callback(interaction)
+                    _ = await button.callback(interaction)
                 log_text = log_path.read_text(encoding="utf-8")
 
             self.assertEqual(

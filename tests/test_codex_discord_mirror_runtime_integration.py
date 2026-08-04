@@ -2,8 +2,10 @@ from __future__ import annotations
 
 # pyright: reportAssignmentType=false, reportAttributeAccessIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 from dataclasses import dataclass
-from typing import cast, override
+from typing import Never, override
 import unittest
+
+import discord
 
 import codex_discord_bot as bot
 import codex_desktop_bridge as bridge
@@ -18,11 +20,19 @@ class MissingGuild:
 @dataclass(frozen=True, slots=True)
 class MissingGuildBot:
     guild_id: int | None = None
-    guilds: tuple[MissingGuild, ...] = ()
+    guilds: tuple[discord.Guild, ...] = ()
 
-    def get_guild(self, guild_id: int) -> MissingGuild | None:
+    def get_guild(self, guild_id: int) -> None:
         _ = guild_id
         return None
+
+    def get_channel(self, channel_id: int) -> None:
+        _ = channel_id
+        return None
+
+    async def fetch_channel(self, channel_id: int) -> Never:
+        _ = channel_id
+        raise AssertionError("unexpected bot channel fetch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +71,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             async def fetch_channel(self, channel_id: int) -> WrongPreferredChannel:
                 return WrongPreferredChannel(channel_id)
 
-        async def fake_get_mirror_guild(fake_bot: bot.CodexDiscordBot) -> FakeGuild:
+        async def fake_get_mirror_guild(fake_bot: object) -> FakeGuild:
             _ = fake_bot
             return FakeGuild()
 
@@ -92,7 +102,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 r"Preferred mirror project channel 777 is WrongPreferredChannel, not TextChannel.",
             ):
                 _ = await bot.mirror_single_codex_thread(
-                    cast(bot.CodexDiscordBot, MissingGuildBot()),
+                    MissingGuildBot(),
                     "thread-new",
                     preferred_project_channel_id=777,
                 )
@@ -115,7 +125,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 _ = channel_id
                 raise PreferredChannelBug()
 
-        async def fake_get_mirror_guild(fake_bot: bot.CodexDiscordBot) -> FakeGuild:
+        async def fake_get_mirror_guild(fake_bot: object) -> FakeGuild:
             _ = fake_bot
             return FakeGuild()
 
@@ -143,7 +153,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(TypeError, "preferred channel bug"):
                 _ = await bot.mirror_single_codex_thread(
-                    cast(bot.CodexDiscordBot, MissingGuildBot()),
+                    MissingGuildBot(),
                     "thread-new",
                     preferred_project_channel_id=777,
                 )
@@ -166,7 +176,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 _ = channel_id
                 raise ChannelFetchError()
 
-        async def fake_get_mirror_guild(fake_bot: bot.CodexDiscordBot) -> FakeGuild:
+        async def fake_get_mirror_guild(fake_bot: object) -> FakeGuild:
             _ = fake_bot
             return FakeGuild()
 
@@ -197,7 +207,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 r"Preferred mirror project channel 777 .*ChannelFetchError: channel boom",
             ):
                 _ = await bot.mirror_single_codex_thread(
-                    cast(bot.CodexDiscordBot, MissingGuildBot()),
+                    MissingGuildBot(),
                     "thread-new",
                     preferred_project_channel_id=777,
                 )
@@ -211,7 +221,7 @@ class DiscordMirrorRuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bot.MirrorGuildUnavailableError,
             "Discord guild is not available yet.",
         ):
-            _ = await bot.get_mirror_guild(cast(bot.CodexDiscordBot, MissingGuildBot()))
+            _ = await bot.get_mirror_guild(MissingGuildBot())
 
 
 if __name__ == "__main__":

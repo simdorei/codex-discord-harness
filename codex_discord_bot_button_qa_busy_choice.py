@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from types import ModuleType
-from typing import Protocol, cast
+from typing import Protocol, cast, final, override
 
 import codex_discord_bot_component_deps_runtime as discord_bot_component_deps_runtime
 import codex_discord_bot_persistent_busy_component_runtime as discord_bot_persistent_busy_component_runtime
@@ -13,7 +13,6 @@ from codex_discord_bot_button_qa_adapter_types import (
 )
 import codex_discord_button_qa_lifecycle_cases as discord_button_qa_lifecycle_cases
 import codex_discord_button_qa_steer_case as discord_button_qa_steer_case
-import codex_discord_persistent_busy_choice_interaction as discord_persistent_busy_choice_interaction
 import codex_discord_persistent_busy_steer_action as discord_persistent_busy_steer_action
 
 
@@ -32,11 +31,20 @@ class QaStaleBlockSender(Protocol):
     ) -> Awaitable[bool]: ...
 
 
-class QaNoStaleBlockModule:
+@final
+class QaNoStaleBlockModule(ModuleType):
+    _module: ModuleType
+    send_busy_stale_block_message: QaStaleBlockSender
+
     def __init__(self, module: ModuleType, qa_no_stale_block: QaStaleBlockSender) -> None:
+        super().__init__(module.__name__, module.__doc__)
+        self.__package__ = module.__package__
+        self.__loader__ = module.__loader__
+        self.__spec__ = module.__spec__
         self._module = module
         self.send_busy_stale_block_message = qa_no_stale_block
 
+    @override
     def __getattr__(self, name: str) -> ModuleAttribute:
         return cast(ModuleAttribute, getattr(self._module, name))
 
@@ -46,11 +54,11 @@ class QaNoStaleBlockModule:
         steering_streamer: discord_button_qa_steer_case.SteeringStreamer,
     ) -> discord_persistent_busy_steer_action.PersistentBusySteerActionDeps:
         return discord_bot_component_deps_runtime.BotComponentDepsRuntime(
-            cast(ModuleType, self),
+            self,
         ).make_persistent_busy_steer_action_deps(steering_runner, steering_streamer)
 
 
-class BotButtonQaBusyChoiceMixin:
+class BotButtonQaBusyChoiceMixin(Protocol):
     module: ModuleType
 
     async def _handle_persistent_busy_choice_interaction(
@@ -90,14 +98,12 @@ class BotButtonQaBusyChoiceMixin:
         steering_streamer: discord_button_qa_steer_case.SteeringStreamer,
     ) -> bool:
         qa_module = QaNoStaleBlockModule(self.module, self._qa_no_stale_block)
+        _ = qa_module._make_persistent_busy_steer_action_deps
         runtime = discord_bot_persistent_busy_component_runtime.BotPersistentBusyComponentRuntime(
-            cast(ModuleType, qa_module),
+            qa_module,
         )
         return await runtime.handle_persistent_busy_choice_interaction(
-            cast(
-                discord_persistent_busy_choice_interaction.PersistentBusyInteraction,
-                interaction,
-            ),
+            interaction,
             custom_id,
             steering_runner=steering_runner,
             steering_streamer=steering_streamer,

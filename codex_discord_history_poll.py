@@ -165,15 +165,15 @@ async def poll_history_channel(
 
 
 def _latest_message_watermark(messages: list[MessageT]) -> HistoryMessageWatermark | None:
-    watermarks = [value for message in messages if (value := _message_watermark(message))]
+    watermarks = [value for message in messages if (value := message_watermark(message))]
     return max(watermarks, default=None)
 
 
 def _is_message_after_watermark(message: object, watermark: HistoryMessageWatermark | None) -> bool:
-    message_watermark = _message_watermark(message)
-    if message_watermark is None:
+    current_watermark = message_watermark(message)
+    if current_watermark is None:
         return False
-    return watermark is None or message_watermark > watermark
+    return watermark is None or current_watermark > watermark
 
 
 def _messages_after_watermark(
@@ -187,10 +187,13 @@ def _messages_after_watermark(
     ]
 
 
-def _message_watermark(message: object) -> HistoryMessageWatermark | None:
+def message_watermark(message: object) -> HistoryMessageWatermark | None:
     created_at = _message_created_at(message)
+    raw_id = getattr(message, "id", None)
+    if raw_id is None:
+        return None
     try:
-        message_id = int(getattr(message, "id", None))
+        message_id = int(raw_id)
     except (TypeError, ValueError):
         return None
     if created_at is None:

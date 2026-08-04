@@ -21,7 +21,12 @@ class FakeNonButton:
 
 @dataclass(frozen=True)
 class FakeView:
-    children: Iterable[object]
+    children: Iterable[persistent_cases.ViewChildLike]
+
+
+@dataclass(frozen=True)
+class FakeApprovalView:
+    children: Iterable[persistent_cases.ViewChildLike]
 
 
 @dataclass
@@ -31,7 +36,7 @@ class FakeResponse:
 
 @dataclass
 class FakeFollowup:
-    messages: list[object]
+    messages: list[str]
 
 
 @dataclass
@@ -77,11 +82,11 @@ class PersistentButtonQaCaseTests(unittest.IsolatedAsyncioTestCase):
     def make_deps(
         self,
         *,
-        approval_children: Iterable[object] | None = None,
+        approval_children: Iterable[persistent_cases.ViewChildLike] | None = None,
         approval_followups: list[str] | None = None,
         approval_defer: bool = True,
         approval_handler_result: bool = True,
-        input_children: Iterable[object] | None = None,
+        input_children: Iterable[persistent_cases.ViewChildLike] | None = None,
         input_followups: list[str] | None = None,
         input_defer: bool = True,
         input_handler_result: bool = True,
@@ -155,7 +160,7 @@ class PersistentButtonQaCaseTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         deps = persistent_cases.PersistentButtonQaCaseDeps(
-            make_approval_view=lambda target_thread_id: FakeView(
+            make_approval_view=lambda target_thread_id: FakeApprovalView(
                 approval_children
                 if approval_children is not None
                 else [

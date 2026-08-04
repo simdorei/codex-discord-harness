@@ -18,7 +18,7 @@ import codex_discord_stream as discord_stream
 
 
 ChannelT = TypeVar("ChannelT")
-RelayT = TypeVar("RelayT", bound=discord_stream.DiscordAskRelay)
+RelayT = TypeVar("RelayT", bound=discord_stream.AskStreamRelay)
 SteeringResultT = TypeVar("SteeringResultT")
 
 

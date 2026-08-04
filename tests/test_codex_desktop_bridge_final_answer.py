@@ -202,7 +202,7 @@ class FinalAnswerWatchEdgeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "aborted")
-        self.assertEqual(result["interrupt_origin"], "remote_user_intent")
+        self.assertEqual(result.get("interrupt_origin"), "remote_user_intent")
         self.assertEqual(result["final_answer"], "")
 
     def test_native_failed_turn_preserves_error_message(self) -> None:
@@ -222,7 +222,7 @@ class FinalAnswerWatchEdgeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error_message"], "model process exited")
+        self.assertEqual(result.get("error_message"), "model process exited")
         self.assertEqual(result["final_answer"], "")
 
     def test_native_watch_ignores_wrong_turn_rollout_terminal(self) -> None:
@@ -279,7 +279,7 @@ class FinalAnswerWatchEdgeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "transport_error")
-        self.assertEqual(result["error_message"], "goal lookup failed")
+        self.assertEqual(result.get("error_message"), "goal lookup failed")
         self.assertEqual(result["final_answer"], "")
 
 

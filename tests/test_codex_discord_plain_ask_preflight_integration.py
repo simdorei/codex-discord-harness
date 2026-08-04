@@ -63,11 +63,13 @@ def no_recent_prompt(target_thread_id: str | None, prompt: str) -> bool:
 
 class DiscordPlainAskPreflightIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
-        bot.app_server_transport_enabled = lambda: False
+        original_app_server_transport_enabled = bot.app_server_transport_enabled
 
-    def tearDown(self) -> None:
-        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+        def restore_app_server_transport_enabled() -> None:
+            bot.app_server_transport_enabled = original_app_server_transport_enabled
+
+        self.addCleanup(restore_app_server_transport_enabled)
+        bot.app_server_transport_enabled = lambda: False
 
     async def test_stale_busy_plain_ask_still_sends_without_preflight(self) -> None:
         original_get_interactive_state = bot.get_interactive_state_for_thread

@@ -10,6 +10,9 @@ ModuleValue: TypeAlias = object
 class BotClientAdapterBase:
     module: ModuleType
 
+    def __init__(self, module: ModuleType) -> None:
+        self.module = module
+
     def _runtime_func(self, runtime_name: str, method_name: str) -> Callable[..., ModuleValue]:
         runtime = cast(ModuleValue, getattr(self.module, runtime_name))
         return cast(Callable[..., ModuleValue], getattr(runtime, method_name))

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterator, cast
+from typing import cast
 from unittest import mock
 import asyncio  # noqa: ANYIO_OK
 import os
@@ -46,7 +47,7 @@ class BadStartupDiagnosticsDependencyError(TypeError):
 
 
 @contextmanager
-def _patched_messageable() -> Iterator[None]:
+def _patched_messageable() -> Generator[None, None, None]:
     original_messageable = bot.discord.abc.Messageable
     try:
         bot.discord.abc.Messageable = FakeMessageable

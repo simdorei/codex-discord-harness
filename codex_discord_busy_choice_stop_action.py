@@ -11,7 +11,8 @@ ResolveTargetArgs = Callable[[int | None, str | None], list[str]]
 
 
 class StopActionChannel(Protocol):
-    id: int | str | None
+    @property
+    def id(self) -> int | str | None: ...
 
 
 class StopActionInteraction(Protocol):

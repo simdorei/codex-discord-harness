@@ -35,7 +35,8 @@ class PersistentBusyInteraction(discord_persistent_busy_choice.PersistentBusyInt
 
 
 class PersistentBusyChannel(discord_persistent_busy_choice.PersistentBusyChannel, Protocol):
-    pass
+    @property
+    def id(self) -> int | str | None: ...
 
 
 class BusyComponentClearer(Protocol):

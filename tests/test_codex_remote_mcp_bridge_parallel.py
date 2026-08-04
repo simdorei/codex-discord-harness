@@ -186,8 +186,8 @@ def test_older_session_command_cannot_win_after_newer_command(
         self: LocalProjectDispatcher,
         command: GatewayCommand,
         project: ActiveProject,
+        budget: RequestBudget,
         connection_generation: int | None,
-        cancel_event: threading.Event | None,
     ) -> BridgeResult:
         if (
             isinstance(command, ProjectSessionCommand)
@@ -199,8 +199,8 @@ def test_older_session_command_cannot_win_after_newer_command(
             self,
             command,
             project,
+            budget,
             connection_generation,
-            cancel_event,
         )
 
     monkeypatch.setattr(

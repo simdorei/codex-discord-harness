@@ -7,6 +7,8 @@ import unittest
 
 from codex_discord_steering import NativeExactWatchTarget, SteeringPromptResult
 import codex_discord_stream as stream
+import codex_discord_stream_relay as stream_relay
+import codex_discord_stream_relay_types as stream_relay_types
 
 
 class _ChannelLike(Protocol):
@@ -51,9 +53,12 @@ class _RelayDeps:
     async def send_chunks(self, _channel: _ChannelLike, text: str) -> None:
         self.sent.append(text)
 
-    def parse_interactive_notice(self, text: str) -> tuple[str | None, str, list[str]]:
+    def parse_interactive_notice(
+        self,
+        text: str,
+    ) -> tuple[str | None, str, stream_relay.InteractiveNoticeOptions]:
         if text == "interactive":
-            return "state", "prompt", ["yes", "no"]
+            return "state", "prompt", [("yes", "yes"), ("no", "no")]
         return None, "", []
 
     async def send_interactive_prompt(
@@ -84,6 +89,12 @@ class _RelayDeps:
 
 
 class DiscordAskRelayTests(unittest.IsolatedAsyncioTestCase):
+    def test_facade_reexports_interactive_notice_options(self) -> None:
+        self.assertIs(
+            stream_relay.InteractiveNoticeOptions,
+            stream_relay_types.InteractiveNoticeOptions,
+        )
+
     def _relay(
         self,
         deps: _RelayDeps,
@@ -173,7 +184,10 @@ class DiscordAskRelayTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(deps.sent, [])
         self.assertEqual(len(deps.prompts), 1)
-        self.assertEqual(deps.prompts[0][1:], ("thread-1", "project:1", "state", "prompt", ["yes", "no"]))
+        self.assertEqual(
+            deps.prompts[0][1:],
+            ("thread-1", "project:1", "state", "prompt", [("yes", "yes"), ("no", "no")]),
+        )
         self.assertTrue(relay.sent_live)
 
     async def test_aborted_marker_sends_aborted_notice(self) -> None:
@@ -205,6 +219,7 @@ class DiscordAskRelayTests(unittest.IsolatedAsyncioTestCase):
             stream_live: bool = False,
             stream_label: str = "",
             stream_callback: stream.LineStreamFunc | None = None,
+            expected_turn_id: str | None = None,
         ) -> stream.WatchForFinalAnswerResult:
             _ = (
                 session_path,
@@ -214,6 +229,7 @@ class DiscordAskRelayTests(unittest.IsolatedAsyncioTestCase):
                 stream_live,
                 stream_label,
                 stream_callback,
+                expected_turn_id,
             )
             raise WatchFailedError("watch failed")
 

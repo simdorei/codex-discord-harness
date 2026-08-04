@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import unittest
@@ -118,7 +118,7 @@ class InitialStreamFlowTests(unittest.IsolatedAsyncioTestCase):
             return FakeRelay()
 
         @asynccontextmanager
-        async def channel_typing(channel: str, *, context: str) -> AsyncIterator[None]:
+        async def channel_typing(channel: str, *, context: str) -> AsyncGenerator[None, None]:
             events.append(f"typing:{channel}:{context}")
             yield
 

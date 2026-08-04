@@ -155,7 +155,7 @@ def print_json(data: PrintableJsonData) -> None:
     if isinstance(data, DictExportable):
         data = data.to_dict()
     elif is_dataclass(data):
-        data = cast(JsonValue, asdict(data))
+        data = cast(JsonObject, asdict(data))
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 

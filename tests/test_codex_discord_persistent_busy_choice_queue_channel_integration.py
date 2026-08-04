@@ -82,7 +82,12 @@ class DiscordPersistentBusyChoiceQueueChannelIntegrationTests(unittest.IsolatedA
 
     @override
     def setUp(self) -> None:
-        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
+        original_app_server_transport_enabled = bot.app_server_transport_enabled
+
+        def restore_app_server_transport_enabled() -> None:
+            bot.app_server_transport_enabled = original_app_server_transport_enabled
+
+        self.addCleanup(restore_app_server_transport_enabled)
         bot.app_server_transport_enabled = lambda: False
         self._old_mirror_db_path = bot.MIRROR_DB_PATH
         self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
@@ -97,7 +102,6 @@ class DiscordPersistentBusyChoiceQueueChannelIntegrationTests(unittest.IsolatedA
 
     @override
     def tearDown(self) -> None:
-        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
         if self._old_mirror_db_path is not None:
             bot.MIRROR_DB_PATH = self._old_mirror_db_path
         if self._old_discord_log_path is None:

@@ -53,10 +53,11 @@ class Recorder:
         *,
         send_commentary_blocks: bool | None,
         send_final_blocks: bool,
-    ) -> None:
+    ) -> bool:
         if self.fail_stream:
             raise StreamFailure("stream failed")
         self.streams.append((channel, steering_result, target_thread_id, send_commentary_blocks, send_final_blocks))
+        return True
 
     def deps(self) -> busy_steer_result.BusyChoiceSteerResultDeps:
         return busy_steer_result.BusyChoiceSteerResultDeps(

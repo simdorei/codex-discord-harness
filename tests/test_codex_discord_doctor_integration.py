@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 import os
 import sqlite3
 import tempfile
@@ -72,7 +71,7 @@ class DiscordDoctorIntegrationTests(unittest.TestCase):
                     os.environ,
                     {"CODEX_DISCORD_LOG_PATH": str(log_path), "DISCORD_ENABLE_QA_COMMANDS": "1"},
                 ):
-                    output = bot.build_discord_doctor_message(cast(bot.CodexDiscordBot, fake_bot), 222)
+                    output = bot.build_discord_doctor_message(fake_bot, 222)
 
         self.assertIn("Discord adapter diagnostics", output)
         self.assertIn("channel_id: 222", output)
@@ -124,7 +123,7 @@ class DiscordDoctorIntegrationTests(unittest.TestCase):
                 mock.patch.object(bot, "build_mirror_check", _missing_mirror_check),
             ):
                 bot.init_mirror_db()
-                output = bot.build_discord_doctor_message(cast(bot.CodexDiscordBot, SimpleNamespace()), 222)
+                output = bot.build_discord_doctor_message(SimpleNamespace(), 222)
 
         self.assertIn("Mirror check failed", output)
         self.assertIn("ERROR: missing state db", output)

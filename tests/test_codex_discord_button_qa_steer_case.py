@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import codex_discord_button_qa_steer_case as steer_case
+import codex_discord_steering as steering
 
 
 @dataclass(frozen=True)
@@ -20,12 +21,21 @@ class FakeChannel:
 @dataclass
 class FakeResponse:
     deferred: bool = False
-    defer_kwargs: list[dict[str, object]] = field(default_factory=list)
+    defer_kwargs: list[steer_case.DeferKwargs] = field(default_factory=list)
+
+    async def defer(self, *, thinking: bool, ephemeral: bool) -> None:
+        self.deferred = True
+        self.defer_kwargs.append({"thinking": thinking, "ephemeral": ephemeral})
 
 
 @dataclass
 class FakeFollowup:
-    messages: list[object] = field(default_factory=list)
+    messages: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FakeUser:
+    id: int = 123
 
 
 @dataclass
@@ -33,11 +43,8 @@ class FakeInteraction:
     response: FakeResponse
     followup: FakeFollowup
     custom_id: str
-
-
-@dataclass(frozen=True)
-class FakeSteeringResult:
-    target_thread_id: str | None
+    user: steer_case.SteerQaUser
+    channel_id: int | None = 222
 
 
 @dataclass(frozen=True)
@@ -80,9 +87,14 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
             user: object,
             custom_id: str,
         ) -> FakeInteraction:
-            _ = (bot, channel, user)
+            _ = (bot, channel)
             interactions.append(InteractionEvent(message, custom_id))
-            return FakeInteraction(response=FakeResponse(), followup=FakeFollowup(), custom_id=custom_id)
+            return FakeInteraction(
+                response=FakeResponse(),
+                followup=FakeFollowup(),
+                custom_id=custom_id,
+                user=FakeUser() if not isinstance(user, FakeUser) else user,
+            )
 
         async def handle_persistent_busy_choice_interaction(
             interaction: steer_case.SteerQaInteraction,
@@ -96,7 +108,13 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
                 return False
             target_thread_id = "qa-thread"
             steering_result = steering_runner("qa prompt", target_thread_id)
-            _ = await steering_streamer(object(), steering_result, target_thread_id)
+            await steering_streamer(
+                object(),
+                steering_result,
+                target_thread_id,
+                send_commentary_blocks=None,
+                send_final_blocks=True,
+            )
             if defer_response:
                 interaction.response.deferred = True
                 interaction.response.defer_kwargs.append({"ephemeral": ephemeral})
@@ -109,8 +127,12 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
         def get_mirrored_codex_thread_id(channel_id: int | None) -> str | None:
             return "qa-thread" if channel_id == 222 else None
 
-        def make_steering_prompt_result(target_thread_id: str | None) -> object:
-            return FakeSteeringResult(result_target_override or target_thread_id)
+        def make_steering_prompt_result(target_thread_id: str | None) -> steering.SteeringPromptResult:
+            return steering.SteeringPromptResult(
+                0,
+                "[qa_delivery_verified]",
+                target_thread_id=result_target_override or target_thread_id,
+            )
 
         deps = steer_case.BusyChoiceSteerQaCaseDeps(
             send_case_button=send_case_button,
@@ -128,7 +150,7 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
         line = await steer_case.run_busy_choice_steer_success_qa_case(
             bot=object(),
             channel=FakeChannel(),
-            user=object(),
+            user=FakeUser(),
             deps=deps,
         )
 
@@ -158,7 +180,7 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
                 line = await steer_case.run_busy_choice_steer_success_qa_case(
                     bot=object(),
                     channel=FakeChannel(),
-                    user=object(),
+                    user=FakeUser(),
                     deps=deps,
                 )
 
@@ -172,9 +194,17 @@ class BusyChoiceSteerQaCaseTests(unittest.IsolatedAsyncioTestCase):
             _ = await steer_case.run_busy_choice_steer_success_qa_case(
                 bot=object(),
                 channel=FakeChannel(),
-                user=object(),
+                user=FakeUser(),
                 deps=deps,
             )
+
+    async def test_fake_response_records_production_defer_contract(self) -> None:
+        response = FakeResponse()
+
+        await response.defer(thinking=True, ephemeral=False)
+
+        self.assertTrue(response.deferred)
+        self.assertEqual(response.defer_kwargs, [{"thinking": True, "ephemeral": False}])
 
 
 if __name__ == "__main__":

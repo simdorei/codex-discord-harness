@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import AsyncContextManager, Generic, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 
 ChannelContraT = TypeVar("ChannelContraT", contravariant=True)
@@ -42,7 +43,7 @@ class RetryRelayFactory(Protocol[ChannelContraT, RelayT_co]):
 
 
 class ChannelTypingFactory(Protocol[ChannelContraT]):
-    def __call__(self, channel: ChannelContraT, *, context: str) -> AsyncContextManager[None]: ...
+    def __call__(self, channel: ChannelContraT, *, context: str) -> AbstractAsyncContextManager[None]: ...
 
 
 class AskStreamRunner(Protocol[RelayT_contra]):

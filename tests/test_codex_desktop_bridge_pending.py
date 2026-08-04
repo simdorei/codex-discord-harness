@@ -91,13 +91,16 @@ class PendingBridgeTests(unittest.TestCase):
         )
 
     def test_bridge_public_pending_ipc_wrappers_close_handle(self) -> None:
+        win32 = bridge.kernel32
+        if win32 is None:
+            self.fail("Windows kernel32 is required for this IPC wrapper test.")
         original_open = bridge._open_codex_ipc_pipe
         original_init = bridge._initialize_ipc_client
         original_read = bridge._read_ipc_message
         original_record = bridge._record_owner_client_from_ipc_message
         original_snapshot = bridge._extract_thread_snapshot_from_ipc_message
         original_cache = bridge.cache_live_approval_request
-        original_close = bridge.kernel32.CloseHandle
+        original_close = win32.CloseHandle
         cached: list[pending.JsonObject] = []
         closed: list[int] = []
 
@@ -110,7 +113,7 @@ class PendingBridgeTests(unittest.TestCase):
             bridge._record_owner_client_from_ipc_message = lambda _message, _owners: None
             bridge._extract_thread_snapshot_from_ipc_message = lambda _message, _thread_id: (_approval_state(), "")
             bridge.cache_live_approval_request = lambda request: cached.append(request)
-            bridge.kernel32.CloseHandle = lambda handle: closed.append(handle)
+            win32.CloseHandle = lambda handle: closed.append(handle)
 
             result = bridge.get_pending_approval_request_via_ipc(_thread(), timeout_sec=1.0)
         finally:
@@ -120,7 +123,7 @@ class PendingBridgeTests(unittest.TestCase):
             bridge._record_owner_client_from_ipc_message = original_record
             bridge._extract_thread_snapshot_from_ipc_message = original_snapshot
             bridge.cache_live_approval_request = original_cache
-            bridge.kernel32.CloseHandle = original_close
+            win32.CloseHandle = original_close
 
         self.assertIsNotNone(result)
         assert result is not None

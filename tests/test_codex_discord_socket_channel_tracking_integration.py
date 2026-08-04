@@ -4,6 +4,7 @@ import unittest
 from typing import Protocol, cast
 
 import codex_discord_bot as bot
+import codex_discord_bot_socket_runtime as discord_bot_socket_runtime
 
 
 class TransientSocketChannelPermissionError(RuntimeError):
@@ -15,7 +16,12 @@ class BadSocketChannelDependencyError(TypeError):
 
 
 class IsTrackedSocketMessageChannelFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, channel_id: int | None) -> tuple[bool, str]: ...
+    def __call__(
+        self,
+        client: discord_bot_socket_runtime.SocketRuntimeOwner,
+        channel_id: int | None,
+        /,
+    ) -> tuple[bool, str]: ...
 
 
 IS_TRACKED_SOCKET_MESSAGE_CHANNEL = cast(
@@ -34,7 +40,7 @@ class RuntimeFailureSocketClient:
         _ = channel_id
         return False
 
-    def is_allowed_message_channel(self, channel: FakeSocketChannel) -> bool:
+    def is_allowed_message_channel(self, channel: object) -> bool:
         _ = channel
         raise TransientSocketChannelPermissionError("transient cache check")
 
@@ -47,7 +53,7 @@ class TypeFailureSocketClient:
         _ = channel_id
         return False
 
-    def is_allowed_message_channel(self, channel: FakeSocketChannel) -> bool:
+    def is_allowed_message_channel(self, channel: object) -> bool:
         _ = channel
         raise BadSocketChannelDependencyError("bad tracked socket channel dependency")
 
@@ -59,7 +65,7 @@ class DiscordSocketChannelTrackingIntegrationTests(unittest.TestCase):
     def test_tracked_socket_channel_runtime_permission_failure_returns_cache_error(self) -> None:
         fake_client = RuntimeFailureSocketClient()
 
-        tracked, source = IS_TRACKED_SOCKET_MESSAGE_CHANNEL(cast(bot.CodexDiscordBot, fake_client), 222)
+        tracked, source = IS_TRACKED_SOCKET_MESSAGE_CHANNEL(fake_client, 222)
 
         self.assertFalse(tracked)
         self.assertEqual(source, "cache_error")
@@ -68,7 +74,7 @@ class DiscordSocketChannelTrackingIntegrationTests(unittest.TestCase):
         fake_client = TypeFailureSocketClient()
 
         with self.assertRaisesRegex(BadSocketChannelDependencyError, "bad tracked socket channel dependency"):
-            _ = IS_TRACKED_SOCKET_MESSAGE_CHANNEL(cast(bot.CodexDiscordBot, fake_client), 222)
+            _ = IS_TRACKED_SOCKET_MESSAGE_CHANNEL(fake_client, 222)
 
 
 if __name__ == "__main__":

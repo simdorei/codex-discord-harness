@@ -15,6 +15,11 @@ RunBridgeCommandStreamFunc = Callable[[list[str], LineStreamFunc], tuple[int, st
 ShouldRetryAskWithUiFunc = Callable[[int, str], bool]
 
 
+class AskStreamRelay(Protocol):
+    def feed_line(self, line: str) -> None: ...
+    def finish(self) -> None: ...
+
+
 class BuildUiAskArgvFunc(Protocol):
     def __call__(
         self,
@@ -95,7 +100,7 @@ def ensure_ui_stream_flags(ui_argv: list[str]) -> list[str]:
 
 def run_ask_stream(
     prompt: str,
-    relay: DiscordAskRelay,
+    relay: AskStreamRelay,
     *,
     force_while_busy: bool = False,
     wait: bool = True,
@@ -138,7 +143,7 @@ def run_ask_stream(
 
 def run_steering_watch_stream(
     steering_result: SteeringPromptResult,
-    relay: DiscordAskRelay,
+    relay: AskStreamRelay,
     *,
     timeout_sec: float = 0,
     watch_for_final_answer_func: WatchForFinalAnswerFunc,

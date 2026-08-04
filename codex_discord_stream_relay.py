@@ -9,6 +9,7 @@ from codex_discord_stream_relay_lines import classify_stream_relay_line
 from codex_discord_stream_relay_types import (
     FormatLogTextLenFunc,
     HadSteeringHandoffSinceFunc,
+    InteractiveNoticeOptions as InteractiveNoticeOptions,
     IsDiscordRelayStaleFunc,
     LogFunc,
     ParseInteractiveNoticeFunc,

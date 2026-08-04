@@ -68,10 +68,13 @@ class IpcSubmitTests(unittest.TestCase):
 
     def test_bridge_public_submit_wrappers_preserve_defaults(self) -> None:
         thread = _thread()
+        win32 = bridge.kernel32
+        if win32 is None:
+            self.fail("Windows kernel32 is required for this IPC wrapper test.")
         original_open = bridge._open_codex_ipc_pipe
         original_init = bridge._initialize_ipc_client
         original_discover = bridge._discover_owner_client_for_thread
-        original_close = bridge.kernel32.CloseHandle
+        original_close = win32.CloseHandle
         original_user_input = bridge._request_submit_user_input_via_ipc
         original_approval = bridge._request_submit_approval_decision_via_ipc
         user_input_calls: list[ipc_submit.JsonObject] = []
@@ -116,7 +119,7 @@ class IpcSubmitTests(unittest.TestCase):
             bridge._open_codex_ipc_pipe = lambda: 10
             bridge._initialize_ipc_client = lambda *_args, **_kwargs: "source-client"
             bridge._discover_owner_client_for_thread = lambda *_args, **_kwargs: "owner-client"
-            bridge.kernel32.CloseHandle = lambda _handle: None
+            win32.CloseHandle = lambda _handle: None
             bridge._request_submit_user_input_via_ipc = request_user_input
             bridge._request_submit_approval_decision_via_ipc = request_approval
 
@@ -132,7 +135,7 @@ class IpcSubmitTests(unittest.TestCase):
             bridge._open_codex_ipc_pipe = original_open
             bridge._initialize_ipc_client = original_init
             bridge._discover_owner_client_for_thread = original_discover
-            bridge.kernel32.CloseHandle = original_close
+            win32.CloseHandle = original_close
             bridge._request_submit_user_input_via_ipc = original_user_input
             bridge._request_submit_approval_decision_via_ipc = original_approval
 

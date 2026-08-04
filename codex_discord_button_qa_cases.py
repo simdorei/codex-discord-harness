@@ -4,8 +4,6 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-import discord
-
 from codex_discord_components import ComponentRowLike
 
 
@@ -17,18 +15,17 @@ class ButtonQaAuthor(Protocol):
     def id(self) -> int: ...
 
 
+class ButtonQaChannel(Protocol):
+    @property
+    def id(self) -> int | str | None: ...
+
+
 class ButtonQaMessage(Protocol):
     @property
-    def channel(self) -> discord.abc.Messageable: ...
+    def channel(self) -> ButtonQaChannel: ...
 
     @property
     def author(self) -> ButtonQaAuthor: ...
-
-
-class ButtonQaChannel(Protocol):
-    id: int | str | None
-
-
 class ViewChildLike(Protocol):
     label: str | None
     custom_id: str | None

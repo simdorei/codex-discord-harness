@@ -13,6 +13,8 @@ import codex_discord_prompt_retry_suppression as retry_suppression
 
 ChannelT = TypeVar("ChannelT")
 SendResultT = TypeVar("SendResultT")
+ChannelContraT = TypeVar("ChannelContraT", contravariant=True)
+SendResultCoT = TypeVar("SendResultCoT", covariant=True)
 RecentOffsets: TypeAlias = busy_result.RecentOffsets
 BusyPredicate: TypeAlias = Callable[[int, str], bool]
 LogFunc: TypeAlias = Callable[[str], None]
@@ -25,8 +27,8 @@ class BusyRetryRelay(retry_attempt.RetryRelay, retry_suppression.RetryRelay, Pro
 RelayT = TypeVar("RelayT", bound=BusyRetryRelay)
 
 
-class ChunkSender(Protocol[ChannelT, SendResultT]):
-    def __call__(self, channel: ChannelT, text: str) -> Awaitable[SendResultT]: ...
+class ChunkSender(Protocol[ChannelContraT, SendResultCoT]):
+    def __call__(self, channel: ChannelContraT, text: str) -> Awaitable[SendResultCoT]: ...
 
 
 @dataclass(frozen=True, slots=True)

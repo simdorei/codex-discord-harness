@@ -65,7 +65,7 @@ class UrlResponse(Protocol):
 
 
 class UrlOpen(Protocol):
-    def __call__(self, request: urllib.request.Request, timeout: float) -> UrlResponse: ...
+    def __call__(self, request: urllib.request.Request, /, *, timeout: float) -> UrlResponse: ...
 
 
 def get_default_bot_permissions() -> int:

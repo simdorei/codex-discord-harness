@@ -45,6 +45,14 @@ class BusyComponentClearer(Protocol):
     def __call__(self, interaction: discord.Interaction, *, context: str) -> Awaitable[None]: ...
 
 
+class BusyChoiceViewMessage(Protocol):
+    @property
+    def channel(self) -> discord_busy_choice_stop_action.StopActionChannel: ...
+
+    @property
+    def author(self) -> discord_bot_shapes.BusyChoiceAuthor: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BusyChoiceViewDeps:
     claim_busy_choice_record: BusyChoiceRecordClaimer
@@ -60,7 +68,7 @@ class BusyChoiceViewDeps:
 class BusyChoiceView(discord.ui.View):
     def __init__(
         self,
-        message: discord_bot_shapes.BusyChoiceSourceMessage,
+        message: BusyChoiceViewMessage,
         prompt: str,
         *,
         deps: BusyChoiceViewDeps,
@@ -69,7 +77,7 @@ class BusyChoiceView(discord.ui.View):
         choice_id: str | None = None,
     ) -> None:
         super().__init__(timeout=900)
-        self.message: discord_bot_shapes.BusyChoiceSourceMessage = message
+        self.message: BusyChoiceViewMessage = message
         self.prompt: str = prompt
         self.deps: BusyChoiceViewDeps = deps
         self.target_thread_id: str | None = target_thread_id

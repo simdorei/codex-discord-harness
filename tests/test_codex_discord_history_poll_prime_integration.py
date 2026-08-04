@@ -6,10 +6,13 @@ import tempfile
 import unittest
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Protocol, cast, override
+from typing import override
 from unittest import mock
 
 import codex_discord_bot as bot
+import codex_discord_logging as discord_logging
+import codex_discord_message_gate as discord_message_gate
+from codex_discord_seen_cache import SeenCacheMap
 
 
 class FakeAuthor:
@@ -22,6 +25,8 @@ class AppServerUnavailableError(RuntimeError):
 
 
 class FakeMessage:
+    type: None = None
+
     def __init__(
         self,
         content: str,
@@ -59,54 +64,63 @@ class FakeHistoryChannel:
         return iterator()
 
 
-class ProcessDiscordMessageFunc(Protocol):
-    def __call__(
-        self,
-        client: bot.CodexDiscordBot,
-        message: FakeMessage,
-        *,
-        source: str,
-    ) -> Awaitable[None]: ...
-
-
-class PollHistoryChannelFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, label: str, channel_id: int) -> Awaitable[None]: ...
-
-
-class OnMessageFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, message: FakeMessage) -> Awaitable[None]: ...
-
-
-PROCESS_DISCORD_MESSAGE = cast(ProcessDiscordMessageFunc, bot.CodexDiscordBot.process_discord_message)
-POLL_HISTORY_CHANNEL = cast(PollHistoryChannelFunc, bot.CodexDiscordBot.poll_history_channel)
-ON_MESSAGE = cast(OnMessageFunc, bot.CodexDiscordBot.on_message)
-
-
 class FakePollClient:
     def __init__(self, channel: FakeHistoryChannel) -> None:
-        self._processed_message_ids: dict[int, set[int]] = {}
+        self._processed_message_ids: SeenCacheMap = {}
         self._history_poll_primed_channels: set[int] = set()
+        self.allowed_channel_ids: set[int] = {channel.id}
+        self.startup_channel_id: int | None = None
+        self.history_poll_seconds: float = 1.0
         self.enable_prefix_commands: bool = True
+        self.plain_ask_mention_user_ids: list[int] = []
+        self.user: None = None
         self.channel: FakeHistoryChannel = channel
 
-    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[FakeHistoryChannel, str]:
+    def is_closed(self) -> bool:
+        return False
+
+    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[object | None, str]:
         _ = channel_id
         return self.channel, "test_cache"
 
-    async def fetch_channel(self, channel_id: int) -> FakeHistoryChannel:
+    async def fetch_channel(self, channel_id: int) -> object | None:
         _ = channel_id
         raise AssertionError("fetch not expected")
 
-    def is_allowed_message_channel(self, message_channel: FakeHistoryChannel) -> bool:
-        _ = message_channel
+    async def history_poll_loop(self) -> None:
+        return
+
+    async def poll_history_channel(self, label: str, channel_id: int) -> None:
+        await bot.HISTORY_RUNTIME.poll_history_channel(self, label, channel_id)
+
+    def is_allowed_message_channel(self, channel: object) -> bool:
+        _ = channel
         return True
 
-    def is_allowed_user(self, user_id: int) -> bool:
+    def is_allowed_user(self, user_id: int | None) -> bool:
         _ = user_id
         return True
 
-    async def process_discord_message(self, message: FakeMessage, *, source: str) -> None:
-        await PROCESS_DISCORD_MESSAGE(cast(bot.CodexDiscordBot, self), message, source=source)
+    async def process_discord_message(self, message: object, *, source: str) -> None:
+        if not isinstance(message, FakeMessage):
+            raise TypeError(f"expected FakeMessage, got {type(message).__name__}")
+        await bot.MESSAGE_RUNTIME.process_discord_message(self, message, source=source)
+
+
+class RecordingHistoryRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, str, int]] = []
+
+    async def poll_history_channel(self, owner: object, label: str, channel_id: int) -> None:
+        self.calls.append((owner, label, channel_id))
+
+
+class RecordingMessageRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object, str]] = []
+
+    async def process_discord_message(self, owner: object, message: object, *, source: str) -> None:
+        self.calls.append((owner, message, source))
 
 
 LogAction = Callable[[Path], Awaitable[None]]
@@ -128,6 +142,22 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}):
                 await action(log_path)
             return log_path.read_text(encoding="utf-8")
+
+    async def test_dynamic_client_poll_and_message_methods_delegate_to_runtimes(self) -> None:
+        history_runtime = RecordingHistoryRuntime()
+        message_runtime = RecordingMessageRuntime()
+        client = bot.CodexDiscordBot.__new__(bot.CodexDiscordBot)
+        message = FakeMessage("delegated", message_id=777)
+
+        with (
+            mock.patch.object(bot, "HISTORY_RUNTIME", history_runtime),
+            mock.patch.object(bot, "MESSAGE_RUNTIME", message_runtime),
+        ):
+            await client.poll_history_channel("allowed", 333)
+            await client.process_discord_message(message, source="adapter-test")
+
+        self.assertEqual(history_runtime.calls, [(client, "allowed", 333)])
+        self.assertEqual(message_runtime.calls, [(client, message, "adapter-test")])
 
     async def test_history_poll_primes_then_processes_new_user_message_once(self) -> None:
         handled: list[tuple[str, str | None]] = []
@@ -170,12 +200,27 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async def run_poll(log_path: Path) -> None:
             _ = log_path
             channel.history_messages = [old_message]
-            bot_client = cast(bot.CodexDiscordBot, client)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
+            await client.poll_history_channel("allowed", 333)
             channel.history_messages = [new_message, old_message]
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
-            await ON_MESSAGE(bot_client, new_message)
+            await client.poll_history_channel("allowed", 333)
+            await discord_message_gate.process_gateway_message(
+                new_message,
+                deps=discord_message_gate.GatewayMessageDeps(
+                    discord_client=client,
+                    claim_message=lambda message: bot.PROCESSED_MESSAGE_RUNTIME.claim_discord_message(
+                        client,
+                        message,
+                    ),
+                    get_message_id=bot.PROCESSED_MESSAGE_RUNTIME.get_discord_message_id,
+                    process_message=client.process_discord_message,
+                    mark_processed=lambda message: bot.PROCESSED_MESSAGE_RUNTIME.mark_discord_message_processed(
+                        client,
+                        message,
+                    ),
+                    log=discord_logging.log_line,
+                ),
+            )
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", mirror_thread_id),
@@ -226,7 +271,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         async def run_poll(log_path: Path) -> None:
             _ = log_path
-            await POLL_HISTORY_CHANNEL(cast(bot.CodexDiscordBot, client), "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", mirror_thread_id),
@@ -268,15 +313,14 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         async def run_poll(log_path: Path) -> None:
             _ = log_path
-            bot_client = cast(bot.CodexDiscordBot, client)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
             client._processed_message_ids.clear()
             bot.discord_store.cleanup_processed_discord_messages(
                 bot.MIRROR_DB_PATH,
                 retention_seconds=0,
                 now=dt.datetime.now(dt.timezone.utc).timestamp() + 1,
             )
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
@@ -306,8 +350,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         async def run_poll(log_path: Path) -> None:
             _ = log_path
-            bot_client = cast(bot.CodexDiscordBot, client)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
             new_message = FakeMessage(
                 "new after start",
                 message_id=101,
@@ -315,7 +358,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             new_message.channel = channel
             channel.history_messages = [new_message]
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
@@ -343,8 +386,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         async def run_poll(log_path: Path) -> None:
             _ = log_path
-            bot_client = cast(bot.CodexDiscordBot, client)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
             delayed_old_message = FakeMessage(
                 "delayed old backlog",
                 message_id=101,
@@ -352,7 +394,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             delayed_old_message.channel = channel
             channel.history_messages = [delayed_old_message]
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),
@@ -382,8 +424,7 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         async def run_poll(log_path: Path) -> None:
             _ = log_path
-            bot_client = cast(bot.CodexDiscordBot, client)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
             offline_message = FakeMessage(
                 "while app server offline",
                 message_id=101,
@@ -391,8 +432,8 @@ class DiscordHistoryPollPrimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             offline_message.channel = channel
             channel.history_messages = [offline_message]
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
-            await POLL_HISTORY_CHANNEL(bot_client, "allowed", 333)
+            await client.poll_history_channel("allowed", 333)
+            await client.poll_history_channel("allowed", 333)
 
         with (
             mock.patch.object(bot, "get_mirrored_codex_thread_id", return_value="thread-1"),

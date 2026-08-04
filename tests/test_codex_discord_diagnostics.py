@@ -163,6 +163,10 @@ class FakeHistoryChannel:
         return iterator()
 
 
+class FakeIdentifiedHistoryChannel(FakeHistoryChannel):
+    id: int = 111
+
+
 def _message(
     *,
     content: str,
@@ -188,7 +192,7 @@ def _message(
 class DiscordHistoryDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_history_lines_sanitize_message_content(self) -> None:
         lines = await diagnostics.build_discord_channel_history_lines(
-            FakeHistoryChannel([
+            FakeIdentifiedHistoryChannel([
                 _message(content="sensitive prompt", bot=False),
             ]),
             format_log_text_len_func=_text_len,
@@ -206,14 +210,14 @@ class DiscordHistoryDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_history_lines_report_unavailable_and_errors(self) -> None:
         self.assertEqual(
             await diagnostics.build_discord_channel_history_lines(
-                object(),
+                None,
                 format_log_text_len_func=_text_len,
             ),
             ["Recent channel history:", "history_unavailable: no_channel"],
         )
         self.assertEqual(
             await diagnostics.build_discord_channel_history_lines(
-                FakeHistoryChannel([], error=ValueError("history failed")),
+                FakeIdentifiedHistoryChannel([], error=ValueError("history failed")),
                 format_log_text_len_func=_text_len,
             ),
             ["Recent channel history:", "history_error: ValueError"],

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 import tempfile
 import unittest
 
@@ -9,14 +8,9 @@ import codex_discord_bot as bot
 
 from tests.test_codex_discord_bot import EnvPatch, FailingFollowup, FakeInteraction, FakeTarget
 from tests.test_codex_discord_busy_choice_steer_callback_integration import (
-    BusyChoiceViewWithChildren,
     BusyMessage,
-    SteerButton,
+    find_steer_button,
 )
-
-
-def find_steer_button(view: BusyChoiceViewWithChildren) -> SteerButton:
-    return next(item for item in view.children if item.label == "Steer now")
 
 
 class DiscordBusyChoiceSteerFailureIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -59,10 +53,7 @@ class DiscordBusyChoiceSteerFailureIntegrationTests(unittest.IsolatedAsyncioTest
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
                 button = find_steer_button(view)
                 interaction = FakeInteraction()
 
@@ -123,10 +114,7 @@ class DiscordBusyChoiceSteerFailureIntegrationTests(unittest.IsolatedAsyncioTest
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
                 button = find_steer_button(view)
                 interaction = FakeInteraction(command_name="ask", channel_id=222)
 
@@ -191,10 +179,7 @@ class DiscordBusyChoiceSteerFailureIntegrationTests(unittest.IsolatedAsyncioTest
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
                 button = find_steer_button(view)
                 interaction = FakeInteraction()
 
@@ -258,10 +243,7 @@ class DiscordBusyChoiceSteerFailureIntegrationTests(unittest.IsolatedAsyncioTest
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
                 button = find_steer_button(view)
                 interaction = FakeInteraction(command_name="ask", channel_id=222)
                 failing_followup = FailingFollowup()

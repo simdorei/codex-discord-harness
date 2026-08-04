@@ -25,12 +25,12 @@ class PrefixQaCommandTests(unittest.IsolatedAsyncioTestCase):
         enabled: bool = True,
         output: str = "qa ok",
         fail: bool = False,
-    ) -> tuple[prefix_qa.PrefixQaCommandDeps, list[str], list[tuple[object, object]], list[str]]:
+    ) -> tuple[prefix_qa.PrefixQaCommandDeps[object], list[str], list[tuple[object, object]], list[str]]:
         sent: list[str] = []
         calls: list[tuple[object, object]] = []
         logs: list[str] = []
 
-        async def send_chunks(target: object, text: str, *, context: str = "send_chunks") -> object:
+        async def send_chunks(target: object, text: str, *, context: str = "send_chunks") -> int:
             _ = target
             sent.append(f"{context}:{text}")
             return len(text)

@@ -133,5 +133,5 @@ class RunnerQueueTests(unittest.IsolatedAsyncioTestCase):
         queue.task_done()
 
         self.assertEqual(discarded, 2)
-        self.assertEqual(retained["job_id"], "current")
+        self.assertEqual(retained.get("job_id"), "current")
         self.assertEqual(runner["queued_job_ids"], {"current"})

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from functools import partial
 from typing import Generic, cast
@@ -189,6 +190,19 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
             deps=self._make_plain_ask_runtime_deps(),
         )
 
+    def _prompt_admission_for_plain_ask(
+        self,
+        channel: discord_plain_ask.PlainAskChannel,
+        source_message: object | None,
+        expected_generation: int | None,
+        /,
+    ) -> AbstractAsyncContextManager[bool]:
+        return self.deps.prompt_admission(
+            self.deps.require_messageable_channel(channel),
+            source_message,
+            expected_generation,
+        )
+
     def _make_plain_ask_runtime_deps(
         self,
     ) -> discord_plain_ask_runtime.PlainAskRuntimeDeps[MessageT, int]:
@@ -208,7 +222,7 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
                 discord_plain_ask.RunPromptFlowFunc[MessageT],
                 self.deps.run_plain_prompt_flow,
             ),
-            prompt_admission=self.deps.prompt_admission,
+            prompt_admission=self._prompt_admission_for_plain_ask,
             enqueue_thread_ask=self.enqueue_plain_thread_ask,
             send_busy_choice_message=self.send_plain_busy_choice_message,
             send_chunks=self.send_plain_ask_chunks,

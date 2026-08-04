@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import unittest
+from typing import cast
 
 import codex_discord_resume as resume
 from codex_app_server_transport_replies import CodexAppServerTransportError, JsonObject
 
 
 class ResidentThreadRecoveryTests(unittest.TestCase):
+    def test_format_rejects_an_unexpected_runtime_state(self) -> None:
+        result = resume.ResumeRecoveryResult(
+            "thread-1",
+            cast(resume.ResumeRecoveryState, cast(object, "unexpected")),
+        )
+
+        with self.assertRaises(AssertionError):
+            _ = resume.format_resume_recovery_message(result, "project:1")
+
     def test_request_uses_mapped_channel_target(self) -> None:
         client = _RecoveryClient(("idle",))
         target_calls: list[tuple[int | None, str | None]] = []

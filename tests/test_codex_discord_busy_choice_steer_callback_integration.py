@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 import tempfile
 import unittest
+
+import discord
 
 import codex_discord_bot as bot
 
@@ -27,15 +29,20 @@ class BusyMessage:
         self.author: BusyAuthor = BusyAuthor()
 
 
+@runtime_checkable
 class SteerButton(Protocol):
-    label: str
+    @property
+    def label(self) -> str | None: ...
 
-    async def callback(self, interaction: FakeInteraction) -> None:
+    async def callback(self, interaction: FakeInteraction, /) -> None:
         ...
 
 
-class BusyChoiceViewWithChildren(Protocol):
-    children: Sequence[SteerButton]
+def find_steer_button(view: discord.ui.View) -> SteerButton:
+    for item in view.children:
+        if isinstance(item, SteerButton) and item.label == "Steer now":
+            return item
+    raise StopIteration("Steer now button not found")
 
 
 class StreamSteering(Protocol):
@@ -100,11 +107,8 @@ class DiscordBusyChoiceSteerCallbackIntegrationTests(unittest.IsolatedAsyncioTes
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
-                button = next(item for item in view.children if item.label == "Steer now")
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
+                button = find_steer_button(view)
                 interaction = FakeInteraction()
 
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
@@ -190,11 +194,8 @@ class DiscordBusyChoiceSteerCallbackIntegrationTests(unittest.IsolatedAsyncioTes
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
-                button = next(item for item in view.children if item.label == "Steer now")
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
+                button = find_steer_button(view)
                 interaction = FakeInteraction()
 
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):

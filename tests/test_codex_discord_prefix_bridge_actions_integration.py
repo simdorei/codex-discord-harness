@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
-from typing import cast
 import unittest
 
 import codex_discord_bot as bot
@@ -12,7 +11,7 @@ from tests.test_codex_discord_bot import FakeBot, FakeMessage, FakeTarget
 class DiscordPrefixBridgeActionsIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_prefix_command_response_is_bounded(self) -> None:
         message = FakeMessage()
-        await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "x" * 4100)
+        await bot.handle_prefix_command(FakeBot(), message, "x" * 4100)
 
         self.assertEqual(len(message.channel.messages), 1)
         content, view = message.channel.messages[0]
@@ -40,7 +39,7 @@ class DiscordPrefixBridgeActionsIntegrationTests(unittest.IsolatedAsyncioTestCas
         try:
             bot.run_bridge_and_send = fake_run_bridge_and_send
             message = FakeMessage()
-            await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "open_abort taxlab:1")
+            await bot.handle_prefix_command(FakeBot(), message, "open_abort taxlab:1")
 
             self.assertEqual(calls, [(["open", "--abort", "taxlab:1"], "Open")])
             self.assertEqual(message.channel.messages, [("ok", None)])

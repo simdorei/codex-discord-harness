@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from types import ModuleType
-from typing import cast
+from typing import Protocol, cast
 
 from codex_discord_bot_plain_ask_adapter_types import ModuleValue
 import codex_discord_plain_ask as discord_plain_ask
 import codex_discord_plain_ask_handler as discord_plain_ask_handler
 
 
-class BotPlainAskAdapterStateMixin:
+class BotPlainAskAdapterStateMixin(Protocol):
     module: ModuleType
 
     def has_recent_codex_app_user_prompt(self, target_thread_id: str | None, prompt: str) -> bool:

@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol, TypeVar, cast
+from typing import Protocol, cast
 
 import codex_discord_bot as bot
 from codex_thread_models import ThreadInfo
-
-
-ValueT = TypeVar("ValueT")
 
 
 class MirrorSyncBridge(Protocol):
@@ -23,5 +20,5 @@ def bridge_module() -> MirrorSyncBridge:
     return cast(MirrorSyncBridge, vars(bot)["bridge"])
 
 
-def codex_discord_bot(value: ValueT) -> bot.CodexDiscordBot:
+def codex_discord_bot(value: object) -> bot.CodexDiscordBot:
     return cast(bot.CodexDiscordBot, value)

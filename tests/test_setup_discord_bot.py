@@ -72,7 +72,7 @@ class SetupDiscordBotTests(unittest.TestCase):
     def test_fetch_discord_application_uses_bot_authorization_header(self) -> None:
         requests: list[urllib.request.Request] = []
 
-        def fake_urlopen(request: urllib.request.Request, timeout: float) -> FakeResponse:
+        def fake_urlopen(request: urllib.request.Request, *, timeout: float) -> FakeResponse:
             self.assertEqual(timeout, 15.0)
             requests.append(request)
             return FakeResponse(b'{"id":"42","name":"Codex Remote"}')

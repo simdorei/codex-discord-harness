@@ -6,14 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
 import tempfile
-from typing import cast
 import unittest
 
 import codex_discord_bot as bot
 from codex_discord_runner_queue import QueueJob, ThreadRunner
 import codex_discord_runtime as discord_runtime
 
-from tests.test_codex_discord_bot import EnvPatch, FakeBot, FakeMessage, FakeTarget
+from tests.test_codex_discord_bot import EnvPatch, FakeBot, FakeTarget
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +86,7 @@ class DiscordRunnerQueueIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_retract_uses_mapped_thread_queue(self) -> None:
         key = discord_runtime.normalize_runner_key("thread-1")
-        message = FakeMessage(content="!retract", channel_id=222)
+        command_message = make_source_message(channel_id=222)
         queued_source = make_source_message(channel_id=222)
         queue: asyncio.Queue[QueueJob] = asyncio.Queue()
         original_mirror_db_path = bot.MIRROR_DB_PATH
@@ -121,10 +120,10 @@ class DiscordRunnerQueueIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 async with bot.THREAD_RUNNERS_LOCK:
                     bot.THREAD_RUNNERS[key] = runner
 
-                await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "retract")
+                await bot.handle_prefix_command(FakeBot(), command_message, "retract")
 
             self.assertEqual(
-                message.channel.messages,
+                command_message.channel.messages,
                 [("Retracted your latest queued ask for `thread-1`. remaining_queued: 0", None)],
             )
             self.assertEqual(queue.qsize(), 0)

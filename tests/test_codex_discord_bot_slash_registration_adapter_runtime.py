@@ -1,11 +1,42 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import unittest
 from types import ModuleType
+from typing import final
 from unittest.mock import patch
 
 import codex_discord_bot_slash_registration_adapter_runtime as adapter_runtime
 import codex_discord_slash_registration as slash_registration
+import codex_discord_slash_types as slash_types
+
+
+@final
+class FakeSlashCommandTree:
+    def command(
+        self,
+        *,
+        name: str,
+        description: str,
+    ) -> Callable[[slash_types.SlashCallback], slash_types.SlashCallback]:
+        _ = (name, description)
+
+        def decorate(
+            callback: slash_types.SlashCallback,
+        ) -> slash_types.SlashCallback:
+            return callback
+
+        return decorate
+
+
+@final
+class FakeSlashCommandBot:
+    def __init__(self) -> None:
+        self._tree: FakeSlashCommandTree = FakeSlashCommandTree()
+
+    @property
+    def tree(self) -> slash_types.SlashCommandTree:
+        return self._tree
 
 
 class FakeRuntimeConfig:
@@ -37,6 +68,14 @@ class FakeAppServerTransport:
     DEFAULT_CLIENT: FakeAppServerClient = FakeAppServerClient()
 
 
+@final
+class FakeSlashRegistrationModule(ModuleType):
+    def __init__(self) -> None:
+        super().__init__("fake_slash_registration_adapter_module")
+        self.discord_runtime_config: FakeRuntimeConfig = FakeRuntimeConfig()
+        self.app_server_transport: FakeAppServerTransport = FakeAppServerTransport()
+
+
 class SlashRegistrationAdapterRuntimeTests(unittest.TestCase):
     def test_register_commands_builds_deps_without_runtime_generic_error(self) -> None:
         module = self.make_module()
@@ -52,7 +91,7 @@ class SlashRegistrationAdapterRuntimeTests(unittest.TestCase):
             captured.append(deps)
 
         with patch.object(slash_registration, "register_commands", fake_register_commands):
-            adapter.register_commands(object())
+            adapter.register_commands(FakeSlashCommandBot())
 
         self.assertEqual(len(captured), 1)
         self.assertEqual(captured[0].build_help().splitlines()[0], "Codex Discord commands")
@@ -71,9 +110,7 @@ class SlashRegistrationAdapterRuntimeTests(unittest.TestCase):
         )
 
     def make_module(self) -> ModuleType:
-        module = ModuleType("fake_slash_registration_adapter_module")
-        module.discord_runtime_config = FakeRuntimeConfig()
-        module.app_server_transport = FakeAppServerTransport()
+        module = FakeSlashRegistrationModule()
 
         def check_interaction_allowed(bot: object, interaction: object) -> bool:
             _ = (bot, interaction)

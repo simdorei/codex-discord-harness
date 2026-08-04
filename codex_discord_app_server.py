@@ -19,6 +19,21 @@ class AppServerClient(AppServerDeliveryClient, Protocol):
     def reply_to_pending_input(self, thread_id: str, answer_text: str) -> JsonObject: ...
 
 
+class ApprovalReplyClient(Protocol):
+    def get_latest_pending_approval_request(self, thread_id: str) -> JsonObject | None: ...
+    def reply_to_pending_approval(self, thread_id: str, answer_text: str) -> JsonObject: ...
+
+
+class InputReplyClient(Protocol):
+    def get_latest_pending_input_request(self, thread_id: str) -> JsonObject | None: ...
+    def reply_to_pending_input(self, thread_id: str, answer_text: str) -> JsonObject: ...
+
+
+class PendingInteractiveStateClient(Protocol):
+    def get_latest_pending_approval_request(self, thread_id: str) -> JsonObject | None: ...
+    def get_latest_pending_input_request(self, thread_id: str) -> JsonObject | None: ...
+
+
 class AppServerTransportModule(Protocol):
     @property
     def DEFAULT_CLIENT(self) -> AppServerDeliveryClient: ...
@@ -52,7 +67,7 @@ class AppServerStateLogger(Protocol):
 
 
 def _log_pending_state_check_failed(
-    active_client: AppServerClient,
+    active_client: object,
     target_thread_id: str,
     kind: str,
     exc: Exception,
@@ -111,7 +126,7 @@ def submit_approval_reply(
     target_thread_id: str,
     answer: str,
     *,
-    client: AppServerClient | None = None,
+    client: ApprovalReplyClient | None = None,
 ) -> tuple[int, str] | None:
     active_client = client or app_server_transport.DEFAULT_CLIENT
     pending_request = active_client.get_latest_pending_approval_request(target_thread_id)
@@ -135,7 +150,7 @@ def submit_input_reply(
     target_thread_id: str,
     answer: str,
     *,
-    client: AppServerClient | None = None,
+    client: InputReplyClient | None = None,
 ) -> tuple[int, str] | None:
     active_client = client or app_server_transport.DEFAULT_CLIENT
     pending_input = active_client.get_latest_pending_input_request(target_thread_id)
@@ -161,7 +176,7 @@ def submit_input_reply(
 def get_pending_interactive_state(
     target_thread_id: str,
     *,
-    client: AppServerClient | None = None,
+    client: PendingInteractiveStateClient | None = None,
 ) -> str | None:
     active_client = client or app_server_transport.DEFAULT_CLIENT
     try:

@@ -41,11 +41,13 @@ def approval_interactive_state(target_thread_id: str | None) -> tuple[str, str, 
 
 class DiscordPendingApprovalPlainIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self._original_app_server_transport_enabled = bot.app_server_transport_enabled
-        bot.app_server_transport_enabled = lambda: False
+        original_app_server_transport_enabled = bot.app_server_transport_enabled
 
-    def tearDown(self) -> None:
-        bot.app_server_transport_enabled = self._original_app_server_transport_enabled
+        def restore_app_server_transport_enabled() -> None:
+            bot.app_server_transport_enabled = original_app_server_transport_enabled
+
+        self.addCleanup(restore_app_server_transport_enabled)
+        bot.app_server_transport_enabled = lambda: False
 
     async def test_pending_approval_plain_text_refreshes_buttons_without_submitting(self) -> None:
         original_get_interactive_state = bot.get_interactive_state_for_thread

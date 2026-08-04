@@ -306,25 +306,45 @@ def _find_codex_window() -> MacOSWindowSnapshot:
     raise MacOSAutomationError("Visible Codex Desktop window not found.")
 
 
+class _MacOSUIBackend:
+    def quote(self, value: str) -> str:
+        return _quote(value)
+
+    def osascript(self, lines: Sequence[str], *, timeout: float = 10.0) -> str:
+        return _osascript(lines, timeout=timeout)
+
+    def find_codex_window(self) -> MacOSWindowSnapshot:
+        return _find_codex_window()
+
+    def raise_window(self, hwnd: int) -> None:
+        _raise_window(hwnd)
+
+    def refresh_windows(self) -> list[MacOSWindowSnapshot]:
+        return _refresh_windows()
+
+
+_MACOS_UI_BACKEND = _MacOSUIBackend()
+
+
 def run_composer_focus_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_composer_focus_process(args, **kwargs)
+    return macos_ui.run_composer_focus_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
 
 
 def run_header_verification_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_header_verification_process(args, **kwargs)
+    return macos_ui.run_header_verification_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
 
 
 def run_sidebar_activation_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_sidebar_activation_process(args, **kwargs)
+    return macos_ui.run_sidebar_activation_process(args, backend=_MACOS_UI_BACKEND, **kwargs)
 
 
 def run_permission_approval_process(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     import codex_desktop_bridge_macos_ui as macos_ui
 
-    return macos_ui.run_permission_approval_process(args, **kwargs)
+    return macos_ui.run_permission_approval_process(args, backend=_MACOS_UI_BACKEND, **kwargs)

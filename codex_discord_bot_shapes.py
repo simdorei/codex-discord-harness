@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeGuard, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, TypeGuard, cast
 
 import discord
 
 import codex_discord_busy_prompt as discord_busy_prompt
 import codex_discord_component_view_state as discord_component_view_state
 import codex_discord_slash_prompt_commands as discord_slash_prompt_commands
+
+if TYPE_CHECKING:
+    from discord.abc import MessageableChannel
+else:
+    MessageableChannel = discord.abc.Messageable
+
+DiscordMessageableChannel: TypeAlias = MessageableChannel
+
 
 class BusyChoiceAuthor(discord_busy_prompt.BusyPromptAuthor, Protocol):
     @property
@@ -17,7 +25,7 @@ class BusyChoiceAuthor(discord_busy_prompt.BusyPromptAuthor, Protocol):
 
 class BusyChoiceSourceMessage(Protocol):
     @property
-    def channel(self) -> discord.abc.Messageable: ...
+    def channel(self) -> DiscordMessageableChannel: ...
 
     @property
     def author(self) -> BusyChoiceAuthor: ...
@@ -73,7 +81,7 @@ class RuntimeBusyChoiceAuthor:
 @dataclass(frozen=True, slots=True)
 class RuntimeBusyChoiceSourceMessage:
     author: BusyChoiceAuthor
-    channel: discord.abc.Messageable
+    channel: DiscordMessageableChannel
 
 
 class SessionMirrorOutputChannel(Protocol):
@@ -121,5 +129,5 @@ class SkillSlashSourceAuthor:
 
 @dataclass(frozen=True, slots=True)
 class SlashAskSourceMessage:
-    channel: discord.abc.Messageable
+    channel: DiscordMessageableChannel
     author: BusyChoiceAuthor

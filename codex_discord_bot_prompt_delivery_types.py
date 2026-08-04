@@ -78,6 +78,7 @@ class PromptAdmission(Protocol[ChannelContraT]):
         channel: ChannelContraT,
         source_message: object | None,
         expected_generation: int | None,
+        /,
     ) -> AbstractAsyncContextManager[bool]: ...
 
 

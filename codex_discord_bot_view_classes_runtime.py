@@ -6,7 +6,6 @@ from types import ModuleType
 from typing import cast
 
 import codex_discord_approval_view as discord_approval_view
-import codex_discord_bot_shapes as discord_bot_shapes
 import codex_discord_busy_choice_view as discord_busy_choice_view
 import codex_discord_input_choice_view as discord_input_choice_view
 
@@ -45,7 +44,7 @@ class BotViewClassesRuntime:
         class BusyChoiceView(discord_busy_choice_view.BusyChoiceView):
             def __init__(
                 self,
-                message: discord_bot_shapes.BusyChoiceSourceMessage,
+                message: discord_busy_choice_view.BusyChoiceViewMessage,
                 prompt: str,
                 *,
                 target_thread_id: str | None = None,

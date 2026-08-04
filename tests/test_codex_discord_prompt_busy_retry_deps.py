@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import unittest
@@ -37,7 +37,7 @@ class BusyRetryDepsFactoryTests(unittest.TestCase):
             return FakeRelay()
 
         @asynccontextmanager
-        async def channel_typing(channel: str, *, context: str) -> AsyncIterator[None]:
+        async def channel_typing(channel: str, *, context: str) -> AsyncGenerator[None, None]:
             self.assertEqual((channel, context), ("c", "ask_stream_retry"))
             yield
 

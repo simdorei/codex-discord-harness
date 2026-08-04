@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,7 +64,7 @@ class BusyRetryFlowTests(unittest.IsolatedAsyncioTestCase):
             return relay
 
         @asynccontextmanager
-        async def channel_typing(channel: str, *, context: str) -> AsyncIterator[None]:
+        async def channel_typing(channel: str, *, context: str) -> AsyncGenerator[None, None]:
             events.append(f"typing:{channel}:{context}")
             yield
 

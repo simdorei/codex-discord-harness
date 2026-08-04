@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
 
@@ -26,7 +26,7 @@ __all__ = [
 ]
 
 
-SlashCallback = Callable[..., Awaitable[None]]
+SlashCallback = Callable[..., Coroutine[object, object, None]]
 
 
 class SlashCommandTree(Protocol):

@@ -106,14 +106,15 @@ class MirrorSyncConcurrentCleanupTests(unittest.IsolatedAsyncioTestCase):
                 clock["now"] = 200.0
                 return "active-thread-channel"
 
-            deps = mirror_sync.CodexMirrorSyncDeps[
+            deps: mirror_sync.CodexMirrorSyncDeps[
                 str,
                 ThreadInfo,
                 FakeGuild,
                 FakeCategory,
                 str,
                 str,
-            ](
+            ]
+            deps = mirror_sync.CodexMirrorSyncDeps(
                 db_path=db_path,
                 get_mirror_guild=get_mirror_guild,
                 get_or_create_mirror_category=get_mirror_category,
@@ -129,7 +130,9 @@ class MirrorSyncConcurrentCleanupTests(unittest.IsolatedAsyncioTestCase):
             )
 
             # When: awaited mirror creation adds the mapping before stale cleanup runs.
-            with mock.patch.object(mirror_sync.time, "time", side_effect=lambda: clock["now"]):
+            with mock.patch.object(
+                mirror_sync.time, "time", side_effect=lambda: clock["now"]
+            ):
                 _ = await mirror_sync.sync_codex_mirror("bot", deps=deps)
 
             # Then: this sync generation must not delete the mapping it did not initially observe.

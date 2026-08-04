@@ -4,63 +4,26 @@ import json
 import os
 import tempfile
 import unittest
-from collections.abc import Awaitable
 from pathlib import Path
-from typing import Protocol, cast
 from unittest import mock
 
 import codex_discord_bot as bot
 import codex_discord_bot_client_adapter_runtime as client_adapter_runtime
+import codex_discord_bot_socket_runtime as socket_runtime
 import codex_discord_socket_event_log as socket_event_log
 
 
 SocketEventData = socket_event_log.SocketEventData
+SocketEventPayload = socket_runtime.SocketEventPayload
 
 
 class BadSocketParserDependencyError(TypeError):
     pass
 
 
-class OnSocketRawReceiveFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, message: str | bytes) -> Awaitable[None]: ...
-
-
-class OnSocketResponseFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, payload: SocketEventData) -> Awaitable[None]: ...
-
-
-class LogSocketPayloadFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, payload: SocketEventData) -> Awaitable[None]: ...
-
-
-class FormatSocketInteractionUserFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, data: SocketEventData) -> str: ...
-
-
-class IsTrackedSocketMessageChannelFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot, channel_id: int | None) -> tuple[bool, str]: ...
-
-
-class SocketMessageChannel(Protocol):
-    id: int
-
-
 class FakeCachedSocketChannel:
     def __init__(self, channel_id: int) -> None:
         self.id: int = channel_id
-
-
-ON_SOCKET_RAW_RECEIVE = cast(OnSocketRawReceiveFunc, bot.CodexDiscordBot.on_socket_raw_receive)
-ON_SOCKET_RESPONSE = cast(OnSocketResponseFunc, bot.CodexDiscordBot.on_socket_response)
-LOG_SOCKET_PAYLOAD = cast(LogSocketPayloadFunc, bot.CodexDiscordBot.log_socket_payload)
-FORMAT_SOCKET_INTERACTION_USER = cast(
-    FormatSocketInteractionUserFunc,
-    bot.CodexDiscordBot.format_socket_interaction_user,
-)
-IS_TRACKED_SOCKET_MESSAGE_CHANNEL = cast(
-    IsTrackedSocketMessageChannelFunc,
-    bot.CodexDiscordBot.is_tracked_socket_message_channel,
-)
 
 
 class FakeSocketClient:
@@ -79,28 +42,74 @@ class FakeSocketClient:
     def is_allowed_channel(self, channel_id: int | None) -> bool:
         return self._allowed_channel_id is not None and channel_id == self._allowed_channel_id
 
-    def is_allowed_message_channel(self, channel: SocketMessageChannel) -> bool:
-        return self._allowed_channel_id is not None and channel.id == self._allowed_channel_id
+    def is_allowed_message_channel(self, channel: object) -> bool:
+        return self._allowed_channel_id is not None and getattr(channel, "id", None) == self._allowed_channel_id
 
-    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[FakeCachedSocketChannel | None, str]:
+    def get_cached_channel_or_thread(self, channel_id: int) -> tuple[object | None, str]:
         if self._cached_channel_id == channel_id:
             return FakeCachedSocketChannel(channel_id), "test_cache"
         return None, "-"
 
     def format_socket_interaction_user(self, data: SocketEventData) -> str:
-        return FORMAT_SOCKET_INTERACTION_USER(cast(bot.CodexDiscordBot, self), data)
+        return bot.SOCKET_RUNTIME.format_socket_interaction_user(data)
 
     def is_tracked_socket_message_channel(self, channel_id: int | None) -> tuple[bool, str]:
-        return IS_TRACKED_SOCKET_MESSAGE_CHANNEL(cast(bot.CodexDiscordBot, self), channel_id)
+        return bot.SOCKET_RUNTIME.is_tracked_socket_message_channel(self, channel_id)
 
     async def log_socket_payload(self, payload: SocketEventData) -> None:
         if self._delegate_log:
-            await LOG_SOCKET_PAYLOAD(cast(bot.CodexDiscordBot, self), payload)
+            await bot.SOCKET_RUNTIME.log_socket_payload(self, payload)
             return
         self.payloads.append(payload)
 
 
+class FakeSocketRuntime:
+    def __init__(self) -> None:
+        self.raw_calls: list[tuple[object, str | bytes]] = []
+        self.response_calls: list[tuple[object, object]] = []
+        self.track_calls: list[tuple[object, int | None]] = []
+        self.log_calls: list[tuple[object, object]] = []
+        self.format_calls: list[object] = []
+
+    async def on_socket_raw_receive(self, owner: object, message: str | bytes) -> None:
+        self.raw_calls.append((owner, message))
+
+    async def on_socket_response(self, owner: object, payload: object) -> None:
+        self.response_calls.append((owner, payload))
+
+    def is_tracked_socket_message_channel(self, owner: object, channel_id: int | None) -> tuple[bool, str]:
+        self.track_calls.append((owner, channel_id))
+        return True, "delegated"
+
+    async def log_socket_payload(self, owner: object, payload: object) -> None:
+        self.log_calls.append((owner, payload))
+
+    def format_socket_interaction_user(self, data: object) -> str:
+        self.format_calls.append(data)
+        return "delegated-user"
+
+
 class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dynamic_client_socket_methods_delegate_to_socket_runtime(self) -> None:
+        runtime = FakeSocketRuntime()
+        client = bot.CodexDiscordBot.__new__(bot.CodexDiscordBot)
+        payload: SocketEventPayload = {"t": "READY", "d": {}}
+
+        with mock.patch.object(bot, "SOCKET_RUNTIME", runtime):
+            await client.on_socket_raw_receive("raw")
+            await client.on_socket_response(payload)
+            tracked = client.is_tracked_socket_message_channel(222)
+            await client.log_socket_payload(payload)
+            user = client.format_socket_interaction_user(payload)
+
+        self.assertEqual(runtime.raw_calls, [(client, "raw")])
+        self.assertEqual(runtime.response_calls, [(client, payload)])
+        self.assertEqual(runtime.track_calls, [(client, 222)])
+        self.assertEqual(runtime.log_calls, [(client, payload)])
+        self.assertEqual(runtime.format_calls, [payload])
+        self.assertEqual(tracked, (True, "delegated"))
+        self.assertEqual(user, "delegated-user")
+
     async def test_socket_raw_receive_dispatches_gateway_payload(self) -> None:
         fake_client = FakeSocketClient(delegate_log=True)
 
@@ -116,7 +125,7 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
             with mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}):
-                await ON_SOCKET_RAW_RECEIVE(cast(bot.CodexDiscordBot, fake_client), json.dumps(payload))
+                await bot.SOCKET_RUNTIME.on_socket_raw_receive(fake_client, json.dumps(payload))
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertIn("socket_message_create channel=222 tracked=True", log_text)
@@ -127,20 +136,17 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
-            payload = cast(
-                SocketEventData,
-                {
-                    "t": "MESSAGE_CREATE",
-                    "d": {
-                        "channel_id": "222",
-                        "guild_id": "111",
-                        "content": "sensitive prompt",
-                        "author": {"id": "999", "bot": False},
-                    },
+            payload: SocketEventPayload = {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "channel_id": "222",
+                    "guild_id": "111",
+                    "content": "sensitive prompt",
+                    "author": {"id": "999", "bot": False},
                 },
-            )
+            }
             with mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}):
-                await ON_SOCKET_RESPONSE(cast(bot.CodexDiscordBot, fake_client), payload)
+                await bot.SOCKET_RUNTIME.on_socket_response(fake_client, payload)
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertIn("socket_message_create channel=222 tracked=True", log_text)
@@ -151,7 +157,7 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_socket_raw_receive_malformed_payload_is_ignored(self) -> None:
         fake_client = FakeSocketClient(delegate_log=False)
 
-        await ON_SOCKET_RAW_RECEIVE(cast(bot.CodexDiscordBot, fake_client), "{")
+        await bot.SOCKET_RUNTIME.on_socket_raw_receive(fake_client, "{")
 
         self.assertEqual(fake_client.payloads, [])
 
@@ -164,30 +170,27 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch("codex_discord_socket_event_log.json.loads", loads):
             with self.assertRaisesRegex(BadSocketParserDependencyError, "bad socket parser dependency"):
-                await ON_SOCKET_RAW_RECEIVE(cast(bot.CodexDiscordBot, fake_client), "{}")
+                await bot.SOCKET_RUNTIME.on_socket_raw_receive(fake_client, "{}")
 
     async def test_socket_event_logging_dedupes_raw_and_response_hooks(self) -> None:
         fake_client = FakeSocketClient(delegate_log=True)
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
-            payload = cast(
-                SocketEventData,
-                {
-                    "t": "MESSAGE_CREATE",
-                    "s": 123,
-                    "d": {
-                        "id": "555",
-                        "channel_id": "222",
-                        "guild_id": "111",
-                        "content": "single log",
-                        "author": {"id": "999", "bot": False},
-                    },
+            payload: SocketEventPayload = {
+                "t": "MESSAGE_CREATE",
+                "s": 123,
+                "d": {
+                    "id": "555",
+                    "channel_id": "222",
+                    "guild_id": "111",
+                    "content": "single log",
+                    "author": {"id": "999", "bot": False},
                 },
-            )
+            }
             with mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}):
-                await ON_SOCKET_RAW_RECEIVE(cast(bot.CodexDiscordBot, fake_client), json.dumps(payload))
-                await ON_SOCKET_RESPONSE(cast(bot.CodexDiscordBot, fake_client), payload)
+                await bot.SOCKET_RUNTIME.on_socket_raw_receive(fake_client, json.dumps(payload))
+                await bot.SOCKET_RUNTIME.on_socket_response(fake_client, payload)
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertEqual(log_text.count("socket_message_create channel=222 tracked=True"), 1)
@@ -201,23 +204,20 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
-            payload = cast(
-                SocketEventData,
-                {
-                    "t": "MESSAGE_CREATE",
-                    "d": {
-                        "channel_id": "333",
-                        "guild_id": "111",
-                        "content": "sensitive prompt",
-                        "author": {"id": "999", "bot": False},
-                    },
+            payload: SocketEventPayload = {
+                "t": "MESSAGE_CREATE",
+                "d": {
+                    "channel_id": "333",
+                    "guild_id": "111",
+                    "content": "sensitive prompt",
+                    "author": {"id": "999", "bot": False},
                 },
-            )
+            }
             with (
                 mock.patch.object(bot, "MIRROR_DB_PATH", Path(temp_dir) / "mirror.sqlite"),
                 mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}),
             ):
-                await ON_SOCKET_RESPONSE(cast(bot.CodexDiscordBot, fake_client), payload)
+                await bot.SOCKET_RUNTIME.on_socket_response(fake_client, payload)
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertIn("socket_message_create_untracked channel=333", log_text)
@@ -230,21 +230,18 @@ class DiscordSocketRawReceiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
-            payload = cast(
-                SocketEventData,
-                {
-                    "t": "INTERACTION_CREATE",
-                    "d": {
-                        "channel_id": "222",
-                        "guild_id": "111",
-                        "type": 3,
-                        "member": {"user": {"id": "999"}},
-                        "data": {"custom_id": "codex_busy:abcdabcdabcdabcdabcdabcd:queue"},
-                    },
+            payload: SocketEventPayload = {
+                "t": "INTERACTION_CREATE",
+                "d": {
+                    "channel_id": "222",
+                    "guild_id": "111",
+                    "type": 3,
+                    "member": {"user": {"id": "999"}},
+                    "data": {"custom_id": "codex_busy:abcdabcdabcdabcdabcdabcd:queue"},
                 },
-            )
+            }
             with mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}):
-                await ON_SOCKET_RESPONSE(cast(bot.CodexDiscordBot, fake_client), payload)
+                await bot.SOCKET_RUNTIME.on_socket_response(fake_client, payload)
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertIn("socket_interaction_create channel=222", log_text)

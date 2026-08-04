@@ -45,8 +45,8 @@ class FakeProjectChannel:
 
     async def archived_threads(self, *, limit: int) -> AsyncIterator[FakeDiscordThread]:
         _ = limit
-        if False:
-            yield self.threads[0]
+        for thread in self.threads[:0]:
+            yield thread
 
 
 class MirrorSyncMutationCoordinationTests(unittest.IsolatedAsyncioTestCase):
@@ -114,14 +114,15 @@ class MirrorSyncMutationCoordinationTests(unittest.IsolatedAsyncioTestCase):
                 _ = (codex_thread, project_key, channel)
                 return FakeDiscordThread(902)
 
-            sync_deps = mirror_sync.CodexMirrorSyncDeps[
+            sync_deps: mirror_sync.CodexMirrorSyncDeps[
                 str,
                 ThreadInfo,
                 FakeGuild,
                 FakeCategory,
                 FakeProjectChannel,
                 FakeDiscordThread,
-            ](
+            ]
+            sync_deps = mirror_sync.CodexMirrorSyncDeps(
                 db_path=db_path,
                 get_mirror_guild=get_sync_guild,
                 get_or_create_mirror_category=get_category,
@@ -135,7 +136,8 @@ class MirrorSyncMutationCoordinationTests(unittest.IsolatedAsyncioTestCase):
                 get_bot_user_id=lambda bot: 123,
                 log=lambda message: None,
             )
-            single_deps = mirror_single.MirrorSingleThreadDeps[str](
+            single_deps: mirror_single.MirrorSingleThreadDeps[str]
+            single_deps = mirror_single.MirrorSingleThreadDeps(
                 get_mirror_guild=cast(
                     Callable[[str], Awaitable[discord.Guild]],
                     get_single_guild,
@@ -147,7 +149,9 @@ class MirrorSyncMutationCoordinationTests(unittest.IsolatedAsyncioTestCase):
                 choose_thread=lambda thread_id, fallback: single_codex_thread,
                 get_project_key=lambda thread: "active-project",
                 get_project_name=lambda thread: "Active",
-                upsert_mirror_project=lambda project_key, project_name, channel_id: None,
+                upsert_mirror_project=lambda project_key, project_name, channel_id: (
+                    None
+                ),
                 get_or_create_project_channel=cast(
                     Callable[
                         [discord.Guild, discord.CategoryChannel, str, str],

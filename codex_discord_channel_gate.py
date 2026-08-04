@@ -19,9 +19,6 @@ class MessageChannelLike(Protocol):
     def id(self) -> int | None: ...
 
     @property
-    def parent_id(self) -> int | None: ...
-
-    @property
     def parent(self) -> ParentLike | None: ...
 
     @property

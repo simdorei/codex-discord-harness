@@ -9,7 +9,7 @@ from discord import app_commands
 
 import codex_discord_slash_commands as slash_commands
 
-SlashFunc = Callable[..., Awaitable[None]]
+SlashFunc = slash_commands.SlashCallback
 AutocompleteFunc = Callable[..., Awaitable[list[app_commands.Choice[str]]]]
 
 

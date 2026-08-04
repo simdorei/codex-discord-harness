@@ -8,6 +8,7 @@ from typing import Generic, Protocol, TypeVar
 STALE_COMPONENT_NOTICE = "This Discord button is no longer active. Send the message again to get fresh controls."
 
 InteractionT = TypeVar("InteractionT", bound="UnhandledInteraction")
+InteractionContraT = TypeVar("InteractionContraT", bound="UnhandledInteraction", contravariant=True)
 ExceptionTypes = tuple[type[BaseException], ...]
 
 
@@ -31,18 +32,18 @@ class UnhandledInteraction(Protocol):
     def user(self) -> UnhandledUser: ...
 
 
-class PersistentHandler(Protocol[InteractionT]):
-    def __call__(self, interaction: InteractionT, custom_id: str) -> Awaitable[bool]: ...
+class PersistentHandler(Protocol[InteractionContraT]):
+    def __call__(self, interaction: InteractionContraT, custom_id: str) -> Awaitable[bool]: ...
 
 
-class ComponentClearer(Protocol[InteractionT]):
-    def __call__(self, interaction: InteractionT, *, context: str) -> Awaitable[None]: ...
+class ComponentClearer(Protocol[InteractionContraT]):
+    def __call__(self, interaction: InteractionContraT, *, context: str) -> Awaitable[None]: ...
 
 
-class InteractionResponder(Protocol[InteractionT]):
+class InteractionResponder(Protocol[InteractionContraT]):
     def __call__(
         self,
-        interaction: InteractionT,
+        interaction: InteractionContraT,
         content: str,
         *,
         ephemeral: bool,

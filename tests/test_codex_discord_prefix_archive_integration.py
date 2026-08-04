@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # pyright: reportAttributeAccessIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false
-from typing import cast
 import unittest
 
 import codex_discord_bot as bot
@@ -54,7 +53,7 @@ class DiscordPrefixArchiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bridge.resolve_thread_ref = fake_resolve_thread_ref
 
             message = FakeMessage(channel_id=333)
-            await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "archive taxlab:1")
+            await bot.handle_prefix_command(FakeBot(), message, "archive taxlab:1")
 
             self.assertEqual(calls, [(["archive", "--thread-id", "workspace-thread"], "Archive")])
             self.assertEqual(message.channel.messages, [("ok", None)])
@@ -110,7 +109,7 @@ class DiscordPrefixArchiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bridge.resolve_thread_ref = fail_recent_resolver
 
             message = FakeMessage(channel_id=333)
-            await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "archive 2")
+            await bot.handle_prefix_command(FakeBot(), message, "archive 2")
 
             self.assertEqual(calls, [(["archive", "--thread-id", "root-2"], "Archive")])
             self.assertEqual(message.channel.messages, [("ok", None)])
@@ -138,7 +137,7 @@ class DiscordPrefixArchiveIntegrationTests(unittest.IsolatedAsyncioTestCase):
         try:
             bot.run_bridge_and_send = fake_run_bridge_and_send
             message = FakeMessage()
-            await bot.handle_prefix_command(cast(bot.CodexDiscordBot, FakeBot()), message, "archive_list 5")
+            await bot.handle_prefix_command(FakeBot(), message, "archive_list 5")
 
             self.assertEqual(calls, [(["archived_list", "--limit", "5"], "Archived list")])
             self.assertEqual(message.channel.messages, [("ok", None)])

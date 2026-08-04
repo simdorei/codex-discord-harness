@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypeAlias, cast
 import os
 import tempfile
 import unittest
 
 import codex_discord_bot as bot
+import codex_discord_delivery_interactions as delivery_interactions
 import codex_discord_interrupt_context as interrupt_context
+
+
+FollowupKwarg: TypeAlias = bool | delivery_interactions.FollowupView
 
 
 class FollowupUnavailableError(RuntimeError):
@@ -28,8 +32,8 @@ class FailingFollowup:
         self.messages: list[str] = []
         self.fail_after = fail_after
 
-    async def send(self, content: str, view=None, **kwargs) -> None:
-        _ = (view, kwargs)
+    async def send(self, content: str, **kwargs: FollowupKwarg) -> None:
+        _ = kwargs
         if len(self.messages) >= self.fail_after:
             raise FollowupUnavailableError("followup unavailable")
         self.messages.append(content)
@@ -38,9 +42,9 @@ class FailingFollowup:
 class NoViewKeywordFollowup:
     def __init__(self) -> None:
         self.messages: list[str] = []
-        self.kwargs: list[dict[str, bool]] = []
+        self.kwargs: list[dict[str, FollowupKwarg]] = []
 
-    async def send(self, content: str, **kwargs: bool) -> None:
+    async def send(self, content: str, **kwargs: FollowupKwarg) -> None:
         if "view" in kwargs:
             raise UnexpectedViewKeywordError("send() got an unexpected keyword argument 'view'")
         self.messages.append(content)
@@ -65,12 +69,17 @@ class FakeResponse:
 DeliveryFollowup: TypeAlias = FailingFollowup | NoViewKeywordFollowup
 
 
+@dataclass(frozen=True, slots=True)
+class FakeCommand:
+    name: str
+
+
 class FakeInteraction:
     def __init__(self, command_name: str = "help", channel_id: int = 12345) -> None:
-        self.command = SimpleNamespace(name=command_name)
-        self.channel_id = channel_id
+        self.command: FakeCommand = FakeCommand(name=command_name)
+        self.channel_id: int = channel_id
         self.followup: DeliveryFollowup = FailingFollowup(fail_after=1)
-        self.response = FakeResponse()
+        self.response: FakeResponse = FakeResponse()
 
 
 class AlwaysFailingTarget:
@@ -80,16 +89,14 @@ class AlwaysFailingTarget:
 
 
 class RecordingTarget:
+    id: int = 444
+
     def __init__(self) -> None:
         self.messages: list[str] = []
 
     async def send(self, content: str, view=None) -> None:
         _ = view
         self.messages.append(content)
-
-
-def _interaction(value: FakeInteraction) -> bot.discord.Interaction:
-    return cast(bot.discord.Interaction, cast(object, value))
 
 
 def _messageable(value: AlwaysFailingTarget) -> bot.discord.abc.Messageable:
@@ -126,7 +133,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
         interaction = FakeInteraction(command_name="ask", channel_id=222)
 
         await bot.send_interaction_response_tracked(
-            _interaction(interaction),
+            interaction,
             "hello",
             ephemeral=True,
             context="adapter-test",
@@ -147,7 +154,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
         try:
             bot.run_bridge_command = lambda argv: (seen_context.append(interrupt_context.is_discord_remote_stop()) or 0, "stopped")
             target = RecordingTarget()
-            await bot.run_bridge_and_send(cast(bot.discord.abc.Messageable, cast(object, target)), ["stop"], "Stop")
+            await bot.run_bridge_and_send(target, ["stop"], "Stop")
         finally:
             bot.run_bridge_command = original
 
@@ -161,7 +168,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
         try:
             bot.run_bridge_command = lambda argv: (seen_context.append(interrupt_context.is_discord_remote_stop()) or 0, "stopped")
             interaction = FakeInteraction(command_name="stop", channel_id=222)
-            await bot.run_interaction_bridge_and_send(_interaction(interaction), ["stop"], "Stop")
+            await bot.run_interaction_bridge_and_send(interaction, ["stop"], "Stop")
         finally:
             bot.run_bridge_command = original
 
@@ -172,7 +179,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
     async def test_send_interaction_not_allowed_preserves_denial_response(self) -> None:
         interaction = FakeInteraction(command_name="ask", channel_id=333)
 
-        await bot.send_interaction_not_allowed(_interaction(interaction))
+        await bot.send_interaction_not_allowed(interaction)
 
         self.assertEqual(interaction.response.messages, ["This channel/user is not allowed."])
         self.assertEqual(interaction.response.send_message_kwargs, [{"ephemeral": True}])
@@ -189,7 +196,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
 
         with self.assertRaisesRegex(RuntimeError, "followup unavailable"):
             await bot.send_followup_chunks(
-                _interaction(interaction),
+                interaction,
                 "archive output",
                 title="Archive",
                 log_prefix="archive_followup",
@@ -206,7 +213,7 @@ class DiscordInteractionDeliveryIntegrationTests(unittest.IsolatedAsyncioTestCas
 
         with self.assertRaisesRegex(TypeError, "unexpected keyword argument 'view'"):
             await bot.send_direct_followup(
-                _interaction(interaction),
+                interaction,
                 "hello",
                 view=object(),
                 context="bad-view",

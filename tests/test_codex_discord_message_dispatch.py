@@ -41,46 +41,51 @@ class InboundDiscordMessageDispatchTests(unittest.IsolatedAsyncioTestCase):
             msg = "target lookup should not run for prefix commands"
             raise AssertionError(msg)
 
-        async def send_restarting_notice(_target: message_dispatch.DispatchChannel) -> None:
+        async def send_restarting_notice(target: message_dispatch.DispatchChannel) -> None:
+            _ = target
             return None
 
         async def maybe_send_empty_content_notice(_message: message_dispatch.InboundMessage) -> None:
             return None
 
         async def prepare_plain_ask_message_content(
-            _message: message_dispatch.InboundMessage,
-            _content: str,
-            _target_thread_id: str | None,
+            message: message_dispatch.InboundMessage,
+            content: str,
+            target_thread_id: str | None,
             *,
             has_attachments: bool,
         ) -> str | None:
+            _ = message, content, target_thread_id
             self.assertFalse(has_attachments)
             msg = "plain ask preparation should not run for prefix commands"
             raise AssertionError(msg)
 
         async def handle_prefix_command(
-            _message: message_dispatch.DispatchMessage,
+            message: message_dispatch.DispatchMessage,
             command: str,
         ) -> None:
+            _ = message
             handled_commands.append(command)
 
-        async def send_chunks(_target: message_dispatch.DispatchChannel, _text: str) -> int:
+        async def send_chunks(target: message_dispatch.DispatchChannel, text: str) -> int:
+            _ = target, text
             return 1
 
         async def handle_plain_ask(
-            _message: message_dispatch.DispatchMessage,
-            _content: str,
+            message: message_dispatch.DispatchMessage,
+            content: str,
             *,
             target_thread_id: str | None = None,
         ) -> None:
+            _ = message, content
             self.assertIsNone(target_thread_id)
             msg = "plain ask handler should not run for prefix commands"
             raise AssertionError(msg)
 
         deps = message_dispatch.InboundDiscordMessageProcessDeps(
             require_messageable_channel=lambda channel: channel,
-            is_allowed_message_channel=lambda _channel: True,
-            is_bot_authored_bridge_mention=lambda _message: False,
+            is_allowed_message_channel=lambda channel: True,
+            is_bot_authored_bridge_mention=lambda message: False,
             is_allowed_user=lambda user_id: user_id == 242286902982606848,
             is_stopping=lambda: False,
             send_restarting_notice=send_restarting_notice,

@@ -170,8 +170,8 @@ def test_launch_assigns_suspended_process_to_owned_job(
         lambda **_: "profile",
     )
 
-    def launch(*_args: object, **kwargs: object) -> _LaunchProcess:
-        creation_flags.append(int(kwargs["creationflags"]))
+    def launch(_command: list[str], **kwargs: int) -> _LaunchProcess:
+        creation_flags.append(kwargs["creationflags"])
         return process
 
     monkeypatch.setattr(windows_launch.subprocess, "Popen", launch)

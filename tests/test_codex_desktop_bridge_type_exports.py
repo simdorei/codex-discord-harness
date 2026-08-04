@@ -1,0 +1,97 @@
+# pyright: reportAttributeAccessIssue=false, reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownMemberType=false
+from __future__ import annotations
+
+import unittest
+
+import codex_desktop_bridge as bridge
+import codex_desktop_bridge_archive_retry as archive_retry
+import codex_desktop_bridge_impl as bridge_impl
+import codex_desktop_bridge_impl_chunk04 as chunk04
+import codex_desktop_bridge_impl_chunk06 as chunk06
+import codex_desktop_bridge_impl_chunk07 as chunk07
+import codex_desktop_bridge_ipc_pipe as ipc_pipe
+import codex_desktop_bridge_sidecar_resolver as sidecar_resolver
+from codex_bridge_state import JsonObject
+from codex_thread_models import ThreadInfo
+
+
+EXPECTED_EXPORTS = {
+    "ThreadInfo",
+    "_read_ipc_response",
+    "_request_start_turn_via_ipc",
+    "_write_ipc_message",
+    "activate_thread_by_sidebar_v2",
+    "archive_thread_once",
+    "build_parser",
+    "command_approval_reply",
+    "command_archive",
+    "command_ask",
+    "command_delete_archive",
+    "command_open",
+    "command_stop",
+    "command_tail",
+    "command_use",
+    "detect_running_codex_app_server_executable",
+    "make_cli_handlers",
+    "print_thread_list",
+    "stop_codex_archive_lock_candidates",
+    "verify_active_thread",
+    "verify_active_thread_by_header",
+    "wait_for_thread_activation",
+}
+
+
+class DesktopBridgeTypeExportsTests(unittest.TestCase):
+    def test_missing_static_exports_exist_at_runtime(self) -> None:
+        self.assertEqual(len(EXPECTED_EXPORTS), 22)
+        self.assertEqual([name for name in sorted(EXPECTED_EXPORTS) if not hasattr(bridge, name)], [])
+
+    def test_representative_exports_keep_runtime_identity(self) -> None:
+        self.assertIs(bridge.ThreadInfo, ThreadInfo)
+        self.assertIs(bridge.archive_thread_once, archive_retry.archive_thread_once)
+        self.assertIs(
+            bridge.detect_running_codex_app_server_executable,
+            sidecar_resolver.detect_running_codex_app_server_executable,
+        )
+        self.assertIs(bridge._write_ipc_message, ipc_pipe.write_ipc_message)
+        self.assertIs(bridge.verify_active_thread, chunk04.verify_active_thread)
+        self.assertIs(bridge.command_ask, chunk06.command_ask)
+
+    def test_public_wrapper_assignment_propagates_and_restores(self) -> None:
+        original = bridge.verify_active_thread
+
+        def fake_verify_active_thread(thread_id: str) -> str | None:
+            return f"fake:{thread_id}"
+
+        try:
+            bridge.verify_active_thread = fake_verify_active_thread
+            self.assertIs(bridge_impl.verify_active_thread, fake_verify_active_thread)
+            self.assertIs(chunk04.verify_active_thread, fake_verify_active_thread)
+        finally:
+            bridge.verify_active_thread = original
+
+        self.assertIs(bridge_impl.verify_active_thread, original)
+        self.assertIs(chunk04.verify_active_thread, original)
+
+    def test_private_ipc_assignment_propagates_and_restores(self) -> None:
+        original = bridge._write_ipc_message
+        calls: list[tuple[int, JsonObject]] = []
+
+        def fake_write_ipc_message(handle: int, payload: JsonObject) -> None:
+            calls.append((handle, payload))
+
+        try:
+            bridge._write_ipc_message = fake_write_ipc_message
+            self.assertIs(bridge_impl._write_ipc_message, fake_write_ipc_message)
+            self.assertIs(chunk07._write_ipc_message, fake_write_ipc_message)
+            bridge._write_ipc_message(7, {"method": "test"})
+            self.assertEqual(calls, [(7, {"method": "test"})])
+        finally:
+            bridge._write_ipc_message = original
+
+        self.assertIs(bridge_impl._write_ipc_message, original)
+        self.assertIs(chunk07._write_ipc_message, original)
+
+
+if __name__ == "__main__":
+    _ = unittest.main()

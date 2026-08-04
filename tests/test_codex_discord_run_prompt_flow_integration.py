@@ -6,17 +6,29 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 import unittest
 
+import discord
+
 import codex_discord_bot as bot
+import codex_discord_bot_shapes as discord_bot_shapes
 from codex_discord_runner_queue import QueueItem, QueueJobValue, ThreadRunner
 import codex_discord_runtime as discord_runtime
 from codex_discord_text import DISCORD_MAX_LEN
 
-from tests.test_codex_discord_bot import FakeMessage, FakeTarget
+from tests.test_codex_discord_bot import FakeTarget
 
 
 class DiscordRunPromptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejected_admission_sends_no_prompt_preamble(self) -> None:
         calls: list[str] = []
+        discord_client = discord.Client(intents=discord.Intents.none())
+        self.addAsyncCleanup(discord_client.close)
+        source_message = discord_bot_shapes.RuntimeBusyChoiceSourceMessage(
+            author=discord_bot_shapes.RuntimeBusyChoiceAuthor(
+                id=242286902982606848,
+                bot=False,
+            ),
+            channel=discord_client.get_partial_messageable(222),
+        )
 
         @asynccontextmanager
         async def reject_admission(
@@ -41,7 +53,7 @@ class DiscordRunPromptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await runtime.run_prompt_flow(
             channel,
             "must not start",
-            source_message=FakeMessage(),
+            source_message=source_message,
             target_thread_id="thread-1",
         )
 
@@ -226,7 +238,15 @@ class DiscordRunPromptFlowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bot.enqueue_thread_ask = fake_enqueue_thread_ask
             bot.run_prompt_and_send = fake_run_prompt_and_send
             channel = FakeTarget()
-            source_message = FakeMessage()
+            discord_client = discord.Client(intents=discord.Intents.none())
+            self.addAsyncCleanup(discord_client.close)
+            source_message = discord_bot_shapes.RuntimeBusyChoiceSourceMessage(
+                author=discord_bot_shapes.RuntimeBusyChoiceAuthor(
+                    id=242286902982606848,
+                    bot=False,
+                ),
+                channel=discord_client.get_partial_messageable(222),
+            )
 
             @asynccontextmanager
             async def accept_admission(

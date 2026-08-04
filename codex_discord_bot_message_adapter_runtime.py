@@ -41,7 +41,7 @@ class BotMessageAdapterRuntime:
 
     async def handle_prefix_command(
         self,
-        owner: discord_bot_message_runtime.MessageRuntimeOwner,
+        owner: discord_prefix_dispatch.PrefixDispatchBot,
         message: discord_message_dispatch.DispatchMessage,
         command: str,
     ) -> None:
@@ -49,7 +49,7 @@ class BotMessageAdapterRuntime:
             cast(discord_prefix_dispatch.PrefixDispatchMessage, message),
             command,
             deps=cast(
-                Callable[[discord_bot_message_runtime.MessageRuntimeOwner], discord_prefix_dispatch.PrefixDispatchDeps],
+                Callable[[discord_prefix_dispatch.PrefixDispatchBot], discord_prefix_dispatch.PrefixDispatchDeps],
                 self._module_func("_make_prefix_dispatch_deps"),
             )(owner),
         )

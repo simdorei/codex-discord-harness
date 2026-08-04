@@ -4,9 +4,10 @@ import sqlite3
 import tempfile
 import unittest
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
+
+import discord
 
 import codex_discord_mirror_stale as mirror_stale
 import codex_discord_mirror_sync as mirror_sync
@@ -15,12 +16,11 @@ import codex_discord_store as store
 from codex_thread_models import ThreadInfo
 
 
-@dataclass(frozen=True, slots=True)
-class FakeCategory:
-    id: int
+class FakeCategory(discord.CategoryChannel):
+    pass
 
 
-class FakeGuild:
+class FakeGuild(discord.Guild):
     pass
 
 
@@ -42,8 +42,8 @@ class FakeProjectChannel:
 
     async def archived_threads(self, *, limit: int) -> AsyncIterator[FakeDiscordThread]:
         _ = limit
-        if False:
-            yield self.threads[0]
+        for thread in self.threads[:0]:
+            yield thread
 
 
 class MirrorSyncOrphanSnapshotTests(unittest.IsolatedAsyncioTestCase):
@@ -124,8 +124,8 @@ class MirrorSyncOrphanSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 _ = await mirror_sync.cleanup_full_mirror_sync(
-                    FakeGuild(),
-                    FakeCategory(id=999),
+                    object.__new__(FakeGuild),
+                    object.__new__(FakeCategory),
                     [active_thread],
                     bot_user_id=123,
                     db_path=db_path,

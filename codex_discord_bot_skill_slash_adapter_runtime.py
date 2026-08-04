@@ -9,7 +9,12 @@ import codex_discord_bot_skill_slash_runtime as discord_bot_skill_slash_runtime
 import codex_discord_delivery as discord_delivery
 import codex_discord_slash_ask_flow as discord_slash_ask_flow
 import codex_discord_slash_prompt_commands as discord_slash_prompt_commands
-from codex_discord_bot_shapes import BusyChoiceAuthor, SkillSlashSourceAuthor, SlashAskSourceMessage
+from codex_discord_bot_shapes import (
+    BusyChoiceAuthor,
+    DiscordMessageableChannel,
+    SkillSlashSourceAuthor,
+    SlashAskSourceMessage,
+)
 ModuleValue: TypeAlias = object
 
 
@@ -41,12 +46,8 @@ class BotSkillSlashAdapterRuntime:
         channel: discord_slash_prompt_commands.PromptChannel,
         user: discord_slash_prompt_commands.PromptUser,
     ) -> SlashAskSourceMessage:
-        require_messageable = cast(
-            Callable[[object], discord_slash_prompt_commands.PromptChannel],
-            getattr(self.module, "require_discord_messageable"),
-        )
         return SlashAskSourceMessage(
-            channel=require_messageable(channel),
+            channel=self._resolve_skill_slash_channel(channel),
             author=SkillSlashSourceAuthor(user),
         )
 
@@ -98,11 +99,26 @@ class BotSkillSlashAdapterRuntime:
         channel: discord_slash_prompt_commands.PromptChannel,
         user: discord_slash_prompt_commands.PromptUser,
     ) -> SlashAskSourceMessage:
+        return SlashAskSourceMessage(
+            channel=self._resolve_skill_slash_channel(channel),
+            author=cast(BusyChoiceAuthor, user),
+        )
+
+    def _resolve_skill_slash_channel(
+        self,
+        channel: discord_slash_prompt_commands.PromptChannel,
+        /,
+    ) -> DiscordMessageableChannel:
         require_messageable = cast(
-            Callable[[object], discord_slash_prompt_commands.PromptChannel],
+            Callable[[object], object],
             getattr(self.module, "require_discord_messageable"),
         )
-        return SlashAskSourceMessage(channel=require_messageable(channel), author=cast(BusyChoiceAuthor, user))
+        resolved_channel = require_messageable(channel)
+        if not isinstance(getattr(resolved_channel, "id", None), int):
+            raise TypeError("Skill-slash channel must have an integer id.")
+        if not callable(getattr(resolved_channel, "send", None)):
+            raise TypeError("Skill-slash channel must provide send().")
+        return cast(DiscordMessageableChannel, resolved_channel)
 
     def is_slash_ask_messageable_channel(self, channel: discord_slash_prompt_commands.PromptChannel) -> bool:
         return hasattr(channel, "send")

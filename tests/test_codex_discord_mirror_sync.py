@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from typing import override
 from unittest import mock
+
+import discord
 
 import codex_discord_mirror_sync as mirror_sync
 
@@ -77,6 +80,18 @@ class MirrorSyncTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_cleanup_full_mirror_sync_uses_valid_scope_and_orphan_cleanup(self) -> None:
+        class FakeGuild(discord.Guild):
+            @override
+            def __str__(self) -> str:
+                return "guild"
+
+        class FakeCategory(discord.CategoryChannel):
+            @override
+            def __str__(self) -> str:
+                return "category"
+
+        guild = object.__new__(FakeGuild)
+        category = object.__new__(FakeCategory)
         cleanup_full_mirror_sync = mirror_sync.cleanup_full_mirror_sync
         events: list[tuple[str, str]] = []
         threads = [
@@ -139,8 +154,8 @@ class MirrorSyncTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(mirror_sync.discord_mirror_orphans, "cleanup_orphan_discord_threads", cleanup_orphans),
         ):
             result = await cleanup_full_mirror_sync(
-                "guild",
-                "category",
+                guild,
+                category,
                 threads,
                 bot_user_id=999,
                 db_path=db_path,

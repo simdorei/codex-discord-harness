@@ -23,8 +23,16 @@ class BadSessionMirrorTargetDependencyError(TypeError):
     pass
 
 
+class SessionMirrorLoopClient(Protocol):
+    session_mirror_poll_seconds: float
+
+    def is_closed(self) -> bool: ...
+
+    async def mirror_session_target(self, target: SessionMirrorTarget) -> None: ...
+
+
 class SessionMirrorLoopFunc(Protocol):
-    def __call__(self, client: bot.CodexDiscordBot) -> Awaitable[None]: ...
+    def __call__(self, client: SessionMirrorLoopClient, /) -> Awaitable[None]: ...
 
 
 SESSION_MIRROR_LOOP = cast(SessionMirrorLoopFunc, bot.CodexDiscordBot.session_mirror_loop)
@@ -77,7 +85,7 @@ class DiscordSessionMirrorLoopIntegrationTests(unittest.IsolatedAsyncioTestCase)
             mock.patch("codex_discord_bot.asyncio.to_thread", fake_to_thread),
             mock.patch("codex_discord_bot.asyncio.sleep", fake_sleep),
         ):
-            log_text = await self._run_with_log(SESSION_MIRROR_LOOP(cast(bot.CodexDiscordBot, client)))
+            log_text = await self._run_with_log(SESSION_MIRROR_LOOP(client))
 
         self.assertEqual(calls, ["to_thread", "to_thread"])
         self.assertIn("session_mirror_cycle_failed", log_text)
@@ -107,7 +115,7 @@ class DiscordSessionMirrorLoopIntegrationTests(unittest.IsolatedAsyncioTestCase)
             mock.patch("codex_discord_bot.asyncio.to_thread", fake_to_thread),
             mock.patch("codex_discord_bot.asyncio.sleep", fake_sleep),
         ):
-            log_text = await self._run_with_log(SESSION_MIRROR_LOOP(cast(bot.CodexDiscordBot, client)))
+            log_text = await self._run_with_log(SESSION_MIRROR_LOOP(client))
 
         self.assertEqual(calls, ["to_thread", "to_thread"])
         self.assertEqual(sleeps, [0.01, 0.01])

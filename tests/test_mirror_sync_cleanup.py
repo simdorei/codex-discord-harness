@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import discord
+
 import codex_discord_mirror_sync as mirror_sync
 import codex_discord_bot as bot
 from codex_thread_models import ThreadInfo
@@ -262,9 +264,11 @@ class MirrorSyncCleanupTests(unittest.IsolatedAsyncioTestCase):
                 )
                 mirror_sync.discord_mirror_orphans.cleanup_orphan_discord_threads = fake_cleanup_orphan_threads
 
+                guild = object.__new__(discord.Guild)
+                category = object.__new__(discord.CategoryChannel)
                 _ = await mirror_sync.cleanup_full_mirror_sync(
-                    SimpleNamespace(),
-                    SimpleNamespace(),
+                    guild,
+                    category,
                     [thread],
                     bot_user_id=None,
                     db_path=db_path,

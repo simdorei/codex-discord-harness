@@ -272,7 +272,7 @@ def window_info() -> WindowInfo:
 
 def final_result(text: str) -> ask_types.WatchResult:
     return {
-        "status": "ready",
+        "status": "final",
         "commentary": [],
         "final_answer": text,
         "streamed_live": False,

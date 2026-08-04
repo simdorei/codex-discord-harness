@@ -6,6 +6,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast, TypeAlias
 
+import discord
+
 import codex_discord_bridge_session_state as discord_bridge_session_state
 import codex_discord_bridge_protocols as discord_bridge_protocols
 import codex_discord_mirror_access as discord_mirror_access
@@ -32,13 +34,7 @@ class BotMirrorAdapterRuntime:
 
     def make_mirror_runtime(
         self,
-    ) -> discord_mirror_runtime.MirrorRuntime[
-        discord_mirror_access.MirrorAccessBot,
-        ModuleValue,
-        ModuleValue,
-        ModuleValue,
-        ModuleValue,
-    ]:
+    ) -> discord_mirror_runtime.MirrorRuntime[discord_mirror_access.MirrorAccessBot]:
         return discord_mirror_runtime.MirrorRuntime(
             discord_mirror_runtime.MirrorRuntimeDeps(
                 get_db_path=lambda: cast(Path, getattr(self.module, "MIRROR_DB_PATH")),
@@ -63,11 +59,11 @@ class BotMirrorAdapterRuntime:
                     self._module_func("filter_app_server_available_threads"),
                 )(threads),
                 get_mirror_guild=lambda bot: cast(
-                    Callable[[discord_mirror_access.MirrorAccessBot], Awaitable[object]],
+                    Callable[[discord_mirror_access.MirrorAccessBot], Awaitable[discord.Guild]],
                     self._module_func("get_mirror_guild"),
                 )(bot),
                 get_or_create_mirror_category=lambda guild: cast(
-                    Callable[[object], Awaitable[object]],
+                    Callable[[discord.Guild], Awaitable[discord.CategoryChannel]],
                     self._module_func("get_or_create_mirror_category"),
                 )(guild),
                 choose_thread=lambda thread_id, fallback: cast(
@@ -81,11 +77,14 @@ class BotMirrorAdapterRuntime:
                     self._module_func("upsert_mirror_project"),
                 )(project_key, project_name, channel_id),
                 get_or_create_project_channel=lambda guild, category, project_key, project_name: cast(
-                    Callable[[object, object, str, str], Awaitable[object]],
+                    Callable[
+                        [discord.Guild, discord.CategoryChannel, str, str],
+                        Awaitable[discord.TextChannel],
+                    ],
                     self._module_func("get_or_create_project_channel"),
                 )(guild, category, project_key, project_name),
                 get_or_create_thread_channel=lambda thread, project_key, project_channel: cast(
-                    Callable[[ThreadInfo, str, object], Awaitable[object]],
+                    Callable[[ThreadInfo, str, discord.TextChannel], Awaitable[discord.Thread]],
                     self._module_func("get_or_create_thread_channel"),
                 )(thread, project_key, project_channel),
                 get_mirrored_codex_thread_id=lambda channel_id: cast(

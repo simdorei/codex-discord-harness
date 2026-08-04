@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import codex_discord_interaction_gate as gate
+
+
+@dataclass(frozen=True, slots=True)
+class FakeUser:
+    id: int
+
+
+@dataclass(frozen=True, slots=True)
+class FakeChannel:
+    id: int
+
+
+@dataclass(frozen=True, slots=True)
+class FakeInteraction:
+    user: FakeUser | None
+    channel_id: int
+    channel: FakeChannel | None = None
 
 
 class FakeBot:
@@ -48,7 +65,7 @@ class InteractionGateTests(unittest.TestCase):
 
     def test_rejects_disallowed_user_and_logs_reason(self) -> None:
         logs: list[str] = []
-        interaction = SimpleNamespace(user=SimpleNamespace(id=8), channel_id=11, channel=None)
+        interaction = FakeInteraction(user=FakeUser(id=8), channel_id=11)
 
         allowed = gate.check_interaction_allowed(
             FakeBot(),
@@ -66,7 +83,7 @@ class InteractionGateTests(unittest.TestCase):
 
     def test_allows_explicit_allowed_channel(self) -> None:
         logs: list[str] = []
-        interaction = SimpleNamespace(user=SimpleNamespace(id=7), channel_id=11, channel=None)
+        interaction = FakeInteraction(user=FakeUser(id=7), channel_id=11)
 
         allowed = gate.check_interaction_allowed(
             FakeBot(),
@@ -81,7 +98,7 @@ class InteractionGateTests(unittest.TestCase):
 
     def test_allows_mirrored_channel(self) -> None:
         logs: list[str] = []
-        interaction = SimpleNamespace(user=SimpleNamespace(id=7), channel_id=22, channel=None)
+        interaction = FakeInteraction(user=FakeUser(id=7), channel_id=22)
 
         allowed = gate.check_interaction_allowed(
             FakeBot(),
@@ -96,8 +113,8 @@ class InteractionGateTests(unittest.TestCase):
 
     def test_allows_allowed_message_channel_object(self) -> None:
         logs: list[str] = []
-        channel = SimpleNamespace(id=33)
-        interaction = SimpleNamespace(user=SimpleNamespace(id=7), channel_id=33, channel=channel)
+        channel = FakeChannel(id=33)
+        interaction = FakeInteraction(user=FakeUser(id=7), channel_id=33, channel=channel)
 
         allowed = gate.check_interaction_allowed(
             FakeBot(allowed_message_channels={33}),
@@ -112,7 +129,7 @@ class InteractionGateTests(unittest.TestCase):
 
     def test_rejects_disallowed_channel_and_logs_reason(self) -> None:
         logs: list[str] = []
-        interaction = SimpleNamespace(user=SimpleNamespace(id=7), channel_id=44, channel=None)
+        interaction = FakeInteraction(user=FakeUser(id=7), channel_id=44)
 
         allowed = gate.check_interaction_allowed(
             FakeBot(),

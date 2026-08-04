@@ -65,8 +65,7 @@ class AppServerDeliveryClient(Protocol):
     def note_thread_activity(self, thread_id: str) -> None: ...
 
 
-# The facade exports implementation functions dynamically, so static analysis cannot see them.
-_DEFAULT_BRIDGE_MODULE: BridgeModule = bridge  # pyright: ignore[reportAssignmentType]
+_DEFAULT_BRIDGE_MODULE: BridgeModule = bridge
 
 
 def start_turn_no_wait(

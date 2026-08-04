@@ -1,20 +1,36 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 import tempfile
+from typing import Protocol, cast, runtime_checkable
 import unittest
+
+import discord
 
 import codex_discord_bot as bot
 
 from tests.test_codex_discord_bot import EnvPatch, FakeInteraction, FakeTarget
 from tests.test_codex_discord_busy_choice_steer_callback_integration import (
-    BusyChoiceViewWithChildren,
     BusyMessage,
     SendText,
     StreamCall,
     StreamSteering,
 )
+
+
+@runtime_checkable
+class MirrorSteerButton(Protocol):
+    @property
+    def label(self) -> str | None: ...
+
+    async def callback(self, interaction: FakeInteraction, /) -> object: ...
+
+
+def find_steer_button(view: discord.ui.View) -> MirrorSteerButton:
+    for item in view.children:
+        if isinstance(item, MirrorSteerButton) and item.label == "Steer now":
+            return item
+    raise StopIteration("Steer now button not found")
 
 
 class DiscordBusyChoiceSteerMirrorIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -72,16 +88,13 @@ class DiscordBusyChoiceSteerMirrorIntegrationTests(unittest.IsolatedAsyncioTestC
             with tempfile.TemporaryDirectory() as temp_dir:
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 message = BusyMessage()
-                view = cast(
-                    BusyChoiceViewWithChildren,
-                    bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1"),
-                )
-                button = next(item for item in view.children if item.label == "Steer now")
+                view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
+                button = find_steer_button(view)
                 interaction = FakeInteraction()
 
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
                     with EnvPatch("DISCORD_SESSION_MIRROR", "1"):
-                        await button.callback(interaction)
+                        _ = await button.callback(interaction)
                 log_text = log_path.read_text(encoding="utf-8")
 
             self.assertEqual(order, [("prime", "thread-1"), ("run", "thread-1")])

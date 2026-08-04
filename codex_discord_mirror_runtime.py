@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
+import discord
+
 import codex_discord_bridge_session_state as discord_bridge_session_state
 import codex_discord_mirror_access as discord_mirror_access
 import codex_discord_mirror_scope as discord_mirror_scope
@@ -17,10 +19,6 @@ from codex_thread_models import ThreadInfo
 
 BotT = TypeVar("BotT", bound=discord_mirror_access.MirrorAccessBot)
 BotContraT = TypeVar("BotContraT", bound=discord_mirror_access.MirrorAccessBot, contravariant=True)
-GuildT = TypeVar("GuildT")
-CategoryT = TypeVar("CategoryT")
-ProjectChannelT = TypeVar("ProjectChannelT")
-ThreadChannelT = TypeVar("ThreadChannelT")
 ExceptionTypes = tuple[type[BaseException], ...]
 
 
@@ -29,21 +27,27 @@ class SyncCodexMirrorFunc(Protocol[BotContraT]):
 
 
 @dataclass(frozen=True, slots=True)
-class MirrorRuntimeDeps(Generic[BotT, GuildT, CategoryT, ProjectChannelT, ThreadChannelT]):
+class MirrorRuntimeDeps(Generic[BotT]):
     get_db_path: Callable[[], Path]
     get_mirror_scope_bridge_module: Callable[[], discord_mirror_scope.MirrorScopeBridge]
     load_mirror_scope_threads: Callable[[int | None], list[ThreadInfo]]
     filter_threads_for_discord_channel: Callable[[list[ThreadInfo], int | None], list[ThreadInfo]]
     filter_mirrorable_threads: Callable[[list[ThreadInfo]], list[ThreadInfo]]
     filter_app_server_available_threads: Callable[[list[ThreadInfo]], list[ThreadInfo]]
-    get_mirror_guild: Callable[[BotT], Awaitable[GuildT]]
-    get_or_create_mirror_category: Callable[[GuildT], Awaitable[CategoryT]]
+    get_mirror_guild: Callable[[BotT], Awaitable[discord.Guild]]
+    get_or_create_mirror_category: Callable[[discord.Guild], Awaitable[discord.CategoryChannel]]
     choose_thread: Callable[[str, str | None], ThreadInfo]
     get_project_key: Callable[[ThreadInfo], str]
     get_project_name: Callable[[ThreadInfo], str]
     upsert_mirror_project: Callable[[str, str, int], None]
-    get_or_create_project_channel: Callable[[GuildT, CategoryT, str, str], Awaitable[ProjectChannelT]]
-    get_or_create_thread_channel: Callable[[ThreadInfo, str, ProjectChannelT], Awaitable[ThreadChannelT]]
+    get_or_create_project_channel: Callable[
+        [discord.Guild, discord.CategoryChannel, str, str],
+        Awaitable[discord.TextChannel],
+    ]
+    get_or_create_thread_channel: Callable[
+        [ThreadInfo, str, discord.TextChannel],
+        Awaitable[discord.Thread],
+    ]
     get_mirrored_codex_thread_id: Callable[[int | None], str | None]
     get_mirror_project_for_channel: Callable[[int | None], tuple[str, str] | None]
     project_keys_match: Callable[[str, str], bool]
@@ -57,8 +61,8 @@ class MirrorRuntimeDeps(Generic[BotT, GuildT, CategoryT, ProjectChannelT, Thread
 
 
 @dataclass(frozen=True, slots=True)
-class MirrorRuntime(Generic[BotT, GuildT, CategoryT, ProjectChannelT, ThreadChannelT]):
-    deps: MirrorRuntimeDeps[BotT, GuildT, CategoryT, ProjectChannelT, ThreadChannelT]
+class MirrorRuntime(Generic[BotT]):
+    deps: MirrorRuntimeDeps[BotT]
 
     def load_mirror_scope_threads(self, limit: int | None = None) -> list[ThreadInfo]:
         return discord_mirror_scope.load_mirror_scope_threads(
@@ -133,7 +137,7 @@ class MirrorRuntime(Generic[BotT, GuildT, CategoryT, ProjectChannelT, ThreadChan
         thread_id: str,
         *,
         preferred_project_channel_id: int | None = None,
-    ) -> ThreadChannelT:
+    ) -> discord.Thread:
         return await discord_mirror_single_thread.mirror_single_codex_thread(
             bot,
             thread_id,

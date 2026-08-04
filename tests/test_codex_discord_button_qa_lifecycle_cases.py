@@ -4,11 +4,13 @@ import unittest
 from dataclasses import dataclass, field
 
 import codex_discord_button_qa_lifecycle_cases as lifecycle_cases
+from codex_discord_components import ComponentRowLike
 
 
 @dataclass(frozen=True)
 class FakeMessage:
     content: str
+    components: tuple[ComponentRowLike, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ class BusyChoiceLifecycleQaCaseTests(unittest.IsolatedAsyncioTestCase):
         messages_by_action = handler_messages or {}
         results_by_action = handler_results or {}
 
-        async def send_case_button(prompt: str) -> tuple[object, dict[str, str], str]:
+        async def send_case_button(prompt: str) -> lifecycle_cases.SendCaseButtonResult:
             choice_id = _choice_id(prompt)
             records[choice_id] = True
             cases.append(CaseEvent(prompt, choice_id))

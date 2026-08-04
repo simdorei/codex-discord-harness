@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import argparse
 import asyncio
 import io
 import json
@@ -10,13 +13,34 @@ from unittest import mock
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Literal, final, overload, override
 
+import discord
+from aiohttp import ClientSession
+from discord.state import ConnectionState
 import codex_discord_bot as bot
 import codex_discord_busy as discord_busy
 import codex_discord_message_gate as message_gate
 import codex_desktop_bridge as bridge
+import codex_desktop_bridge_final_answer_types as final_answer_types
+import codex_desktop_bridge_ipc_start_turn as ipc_start_turn
 import codex_desktop_bridge_sidecar_resolver as sidecar_resolver
 import codex_windows_harness as harness
+
+if TYPE_CHECKING:
+    from discord.types.channel import DMChannel as DiscordDMChannelPayload
+    from discord.types.interactions import (
+        ApplicationCommandInteraction as DiscordApplicationCommandInteraction,
+    )
+    from discord.types.user import User as DiscordUserPayload
+
+
+def _require_json_object(
+    value: ipc_start_turn.JsonValue | None,
+) -> ipc_start_turn.JsonObject:
+    if not isinstance(value, dict):
+        raise AssertionError(f"Expected JSON object, got {value!r}")
+    return value
 
 
 def _final_turn_events(text: str) -> list[dict[str, object]]:
@@ -41,6 +65,114 @@ def _final_turn_events(text: str) -> list[dict[str, object]]:
             },
         },
     ]
+
+
+@final
+class DiscordTestClient(discord.Client):
+    @property
+    def connection_state(self) -> ConnectionState:
+        return self._connection
+
+
+@final
+class DiscordFakeFollowup(discord.Webhook):
+    def __init__(
+        self,
+        interaction: discord.Interaction[discord.Client],
+        state: ConnectionState,
+        session: ClientSession,
+    ) -> None:
+        if not isinstance(interaction.channel, discord.DMChannel):
+            raise AssertionError("Expected a DM channel for the test interaction")
+        super().__init__(
+            data={
+                "id": str(interaction.application_id),
+                "type": 3,
+                "token": interaction.token,
+            },
+            session=session,
+            token=interaction.token,
+            state=state,
+        )
+        self.messages: list[object] = []
+        self.kwargs: list[dict[str, object]] = []
+        self.return_message: discord.WebhookMessage = discord.WebhookMessage(
+            state=state,
+            channel=interaction.channel,
+            data={
+                "id": "1001",
+                "channel_id": str(interaction.channel.id),
+                "author": {
+                    "id": "1",
+                    "username": "test-user",
+                    "discriminator": "0",
+                    "avatar": None,
+                    "global_name": None,
+                },
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "edited_timestamp": None,
+                "tts": False,
+                "mention_everyone": False,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": False,
+                "type": 0,
+                "content": "",
+            },
+        )
+
+    @overload
+    async def send(
+        self,
+        *,
+        view: discord.ui.LayoutView,
+        wait: Literal[True],
+        **kwargs: object,
+    ) -> discord.WebhookMessage: ...
+
+    @overload
+    async def send(
+        self,
+        *,
+        view: discord.ui.LayoutView,
+        wait: Literal[False] = False,
+        **kwargs: object,
+    ) -> None: ...
+
+    @overload
+    async def send(
+        self,
+        content: object = "",
+        *,
+        view: discord.ui.View = ...,
+        wait: Literal[True],
+        **kwargs: object,
+    ) -> discord.WebhookMessage: ...
+
+    @overload
+    async def send(
+        self,
+        content: object = "",
+        *,
+        view: discord.ui.View = ...,
+        wait: Literal[False] = False,
+        **kwargs: object,
+    ) -> None: ...
+
+    @override
+    async def send(
+        self,
+        content: object = "",
+        *,
+        view: object = None,
+        wait: bool = False,
+        **kwargs: object,
+    ) -> discord.WebhookMessage | None:
+        self.messages.append(content if view is None else (content, view))
+        self.kwargs.append(kwargs)
+        return self.return_message if wait else None
 
 
 class FakeFollowup:
@@ -74,6 +206,75 @@ class NoViewKeywordFollowup:
             raise TypeError("send() got an unexpected keyword argument 'view'")
         self.messages.append(content)
         self.kwargs.append(kwargs)
+
+
+@final
+class FakeInteractionCallbackResponse(
+    discord.InteractionCallbackResponse[discord.Client]
+):
+    def __init__(
+        self,
+        parent: discord.Interaction[discord.Client],
+        state: ConnectionState,
+    ) -> None:
+        super().__init__(
+            data={
+                "interaction": {
+                    "id": str(parent.id),
+                    "type": discord.InteractionType.application_command.value,
+                }
+            },
+            parent=parent,
+            state=state,
+            type=discord.InteractionResponseType.channel_message,
+        )
+
+
+@final
+class DiscordFakeResponse(discord.InteractionResponse[discord.Client]):
+    def __init__(
+        self,
+        parent: discord.Interaction[discord.Client],
+        state: ConnectionState,
+    ) -> None:
+        super().__init__(parent)
+        self.parent: discord.Interaction[discord.Client] = parent
+        self.state: ConnectionState = state
+        self.messages: list[str] = []
+        self.send_message_kwargs: list[dict[str, bool]] = []
+        self.deferred: bool = False
+        self.done: bool = False
+        self.defer_kwargs: list[dict[str, object]] = []
+
+    @override
+    async def send_message(
+        self,
+        content: object | None = None,
+        *,
+        ephemeral: bool = False,
+        **kwargs: object,
+    ) -> discord.InteractionCallbackResponse[discord.Client]:
+        _ = kwargs
+        self.messages.append(str(content))
+        self.send_message_kwargs.append({"ephemeral": ephemeral})
+        self.done = True
+        return FakeInteractionCallbackResponse(self.parent, self.state)
+
+    @override
+    async def defer(
+        self,
+        *,
+        ephemeral: bool = False,
+        thinking: bool = False,
+    ) -> discord.InteractionCallbackResponse[discord.Client] | None:
+        self.deferred = True
+        self.done = True
+        self.defer_kwargs.append({"thinking": thinking, "ephemeral": ephemeral})
+        return None
+
+    @override
+    def is_done(self) -> bool:
+        return self.done
 
 
 class FakeResponse:
@@ -121,6 +322,49 @@ class FakeInteractionMessage:
         self.edits.append(view)
         if view is None:
             self.components = []
+
+
+@final
+class DiscordFailingEditInteractionMessage(discord.InteractionMessage):
+    def __init__(
+        self,
+        state: ConnectionState,
+        channel: discord.DMChannel,
+        exc: BaseException,
+    ) -> None:
+        super().__init__(
+            state=state,
+            channel=channel,
+            data={
+                "id": "1000",
+                "channel_id": str(channel.id),
+                "author": {
+                    "id": "1",
+                    "username": "test-user",
+                    "discriminator": "0",
+                    "avatar": None,
+                    "global_name": None,
+                },
+                "content": "",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "edited_timestamp": None,
+                "tts": False,
+                "mention_everyone": False,
+                "mentions": [],
+                "mention_roles": [],
+                "attachments": [],
+                "embeds": [],
+                "pinned": False,
+                "type": 0,
+                "components": [],
+            },
+        )
+        self.exc: BaseException = exc
+
+    @override
+    async def edit(self, **kwargs: object) -> discord.InteractionMessage:
+        _ = kwargs
+        raise self.exc
 
 
 class FailingEditInteractionMessage(FakeInteractionMessage):
@@ -175,9 +419,11 @@ class AlwaysFailingTarget(FakeTarget):
         raise RuntimeError("send unavailable")
 
 
-class ReturningTarget(FakeTarget):
+class ReturningTarget:
     def __init__(self, channel_id: int = 222, parent_id: int | None = None) -> None:
-        super().__init__(channel_id=channel_id, parent_id=parent_id)
+        self.messages: list[tuple[str, object | None]] = []
+        self.id: int = channel_id
+        self.parent_id: int | None = parent_id
         self.sent_messages: list[FakeInteractionMessage] = []
 
     async def send(self, content: str, view=None) -> FakeInteractionMessage:
@@ -203,6 +449,90 @@ class ViewFailingTarget(FakeTarget):
         await super().send(content, view=view)
 
 
+@final
+class DiscordFakeInteraction(discord.Interaction[discord.Client]):
+    def __init__(
+        self,
+        command_name: str = "help",
+        channel_id: int = 12345,
+        *,
+        user_id: int = 242286902982606848,
+        message_failure: BaseException | None = None,
+    ) -> None:
+        _ = command_name
+        self.fake_client: DiscordTestClient = DiscordTestClient(
+            intents=discord.Intents.none()
+        )
+        state = self.fake_client.connection_state
+        user_payload: DiscordUserPayload = {
+            "id": str(user_id),
+            "username": "test-user",
+            "discriminator": "0",
+            "avatar": None,
+            "global_name": None,
+        }
+        interaction_payload: DiscordApplicationCommandInteraction = {
+            "id": "1",
+            "type": discord.InteractionType.application_command.value,
+            "token": "test-token",
+            "version": 1,
+            "application_id": "1",
+            "attachment_size_limit": 8_388_608,
+            "authorizing_integration_owners": {},
+            "channel": {
+                "id": str(channel_id),
+                "type": 1,
+                "name": "test-dm",
+                "last_message_id": None,
+            },
+            "data": {
+                "id": "1",
+                "name": command_name,
+                "type": 1,
+            },
+        }
+        super().__init__(
+            data=interaction_payload,
+            state=state,
+        )
+        self.user = discord.User(
+            state=state,
+            data=user_payload,
+        )
+        client_user = discord.ClientUser(
+            state=state,
+            data=user_payload,
+        )
+        channel_payload: DiscordDMChannelPayload = {
+            "id": str(channel_id),
+            "type": 1,
+            "name": "test-dm",
+            "last_message_id": None,
+            "recipients": [],
+        }
+        self.fake_channel: discord.DMChannel = discord.DMChannel(
+            me=client_user,
+            state=state,
+            data=channel_payload,
+        )
+        self.channel = self.fake_channel
+        if message_failure is not None:
+            self.message = DiscordFailingEditInteractionMessage(
+                state,
+                self.fake_channel,
+                message_failure,
+            )
+        self.fake_followup: DiscordFakeFollowup = DiscordFakeFollowup(
+            self,
+            state,
+            self._session,
+        )
+        self.fake_response: DiscordFakeResponse = DiscordFakeResponse(self, state)
+        self._cs_followup = self.fake_followup
+        self._cs_response = self.fake_response
+        self._cs_command = None
+
+
 class FakeInteraction:
     def __init__(self, command_name: str = "help", channel_id: int = 12345) -> None:
         self.command = SimpleNamespace(name=command_name)
@@ -212,15 +542,32 @@ class FakeInteraction:
         self.user = SimpleNamespace(id=242286902982606848)
         self.channel = None
         self.message = FakeInteractionMessage()
-        self.type = bot.discord.InteractionType.application_command
+        self.type = discord.InteractionType.application_command
         self.data: dict[str, object] = {}
+
+
+class FakeAuthor:
+    def __init__(
+        self,
+        author_id: int = 242286902982606848,
+        *,
+        bot: bool = False,
+    ) -> None:
+        self.id: int = author_id
+        self.bot: bool = bot
+
+
+class ReturningTargetMessage:
+    def __init__(self, channel_id: int = 222) -> None:
+        self.channel: ReturningTarget = ReturningTarget(channel_id=channel_id)
+        self.author: FakeAuthor = FakeAuthor()
 
 
 class FakeMessage:
     def __init__(self, content: str = "", channel_id: int = 222, message_id: int | None = None) -> None:
         self.id = message_id
         self.channel = FakeTarget(channel_id=channel_id)
-        self.author = SimpleNamespace(id=242286902982606848, bot=False)
+        self.author: FakeAuthor = FakeAuthor()
         self.content = content
         self.raw_mentions: list[int] = []
         self.mentions: list[object] = []
@@ -242,8 +589,89 @@ class FakeAttachment:
         self.content_type = content_type
         self.size = len(data)
 
-    async def save(self, destination: object) -> None:
+    async def save(self, destination: Path) -> None:
         Path(destination).write_bytes(self._data)
+
+
+class IdleSidecarClient:
+    def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = False,
+    ) -> ipc_start_turn.JsonObject:
+        _ = thread_id, include_turns
+        return {"thread": {"status": {"type": "idle"}}}
+
+    def close(self) -> None:
+        return None
+
+
+class PreflightTargetBridge:
+    def __init__(self, thread: bridge.ThreadInfo, busy_failure_message: str) -> None:
+        self.thread: bridge.ThreadInfo = thread
+        self.busy_failure_message: str = busy_failure_message
+
+    def choose_thread(
+        self,
+        thread_id: str | None,
+        cwd: str | None,
+    ) -> bridge.ThreadInfo:
+        _ = thread_id, cwd
+        return self.thread
+
+    def get_thread_workspace_ref(self, thread: bridge.ThreadInfo) -> str:
+        _ = thread
+        return "repo:1"
+
+    def get_thread_label(self, thread: bridge.ThreadInfo) -> str:
+        _ = thread
+        return "repo:1"
+
+    def get_thread_busy_state(
+        self,
+        thread: bridge.ThreadInfo,
+        *,
+        allow_resume: bool = True,
+    ) -> str:
+        _ = thread, allow_resume
+        raise AssertionError(self.busy_failure_message)
+
+    def get_busy_threads(self, limit: int = 50) -> list[bridge.ThreadInfo]:
+        _ = limit
+        raise AssertionError(self.busy_failure_message)
+
+
+class DesktopDiscoveryStub:
+    def __init__(
+        self,
+        result: tuple[Path | None, str] = (None, ""),
+        failure: RuntimeError | None = None,
+    ) -> None:
+        self.result: tuple[Path | None, str] = result
+        self.failure: RuntimeError | None = failure
+
+    def discover_codex_desktop_executable(self) -> tuple[Path | None, str]:
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+
+class ProjectCleanupGuildStub:
+    def __init__(self, channel: object) -> None:
+        self.channel: object = channel
+
+    def get_channel(self, channel_id: int, /) -> object | None:
+        return self.channel if channel_id == 111 else None
+
+    async def fetch_channel(self, channel_id: int, /) -> object:
+        _ = channel_id
+        return self.channel
+
+
+class ProjectCleanupCategoryStub:
+    def __init__(self, category_id: int) -> None:
+        self.id: int = category_id
 
 
 class FakeBot:
@@ -278,49 +706,89 @@ class EnvPatch:
             os.environ[self.key] = self.original
 
 
+def _restore_env(name: str, previous: str | None) -> None:
+    if previous is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = previous
+
+
+def _restore_dict(target: dict[str, float], snapshot: dict[str, float]) -> None:
+    target.clear()
+    target.update(snapshot)
+
+
+def _restore_set(target: set[str], snapshot: set[str]) -> None:
+    target.clear()
+    target.update(snapshot)
+
+
+def _restore_mirror_db_path(previous: Path) -> None:
+    bot.MIRROR_DB_PATH = previous
+
+
 class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self._old_app_server_transport_env = os.environ.get("CODEX_DISCORD_APP_SERVER_TRANSPORT")
+        mirror_db_temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(mirror_db_temp_dir.cleanup)
+
+        old_app_server_transport_env = os.environ.get("CODEX_DISCORD_APP_SERVER_TRANSPORT")
+        self.addCleanup(
+            _restore_env,
+            "CODEX_DISCORD_APP_SERVER_TRANSPORT",
+            old_app_server_transport_env,
+        )
         os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = "0"
-        self._goal_status_patch = mock.patch.object(
+
+        old_mirror_db_path = bot.MIRROR_DB_PATH
+        self.addCleanup(_restore_mirror_db_path, old_mirror_db_path)
+        bot.MIRROR_DB_PATH = Path(mirror_db_temp_dir.name) / "mirror.sqlite"
+
+        old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
+        self.addCleanup(_restore_env, "CODEX_DISCORD_LOG_PATH", old_discord_log_path)
+        os.environ["CODEX_DISCORD_LOG_PATH"] = str(
+            Path(mirror_db_temp_dir.name) / "test_discord_bot.log"
+        )
+
+        mirror_state = bot.get_session_mirror_state()
+        old_active_output_targets = dict(mirror_state.active_output_targets)
+        self.addCleanup(_restore_dict, mirror_state.active_output_targets, old_active_output_targets)
+        mirror_state.active_output_targets.clear()
+
+        old_pending_cursor_targets = set(mirror_state.pending_cursor_targets)
+        self.addCleanup(_restore_set, mirror_state.pending_cursor_targets, old_pending_cursor_targets)
+        mirror_state.pending_cursor_targets.clear()
+
+        self.addCleanup(bot.ACTIVE_DISCORD_DELIVERIES.clear)
+        bot.ACTIVE_DISCORD_DELIVERIES.clear()
+        self.addCleanup(bot.clear_discord_delivery_stopping)
+        bot.clear_discord_delivery_stopping()
+
+        goal_status_patch = mock.patch.object(
             bot.app_server_transport.DEFAULT_CLIENT,
             "get_thread_goal_status",
             return_value=None,
         )
-        _ = self._goal_status_patch.start()
-        self._old_mirror_db_path = bot.MIRROR_DB_PATH
-        self._old_discord_log_path = os.environ.get("CODEX_DISCORD_LOG_PATH")
-        self._old_active_session_mirror_output_targets = dict(bot.get_session_mirror_state().active_output_targets)
-        self._old_pending_session_mirror_cursor_targets = set(bot.get_session_mirror_state().pending_cursor_targets)
-        bot.get_session_mirror_state().active_output_targets.clear()
-        bot.get_session_mirror_state().pending_cursor_targets.clear()
-        bot.ACTIVE_DISCORD_DELIVERIES.clear()
-        bot.clear_discord_delivery_stopping()
-        self._mirror_db_temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        bot.MIRROR_DB_PATH = Path(self._mirror_db_temp_dir.name) / "mirror.sqlite"
-        os.environ["CODEX_DISCORD_LOG_PATH"] = str(
-            Path(self._mirror_db_temp_dir.name) / "test_discord_bot.log"
-        )
+        _ = goal_status_patch.start()
+        self.addCleanup(goal_status_patch.stop)
         bot.init_mirror_db()
 
-    def tearDown(self) -> None:
-        self._goal_status_patch.stop()
-        if self._old_app_server_transport_env is None:
-            os.environ.pop("CODEX_DISCORD_APP_SERVER_TRANSPORT", None)
-        else:
-            os.environ["CODEX_DISCORD_APP_SERVER_TRANSPORT"] = self._old_app_server_transport_env
-        bot.MIRROR_DB_PATH = self._old_mirror_db_path
-        if self._old_discord_log_path is None:
-            os.environ.pop("CODEX_DISCORD_LOG_PATH", None)
-        else:
-            os.environ["CODEX_DISCORD_LOG_PATH"] = self._old_discord_log_path
-        bot.get_session_mirror_state().active_output_targets.clear()
-        bot.get_session_mirror_state().active_output_targets.update(self._old_active_session_mirror_output_targets)
-        bot.get_session_mirror_state().pending_cursor_targets.clear()
-        bot.get_session_mirror_state().pending_cursor_targets.update(self._old_pending_session_mirror_cursor_targets)
-        bot.ACTIVE_DISCORD_DELIVERIES.clear()
-        bot.clear_discord_delivery_stopping()
-        self._mirror_db_temp_dir.cleanup()
+    def _make_message_test_client(
+        self,
+        *,
+        allowed_user_ids: set[int],
+        plain_ask_mention_user_ids: set[int] | None = None,
+    ) -> bot.CodexDiscordBot:
+        client = bot.CodexDiscordBot(
+            allowed_channel_ids=set(),
+            allowed_user_ids=allowed_user_ids,
+            startup_channel_id=None,
+            guild_id=None,
+            enable_prefix_commands=True,
+            plain_ask_mention_user_ids=plain_ask_mention_user_ids,
+        )
+        self.addAsyncCleanup(client.close)
+        return client
 
     def test_bridge_stream_runs_in_subprocess_without_cross_thread_output(self) -> None:
         original_get_bridge_script_path = bot.get_bridge_script_path
@@ -888,7 +1356,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bridge.verify_active_thread_by_header = fake_verify_header
             bridge.verify_active_thread = lambda thread_id: None
             bridge.time.time = lambda: now[0]
-            bridge.time.sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)
+            bridge.time.sleep = lambda seconds: now.__setitem__(0, now[0] + float(seconds))
 
             self.assertEqual(
                 bridge.wait_for_thread_activation(thread_info, "Thread", timeout_sec=2.0),
@@ -964,9 +1432,16 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
     def test_bridge_ipc_start_turn_inherits_summary_setting(self) -> None:
         original_write_ipc_message = bridge._write_ipc_message
         original_read_ipc_response = bridge._read_ipc_response
-        written_payloads: list[dict] = []
+        written_payloads: list[ipc_start_turn.JsonObject] = []
+
+        def write_ipc_message(
+            _handle: int,
+            payload: ipc_start_turn.JsonObject,
+        ) -> None:
+            written_payloads.append(payload)
+
         try:
-            bridge._write_ipc_message = lambda _handle, payload: written_payloads.append(payload)
+            bridge._write_ipc_message = write_ipc_message
             bridge._read_ipc_response = lambda _handle, _request_id, timeout_sec, owner_clients: {
                 "resultType": "success",
                 "handledByClientId": "client-1",
@@ -993,7 +1468,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertEqual(result["turn_id"], "turn-1")
-            turn_start_params = written_payloads[0]["params"]["turnStartParams"]
+            params = _require_json_object(written_payloads[0].get("params"))
+            turn_start_params = _require_json_object(params.get("turnStartParams"))
             self.assertTrue(turn_start_params["inheritThreadSettings"])
             self.assertIsNone(turn_start_params["summary"])
             self.assertIsNone(turn_start_params["serviceTier"])
@@ -1050,7 +1526,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                     "streamed_live": False,
                     "final_streamed_live": False,
                 }
-                args = SimpleNamespace(
+                args = argparse.Namespace(
                     thread_id="target-thread",
                     cwd=None,
                     prompt="qa prompt",
@@ -1125,7 +1601,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                     "streamed_live": False,
                     "final_streamed_live": False,
                 }
-                args = SimpleNamespace(
+                args = argparse.Namespace(
                     thread_id="target-thread",
                     cwd=None,
                     prompt="qa prompt",
@@ -1213,7 +1689,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                     "streamed_live": False,
                     "final_streamed_live": False,
                 }
-                args = SimpleNamespace(
+                args = argparse.Namespace(
                     thread_id="target-thread",
                     cwd=None,
                     prompt="qa prompt",
@@ -1287,7 +1763,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                     "streamed_live": False,
                     "final_streamed_live": False,
                 }
-                args = SimpleNamespace(
+                args = argparse.Namespace(
                     thread_id="target-thread",
                     cwd=None,
                     prompt="qa prompt",
@@ -1361,18 +1837,18 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                     stream_live: bool = False,
                     stream_label: str = "",
                     stream_callback=None,
-                ) -> dict:
+                ) -> final_answer_types.WatchForFinalAnswerResult:
                     watched.append((session_path, start_offset))
                     return {
                         "commentary": [],
                         "final_answer": "done",
-                        "status": "ready",
+                        "status": "final",
                         "streamed_live": False,
                         "final_streamed_live": False,
                     }
 
                 bridge.watch_for_final_answer = fake_watch_for_final_answer
-                args = SimpleNamespace(
+                args = argparse.Namespace(
                     thread_id="target-thread",
                     cwd=None,
                     prompt="qa prompt",
@@ -1522,11 +1998,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_effort="high",
                 tokens_used=1,
             )
-            client = SimpleNamespace(
-                read_thread=lambda thread_id, include_turns=False: {
-                    "thread": {"status": {"type": "idle"}}
-                }
-            )
+            client = IdleSidecarClient()
 
             with EnvPatch("CODEX_BRIDGE_ORPHAN_TASK_STARTED_GRACE_SECONDS", "60"):
                 self.assertTrue(bridge.is_thread_busy(session_path))
@@ -1561,11 +2033,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 reasoning_effort="high",
                 tokens_used=1,
             )
-            client = SimpleNamespace(
-                read_thread=lambda thread_id, include_turns=False: {
-                    "thread": {"status": {"type": "idle"}}
-                }
-            )
+            client = IdleSidecarClient()
 
             self.assertEqual(bridge.get_thread_busy_state(thread, client=client), "waiting-input")
 
@@ -1654,7 +2122,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bridge.sync_session_index_with_state = lambda: None
 
             output = io.StringIO()
-            args = SimpleNamespace(
+            args = argparse.Namespace(
                 thread_ref=None,
                 thread_id="thread-1",
                 cwd=None,
@@ -1693,14 +2161,9 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 tokens_used=0,
             )
 
-            def fail_busy_check(item, allow_resume=True):
-                raise AssertionError("preflight_ask should not inspect idle/busy state")
-
-            fake_bridge = SimpleNamespace(
-                choose_thread=lambda thread_id, cwd: thread,
-                get_thread_workspace_ref=lambda item: "repo:1",
-                get_thread_label=lambda item: "repo:1",
-                get_thread_busy_state=fail_busy_check,
+            fake_bridge = PreflightTargetBridge(
+                thread,
+                "preflight_ask should not inspect idle/busy state",
             )
 
             preflight = harness.preflight_ask("target-thread", bridge_module=fake_bridge, now=1.0)
@@ -1724,15 +2187,9 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 tokens_used=0,
             )
 
-            def fail_busy_check(*args, **kwargs):
-                raise AssertionError("preflight_ask should not inspect any busy threads")
-
-            fake_bridge = SimpleNamespace(
-                choose_thread=lambda thread_id, cwd: target,
-                get_thread_workspace_ref=lambda item: "repo:1",
-                get_thread_label=lambda item: "repo:1",
-                get_thread_busy_state=fail_busy_check,
-                get_busy_threads=fail_busy_check,
+            fake_bridge = PreflightTargetBridge(
+                target,
+                "preflight_ask should not inspect any busy threads",
             )
 
             preflight = harness.preflight_ask("target-thread", bridge_module=fake_bridge, now=1.0)
@@ -1744,8 +2201,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preflight.not_sent_reason, "")
 
     def test_windows_harness_runtime_reports_desktop_available(self) -> None:
-        fake_bridge = SimpleNamespace(
-            discover_codex_desktop_executable=lambda: (Path("C:/Codex/Codex.exe"), "fake")
+        fake_bridge = DesktopDiscoveryStub(
+            (Path("C:/Codex/Codex.exe"), "fake")
         )
 
         with mock.patch.object(harness, "probe_codex_cli", return_value=("codex.exe", "ok")):
@@ -1756,7 +2213,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.codex_desktop_status, "available")
 
     def test_windows_harness_runtime_reports_desktop_not_found(self) -> None:
-        fake_bridge = SimpleNamespace(discover_codex_desktop_executable=lambda: (None, ""))
+        fake_bridge = DesktopDiscoveryStub()
 
         with mock.patch.object(harness, "probe_codex_cli", return_value=("", "not_found")):
             status = harness.get_runtime_status(bridge_module=fake_bridge)
@@ -1765,10 +2222,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status.codex_desktop_status, "not_found")
 
     def test_windows_harness_runtime_reports_desktop_unavailable_on_error(self) -> None:
-        def fail_discovery():
-            raise RuntimeError("probe failed")
-
-        fake_bridge = SimpleNamespace(discover_codex_desktop_executable=fail_discovery)
+        fake_bridge = DesktopDiscoveryStub(failure=RuntimeError("probe failed"))
 
         with mock.patch.object(harness, "probe_codex_cli", return_value=("", "permission_denied")):
             status = harness.get_runtime_status(bridge_module=fake_bridge)
@@ -1798,7 +2252,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(input_view.claim())
         self.assertTrue(all(getattr(item, "disabled", False) for item in input_view.children))
 
-        message = SimpleNamespace(author=SimpleNamespace(id=1), channel=None)
+        message = ReturningTargetMessage()
+        message.author = FakeAuthor(author_id=1)
         busy_view = bot.BusyChoiceView(message, "prompt", target_thread_id="thread-1")
         self.assertTrue(busy_view.claim())
         self.assertFalse(busy_view.claim())
@@ -1811,15 +2266,18 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.submit_approval_reply = lambda target_thread_id, answer: (
                 submitted.append((target_thread_id, answer)) or (0, "approved")
             )
-            interaction = FakeInteraction(command_name="-", channel_id=222)
-            interaction.message = FailingEditInteractionMessage(RuntimeError("approval edit unavailable"))
+            interaction = DiscordFakeInteraction(
+                command_name="-",
+                channel_id=222,
+                message_failure=RuntimeError("approval edit unavailable"),
+            )
             view = bot.ApprovalView("thread-1")
 
             await view._submit(interaction, "1")
 
             log_text = Path(os.environ["CODEX_DISCORD_LOG_PATH"]).read_text(encoding="utf-8")
             self.assertEqual(submitted, [("thread-1", "1")])
-            self.assertIn("Approval submitted\n\napproved", interaction.followup.messages)
+            self.assertIn("Approval submitted\n\napproved", interaction.fake_followup.messages)
             self.assertIn("approval_button_message_edit_failed", log_text)
         finally:
             bot.submit_approval_reply = original_submit
@@ -1831,8 +2289,11 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.submit_approval_reply = lambda target_thread_id, answer: (
                 submitted.append((target_thread_id, answer)) or (0, "approved")
             )
-            interaction = FakeInteraction(command_name="-", channel_id=222)
-            interaction.message = FailingEditInteractionMessage(TypeError("bad approval edit dependency"))
+            interaction = DiscordFakeInteraction(
+                command_name="-",
+                channel_id=222,
+                message_failure=TypeError("bad approval edit dependency"),
+            )
             view = bot.ApprovalView("thread-1")
 
             with self.assertRaisesRegex(TypeError, "bad approval edit dependency"):
@@ -1852,8 +2313,11 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.submit_input_reply = lambda target_thread_id, value: (
                 submitted.append((target_thread_id, value)) or (0, "answered")
             )
-            interaction = FakeInteraction(command_name="-", channel_id=222)
-            interaction.message = FailingEditInteractionMessage(RuntimeError("input edit unavailable"))
+            interaction = DiscordFakeInteraction(
+                command_name="-",
+                channel_id=222,
+                message_failure=RuntimeError("input edit unavailable"),
+            )
             view = bot.InputChoiceView("thread-1", [("choice-1", "First")])
             button = view.children[0]
 
@@ -1861,7 +2325,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             log_text = Path(os.environ["CODEX_DISCORD_LOG_PATH"]).read_text(encoding="utf-8")
             self.assertEqual(submitted, [("thread-1", "choice-1")])
-            self.assertIn("Input submitted\n\nanswered", interaction.followup.messages)
+            self.assertIn("Input submitted\n\nanswered", interaction.fake_followup.messages)
             self.assertIn("input_choice_button_message_edit_failed", log_text)
         finally:
             bot.submit_input_reply = original_submit
@@ -1873,8 +2337,11 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.submit_input_reply = lambda target_thread_id, value: (
                 submitted.append((target_thread_id, value)) or (0, "answered")
             )
-            interaction = FakeInteraction(command_name="-", channel_id=222)
-            interaction.message = FailingEditInteractionMessage(TypeError("bad input edit dependency"))
+            interaction = DiscordFakeInteraction(
+                command_name="-",
+                channel_id=222,
+                message_failure=TypeError("bad input edit dependency"),
+            )
             view = bot.InputChoiceView("thread-1", [("choice-1", "First")])
             button = view.children[0]
 
@@ -1891,8 +2358,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
     async def test_busy_choice_denied_user_is_logged(self) -> None:
         message = FakeMessage()
         view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
-        interaction = FakeInteraction(command_name="ask", channel_id=222)
-        interaction.user = SimpleNamespace(id=999)
+        interaction = DiscordFakeInteraction(command_name="ask", channel_id=222, user_id=999)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
@@ -1901,7 +2367,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             log_text = log_path.read_text(encoding="utf-8")
 
         self.assertFalse(allowed)
-        self.assertEqual(interaction.response.messages, ["Only the original sender can choose this."])
+        self.assertEqual(interaction.fake_response.messages, ["Only the original sender can choose this."])
         self.assertIn("busy_choice_denied user=999 owner=242286902982606848 target=thread-1", log_text)
 
     async def test_busy_choice_duplicate_click_is_logged(self) -> None:
@@ -1909,7 +2375,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         view = bot.BusyChoiceView(message, "please steer", target_thread_id="thread-1")
         self.assertTrue(view.claim())
         button = next(item for item in view.children if getattr(item, "label", "") == "Queue next")
-        interaction = FakeInteraction(command_name="ask", channel_id=222)
+        interaction = DiscordFakeInteraction(command_name="ask", channel_id=222)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             log_path = Path(temp_dir) / "discord-smoke.log"
@@ -1917,7 +2383,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 await button.callback(interaction)
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(interaction.response.messages, ["This busy choice was already handled."])
+        self.assertEqual(interaction.fake_response.messages, ["This busy choice was already handled."])
         self.assertIn("busy_choice_already_handled action=queue_next", log_text)
         self.assertIn("target=thread-1", log_text)
 
@@ -1932,11 +2398,11 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             choice_id="0123456789abcdef01234567",
         )
         button = next(item for item in view.children if getattr(item, "label", "") == "Steer now")
-        interaction = FakeInteraction(command_name="ask", channel_id=222)
+        interaction = DiscordFakeInteraction(command_name="ask", channel_id=222)
 
         try:
             def fake_claim_busy_choice_record(choice_id: str) -> bool:
-                observed_deferred.append(interaction.response.deferred)
+                observed_deferred.append(interaction.fake_response.deferred)
                 return False
 
             bot.claim_busy_choice_record = fake_claim_busy_choice_record
@@ -1949,8 +2415,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.claim_busy_choice_record = original_claim_busy_choice_record
 
         self.assertEqual(observed_deferred, [True])
-        self.assertTrue(interaction.response.deferred)
-        self.assertEqual(interaction.followup.messages, ["This busy choice was already handled."])
+        self.assertTrue(interaction.fake_response.deferred)
+        self.assertEqual(interaction.fake_followup.messages, ["This busy choice was already handled."])
         self.assertIn("busy_choice_already_handled action=steer_now", log_text)
 
     def test_fit_single_message_truncates_to_discord_limit(self) -> None:
@@ -1970,8 +2436,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bot.MIRROR_DB_PATH = Path(temp_dir) / "mirror.sqlite"
             try:
                 fake_bot = SimpleNamespace()
-                message = FakeMessage()
-                message.channel = ReturningTarget(channel_id=222)
+                message = ReturningTargetMessage(channel_id=222)
                 log_path = Path(temp_dir) / "discord-smoke.log"
 
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
@@ -2008,19 +2473,15 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             bot.get_mirrored_codex_thread_id = lambda channel_id: None
             bot.handle_plain_ask = fail_handle_plain_ask
-            client = SimpleNamespace(
-                _processed_message_ids={},
-                enable_prefix_commands=True,
-                plain_ask_mention_user_ids=set(),
-                user=SimpleNamespace(id=1511380398914142379),
-                is_allowed_message_channel=lambda channel: True,
-                is_allowed_user=lambda user_id: user_id == 1500506752234422322,
+            client = self._make_message_test_client(
+                allowed_user_ids={1500506752234422322},
+                plain_ask_mention_user_ids={1511380398914142379},
             )
             message = FakeMessage(
                 content="<@1511380398914142379>\n완료: restart-check handoff 전달 완료.",
                 channel_id=333,
             )
-            message.author = SimpleNamespace(id=1500506752234422322, bot=True)
+            message.author = FakeAuthor(1500506752234422322, bot=True)
             message.raw_mentions = [1511380398914142379]
             message.mentions = [SimpleNamespace(id=1511380398914142379, bot=True)]
 
@@ -2045,11 +2506,9 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             bot.get_mirrored_codex_thread_id = lambda channel_id: None
             bot.handle_plain_ask = fail_handle_plain_ask
-            client = SimpleNamespace(
-                enable_prefix_commands=True,
+            client = self._make_message_test_client(
+                allowed_user_ids={242286902982606848},
                 plain_ask_mention_user_ids={1500506752234422322},
-                is_allowed_message_channel=lambda channel: True,
-                is_allowed_user=lambda user_id: True,
             )
             message = FakeMessage(content="plain channel chatter", channel_id=333)
 
@@ -2081,11 +2540,9 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             bot.get_mirrored_codex_thread_id = lambda channel_id: None
             bot.handle_plain_ask = fail_handle_plain_ask
-            client = SimpleNamespace(
-                enable_prefix_commands=True,
+            client = self._make_message_test_client(
+                allowed_user_ids={242286902982606848},
                 plain_ask_mention_user_ids={1511380398914142379},
-                is_allowed_message_channel=lambda channel: True,
-                is_allowed_user=lambda user_id: True,
             )
             message = FakeMessage(content="<@1500506752234422322> ping", channel_id=333)
             message.raw_mentions = [1500506752234422322]
@@ -2130,11 +2587,9 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             bot.is_thread_runner_busy = runner_idle
             bot.handle_plain_ask = fake_handle_plain_ask
-            client = SimpleNamespace(
-                enable_prefix_commands=True,
+            client = self._make_message_test_client(
+                allowed_user_ids={242286902982606848},
                 plain_ask_mention_user_ids={1511380398914142379},
-                is_allowed_message_channel=lambda channel: True,
-                is_allowed_user=lambda user_id: True,
             )
             message = FakeMessage(
                 content="<@1500506752234422322> 잘아타스한테 티켓 다시 보내봐",
@@ -2184,10 +2639,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
 
             bot.is_thread_runner_busy = runner_idle
             bot.handle_plain_ask = fail_handle_plain_ask
-            client = SimpleNamespace(
-                enable_prefix_commands=True,
-                is_allowed_message_channel=lambda channel: True,
-                is_allowed_user=lambda user_id: True,
+            client = self._make_message_test_client(
+                allowed_user_ids={242286902982606848},
             )
             message = FakeMessage(content="please hook", channel_id=333)
 
@@ -2283,11 +2736,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 self.deleted_reasons.append(reason)
 
         channel = FakeTextChannel()
-        guild = SimpleNamespace(
-            get_channel=lambda channel_id: channel if channel_id == 111 else None,
-            fetch_channel=lambda channel_id: channel,
-        )
-        category = SimpleNamespace(id=999)
+        guild = ProjectCleanupGuildStub(channel)
+        category = ProjectCleanupCategoryStub(999)
         try:
             bot.discord.TextChannel = FakeTextChannel
             result = await bot.delete_stale_project_channels(
@@ -2319,11 +2769,8 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
                 self.deleted = True
 
         channel = FakeTextChannel()
-        guild = SimpleNamespace(
-            get_channel=lambda channel_id: channel if channel_id == 111 else None,
-            fetch_channel=lambda channel_id: channel,
-        )
-        category = SimpleNamespace(id=999)
+        guild = ProjectCleanupGuildStub(channel)
+        category = ProjectCleanupCategoryStub(999)
         try:
             bot.discord.TextChannel = FakeTextChannel
             result = await bot.delete_stale_project_channels(

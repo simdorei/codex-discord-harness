@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
 import discord
 
@@ -11,6 +11,17 @@ from codex_discord_id_values import coerce_discord_id_value
 
 StaleMirrorThreadRow: TypeAlias = tuple[str, discord_delivery_state.DiscordIdValue, str | None]
 StaleMirrorProjectRow: TypeAlias = tuple[str, str | None, discord_delivery_state.DiscordIdValue]
+
+
+class ProjectCleanupGuild(Protocol):
+    def get_channel(self, channel_id: int, /) -> object | None: ...
+
+    async def fetch_channel(self, channel_id: int, /) -> object: ...
+
+
+class ProjectCleanupCategory(Protocol):
+    @property
+    def id(self) -> int | str: ...
 
 
 async def delete_stale_discord_threads(
@@ -57,8 +68,8 @@ async def delete_stale_discord_threads(
 
 
 async def delete_stale_project_channels(
-    guild: discord.Guild,
-    category: discord.CategoryChannel,
+    guild: ProjectCleanupGuild,
+    category: ProjectCleanupCategory,
     stale_rows: Sequence[StaleMirrorProjectRow],
 ) -> mirror_sync_result.MirrorCleanupResult:
     deleted = 0

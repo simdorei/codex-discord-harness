@@ -76,10 +76,11 @@ class PersistentInteractionTests(unittest.IsolatedAsyncioTestCase):
             interaction: persistent_interactions.PersistentInteraction,
             watch_result: SteeringPromptResult | None,
             target_thread_id: str,
-        ) -> None:
+        ) -> bool:
             _ = interaction
             if streams is not None:
                 streams.append((watch_result, target_thread_id))
+            return True
 
         def claim_component(
             interaction: persistent_interactions.PersistentInteraction,

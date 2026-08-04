@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 
 import codex_discord_slash_commands as slash_commands
 import codex_discord_slash_runtime_commands as runtime_commands
 
-SlashFunc = Callable[..., Awaitable[None]]
+SlashFunc = slash_commands.SlashCallback
 
 
 class FakeTree:

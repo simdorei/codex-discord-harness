@@ -6,7 +6,7 @@ import codex_discord_busy_choice_stop_action as stop_action
 
 
 class FakeChannel:
-    id = 222
+    id: int = 222
 
 
 class FakeInteraction:
@@ -16,7 +16,7 @@ class FakeInteraction:
 class BusyChoiceStopActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_action_targets_supplied_codex_thread(self) -> None:
         followups: list[tuple[str, str]] = []
-        bridge_runs: list[tuple[list[str], str]] = []
+        bridge_runs: list[tuple[stop_action.StopActionChannel, list[str], str]] = []
         logs: list[str] = []
 
         async def run_bridge_and_send(
@@ -24,8 +24,7 @@ class BusyChoiceStopActionTests(unittest.IsolatedAsyncioTestCase):
             argv: list[str],
             title: str,
         ) -> tuple[int, str]:
-            _ = target
-            bridge_runs.append((argv, title))
+            bridge_runs.append((target, argv, title))
             return 0, "ok"
 
         async def send_direct_followup(
@@ -39,9 +38,10 @@ class BusyChoiceStopActionTests(unittest.IsolatedAsyncioTestCase):
             _ = log_prefix
             followups.append((context, content))
 
+        channel = FakeChannel()
         handled = await stop_action.handle_busy_choice_stop_action(
             FakeInteraction(),
-            FakeChannel(),
+            channel,
             "thread-1",
             user_id=123,
             deps=stop_action.BusyChoiceStopActionDeps(
@@ -53,7 +53,9 @@ class BusyChoiceStopActionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(handled)
-        self.assertEqual(bridge_runs, [(["stop", "--thread-id", "thread-1"], "Stop")])
+        self.assertEqual(len(bridge_runs), 1)
+        self.assertIs(bridge_runs[0][0], channel)
+        self.assertEqual(bridge_runs[0][1:], (["stop", "--thread-id", "thread-1"], "Stop"))
         self.assertEqual(followups, [("busy_choice_stop_requested", "Stop request sent for this Codex reply.")])
         self.assertIn("busy_choice_stop_start user=123 target=thread-1", logs[0])
         self.assertEqual(logs[-1], "busy_choice_stop_done user=123 target=thread-1 exit=0")
@@ -83,7 +85,7 @@ class BusyChoiceStopActionTests(unittest.IsolatedAsyncioTestCase):
             _ = log_prefix
             _ = context
 
-        await stop_action.handle_busy_choice_stop_action(
+        _ = await stop_action.handle_busy_choice_stop_action(
             FakeInteraction(),
             FakeChannel(),
             None,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, cast
 
 import discord
 
@@ -43,7 +43,7 @@ def make_busy_choice_source_message(
             id=author_id,
             bot=bool(author_bot),
         ),
-        channel=channel,
+        channel=cast(discord_bot_shapes.DiscordMessageableChannel, channel),
     )
 
 

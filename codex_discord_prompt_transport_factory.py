@@ -13,7 +13,7 @@ import codex_discord_stream as discord_stream
 import codex_discord_ui_ask as discord_ui_ask
 
 
-RelayT = TypeVar("RelayT", bound=discord_stream.DiscordAskRelay)
+RelayT = TypeVar("RelayT", bound=discord_stream.AskStreamRelay)
 SteeringResultT = TypeVar("SteeringResultT")
 AppServerDeliveryResult: TypeAlias = app_server_transport.AppServerDeliveryResult
 AppServerStartTurnNoWait: TypeAlias = prompt_transport.StartTurnNoWait[AppServerDeliveryResult]

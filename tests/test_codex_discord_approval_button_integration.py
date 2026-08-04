@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, cast, runtime_checkable
 import tempfile
 import unittest
+
+import discord
 
 import codex_discord_bot as bot
 from codex_discord_text import DISCORD_MAX_LEN
@@ -12,15 +14,13 @@ from codex_discord_text import DISCORD_MAX_LEN
 from tests.test_codex_discord_bot import EnvPatch, FakeInteraction
 
 
+@runtime_checkable
 class ApprovalButton(Protocol):
-    label: str
+    @property
+    def label(self) -> str | None: ...
 
-    async def callback(self, interaction: FakeInteraction) -> None:
+    async def callback(self, interaction: FakeInteraction, /) -> None:
         ...
-
-
-class ApprovalViewWithChildren(Protocol):
-    children: Sequence[ApprovalButton]
 
 
 class StreamPostApproval(Protocol):
@@ -33,8 +33,11 @@ class StreamPostApproval(Protocol):
         ...
 
 
-def find_approval_button(view: ApprovalViewWithChildren) -> ApprovalButton:
-    return next(item for item in view.children if item.label == "Approve")
+def find_approval_button(view: discord.ui.View) -> ApprovalButton:
+    for item in view.children:
+        if isinstance(item, ApprovalButton) and item.label == "Approve":
+            return item
+    raise StopIteration("Approve button not found")
 
 
 class DiscordApprovalButtonIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -47,7 +50,7 @@ class DiscordApprovalButtonIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
             bot.submit_approval_reply = fake_submit_approval_reply
             interaction = FakeInteraction(command_name="approval", channel_id=222)
-            view = cast(ApprovalViewWithChildren, bot.ApprovalView("thread-1"))
+            view = bot.ApprovalView("thread-1")
             button = find_approval_button(view)
 
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -103,7 +106,7 @@ class DiscordApprovalButtonIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bot.make_post_approval_watch_result = fake_make_watch
             bot.stream_post_approval_result_for_interaction = fake_stream_watch
             interaction = FakeInteraction(command_name="approval", channel_id=222)
-            view = cast(ApprovalViewWithChildren, bot.ApprovalView("thread-1"))
+            view = bot.ApprovalView("thread-1")
             button = find_approval_button(view)
 
             await button.callback(interaction)

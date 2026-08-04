@@ -63,7 +63,7 @@ class FakeHistoryChannel:
 
 
 def record_getter(active_choice_ids: set[str]) -> stale_busy_components.BusyChoiceRecordGetter:
-    def get_record(choice_id: str) -> object | None:
+    def get_record(choice_id: str) -> stale_busy_components.BusyChoiceRecord | None:
         if choice_id in active_choice_ids:
             return {"choice_id": choice_id}
         return None

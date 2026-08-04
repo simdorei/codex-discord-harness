@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
-from typing import cast
 import unittest
 
 import codex_discord_bot as bot
@@ -52,7 +51,7 @@ class DiscordNewThreadFailureIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
                     exit_code, output = await bot.run_discord_new_thread(
-                        cast(bot.CodexDiscordBot, FakeBot()),
+                        FakeBot(),
                         222,
                         "start here",
                     )

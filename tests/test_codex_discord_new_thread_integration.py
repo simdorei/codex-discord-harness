@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
-from typing import cast, override
+from typing import override
 import unittest
 
 import codex_discord_bot as bot
@@ -66,7 +66,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return 0, "target_thread: thread-new\ncwd: C:\\taxlab"
 
         async def fake_mirror_single_codex_thread(
-            fake_bot: bot.CodexDiscordBot,
+            fake_bot: object,
             thread_id: str,
             *,
             preferred_project_channel_id: int | None = None,
@@ -87,7 +87,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
                     with self.assertRaisesRegex(TypeError, "bad route dependency"):
                         _ = await bot.run_discord_new_thread(
-                            cast(bot.CodexDiscordBot, FakeBot()),
+                            FakeBot(),
                             222,
                             "start here",
                         )
@@ -136,7 +136,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return 0, "target_thread: thread-new\ncwd: C:\\taxlab"
 
         async def fake_mirror_single_codex_thread(
-            fake_bot: bot.CodexDiscordBot,
+            fake_bot: object,
             thread_id: str,
             *,
             preferred_project_channel_id: int | None = None,
@@ -156,7 +156,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
                     exit_code, output = await bot.run_discord_new_thread(
-                        cast(bot.CodexDiscordBot, FakeBot()),
+                        FakeBot(),
                         222,
                         "start here",
                     )
@@ -209,7 +209,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return 0, "target_thread: thread-new\ncwd: C:\\taxlab"
 
         async def fake_mirror_single_codex_thread(
-            fake_bot: bot.CodexDiscordBot,
+            fake_bot: object,
             thread_id: str,
             *,
             preferred_project_channel_id: int | None = None,
@@ -229,7 +229,7 @@ class DiscordNewThreadIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 log_path = Path(temp_dir) / "discord-smoke.log"
                 with EnvPatch("CODEX_DISCORD_LOG_PATH", str(log_path)):
                     exit_code, output = await bot.run_discord_new_thread(
-                        cast(bot.CodexDiscordBot, FakeBot()),
+                        FakeBot(),
                         222,
                         "start here",
                     )

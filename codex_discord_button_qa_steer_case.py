@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, override
+
+import codex_discord_persistent_busy_steer as discord_persistent_busy_steer
+import codex_discord_persistent_busy_choice_interaction as discord_persistent_busy_choice_interaction
+from codex_discord_steering import SteeringPromptResult
 
 ChannelIdValue: TypeAlias = int | str | None
 DeferKwargValue: TypeAlias = str | int | float | bool | None
 DeferKwargs: TypeAlias = dict[str, DeferKwargValue]
-SteeringTargetIdValue: TypeAlias = str | int | None
-SteeringStreamKwargValue: TypeAlias = str | int | float | bool | None
 
 
 class SteerQaBot(Protocol):
@@ -21,7 +23,7 @@ class SteerQaChannel(Protocol):
         ...
 
 
-class SteerQaUser(Protocol):
+class SteerQaUser(discord_persistent_busy_choice_interaction.PersistentBusyUser, Protocol):
     pass
 
 
@@ -29,17 +31,7 @@ class SteerQaMessage(Protocol):
     pass
 
 
-class SteeringStreamChannel(Protocol):
-    pass
-
-
-class SteeringResultLike(Protocol):
-    @property
-    def target_thread_id(self) -> SteeringTargetIdValue:
-        ...
-
-
-class QaResponseLike(Protocol):
+class QaResponseLike(discord_persistent_busy_choice_interaction.PersistentBusyResponse, Protocol):
     deferred: bool
     defer_kwargs: list[DeferKwargs]
 
@@ -48,13 +40,19 @@ class QaFollowupLike(Protocol):
     messages: list[str]
 
 
-class SteerQaInteraction(Protocol):
+class SteerQaInteraction(discord_persistent_busy_choice_interaction.PersistentBusyInteraction, Protocol):
     @property
+    @override
     def response(self) -> QaResponseLike:
         ...
 
     @property
     def followup(self) -> QaFollowupLike:
+        ...
+
+    @property
+    @override
+    def user(self) -> SteerQaUser:
         ...
 
 
@@ -76,18 +74,8 @@ class MakeInteractionFunc(Protocol):
         ...
 
 
-SteeringRunner = Callable[[str, str | None], SteeringResultLike]
-
-
-class SteeringStreamer(Protocol):
-    def __call__(
-        self,
-        stream_channel: SteeringStreamChannel,
-        steering_result: SteeringResultLike,
-        target_thread_id: str | None,
-        **kwargs: SteeringStreamKwargValue,
-    ) -> Awaitable[bool]:
-        ...
+SteeringRunner: TypeAlias = discord_persistent_busy_steer.SteeringRunner
+SteeringStreamer: TypeAlias = discord_persistent_busy_steer.PersistentBusySteerStreamer
 
 
 class BusyChoiceSteerHandler(Protocol):
@@ -109,7 +97,7 @@ class BusyChoiceSteerQaCaseDeps:
     handle_persistent_busy_choice_interaction: BusyChoiceSteerHandler
     delete_busy_choice_record: Callable[[str], None]
     get_mirrored_codex_thread_id: Callable[[int | None], str | None]
-    make_steering_prompt_result: Callable[[str | None], SteeringResultLike]
+    make_steering_prompt_result: Callable[[str | None], SteeringPromptResult]
 
 
 async def run_busy_choice_steer_success_qa_case(
@@ -129,19 +117,20 @@ async def run_busy_choice_steer_success_qa_case(
     )
     watched: list[tuple[str | None, str | None]] = []
 
-    def fake_run_steering_prompt(prompt: str, target_thread_id: str | None) -> SteeringResultLike:
+    def fake_run_steering_prompt(prompt: str, target_thread_id: str | None) -> SteeringPromptResult:
         _ = prompt
         return deps.make_steering_prompt_result(target_thread_id)
 
     async def fake_stream_steering_prompt_result_to_channel(
-        stream_channel: SteeringStreamChannel,
-        steering_result: SteeringResultLike,
+        channel: discord_persistent_busy_steer.PersistentBusyChannel,
+        steering_result: SteeringPromptResult,
         target_thread_id: str | None,
-        **kwargs: SteeringStreamKwargValue,
-    ) -> bool:
-        _ = (stream_channel, kwargs)
+        *,
+        send_commentary_blocks: bool | None,
+        send_final_blocks: bool,
+    ) -> None:
+        _ = (channel, send_commentary_blocks, send_final_blocks)
         watched.append((target_thread_id, _target_thread_id(steering_result)))
-        return True
 
     handled = await deps.handle_persistent_busy_choice_interaction(
         interaction,
@@ -169,6 +158,6 @@ def _channel_id(channel: SteerQaChannel) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _target_thread_id(steering_result: SteeringResultLike) -> str | None:
+def _target_thread_id(steering_result: SteeringPromptResult) -> str | None:
     value = steering_result.target_thread_id
     return value if isinstance(value, str) or value is None else None

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, fields
 
+import codex_discord_slash_commands as slash_commands
 import codex_discord_slash_prompt_commands as slash_prompt_commands
 
-SlashFunc = Callable[..., Awaitable[None]]
+SlashFunc = slash_commands.SlashCallback
 
 
 class FakeTree:
@@ -100,14 +101,13 @@ class PromptSlashCommandRegistrationTests(unittest.IsolatedAsyncioTestCase):
             if denied_calls is not None:
                 denied_calls.append(interaction)
 
-        deps_kwargs = {
-            "check_allowed": lambda interaction: allowed,
-            "send_not_allowed": send_not_allowed,
-            "handle_new": self.make_handler("new", events),
-            "handle_ask": self.make_handler("ask", events),
-            "handle_interview": self.make_handler("interview", events),
-        }
-        return slash_prompt_commands.PromptSlashCommandDeps(**deps_kwargs)
+        return slash_prompt_commands.PromptSlashCommandDeps(
+            check_allowed=lambda interaction: allowed,
+            send_not_allowed=send_not_allowed,
+            handle_new=self.make_handler("new", events),
+            handle_ask=self.make_handler("ask", events),
+            handle_interview=self.make_handler("interview", events),
+        )
 
     def test_registers_prompt_slash_command_names(self) -> None:
         bot = FakeBot()

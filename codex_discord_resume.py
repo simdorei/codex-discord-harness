@@ -103,13 +103,7 @@ def recover_resident_thread(
 
 def format_resume_recovery_message(result: ResumeRecoveryResult, target_ref: str) -> str:
     label = target_ref or result.thread_id
-    match result.state:
-        case ResumeRecoveryState.ALREADY_LOADED:
-            status = "already loaded"
-        case ResumeRecoveryState.RECOVERED:
-            status = "recovered"
-        case unreachable:
-            assert_never(unreachable)
+    status = _format_resume_recovery_status(result.state)
     return "\n".join(
         [
             "Codex thread resume check complete.",
@@ -118,6 +112,15 @@ def format_resume_recovery_message(result: ResumeRecoveryResult, target_ref: str
             "No prompt was resent. Resend the original message when ready.",
         ]
     )
+
+
+def _format_resume_recovery_status(state: ResumeRecoveryState) -> str:
+    match state:
+        case ResumeRecoveryState.ALREADY_LOADED:
+            return "already loaded"
+        case ResumeRecoveryState.RECOVERED:
+            return "recovered"
+    assert_never(state)
 
 
 def _read_thread_with_deadline(

@@ -212,6 +212,9 @@ class PersistentBusySteerActionTests(unittest.IsolatedAsyncioTestCase):
             events.append(("result", target_thread_id, f"delegate={delegate_to_session_mirror}"))
             return True
 
+        def format_log_text_len(value: str | None) -> int:
+            return len(value or "")
+
         return SteerHarness(
             deps=steer_action.PersistentBusySteerActionDeps(
                 handle_stale_steer_block=handle_stale,
@@ -226,7 +229,7 @@ class PersistentBusySteerActionTests(unittest.IsolatedAsyncioTestCase):
                 busy_failure_deps=self._busy_failure_deps(),
                 handle_steer_result=handle_result,
                 steer_result_deps=self._result_deps(),
-                format_log_text_len=len,
+                format_log_text_len=format_log_text_len,
                 log=logs.append,
             ),
             events=events,

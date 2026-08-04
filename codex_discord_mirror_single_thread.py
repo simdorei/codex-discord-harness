@@ -88,13 +88,12 @@ async def mirror_single_codex_thread(
                     actual_type=type(fetched).__name__,
                 )
             candidate = fetched
-        if isinstance(candidate, discord.TextChannel):
-            project_channel = candidate
-            deps.upsert_mirror_project(project_key, project_name, int(project_channel.id))
-            deps.log(
-                f"single_thread_mirror_preferred_channel codex_thread={thread_id} "
-                + f"project_channel={project_channel.id}"
-            )
+        project_channel = candidate
+        deps.upsert_mirror_project(project_key, project_name, int(project_channel.id))
+        deps.log(
+            f"single_thread_mirror_preferred_channel codex_thread={thread_id} "
+            + f"project_channel={project_channel.id}"
+        )
     if project_channel is None:
         project_channel = await deps.get_or_create_project_channel(guild, category, project_key, project_name)
     return await deps.get_or_create_thread_channel(codex_thread, project_key, project_channel)
