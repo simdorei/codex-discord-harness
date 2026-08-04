@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(
@@ -47,11 +50,118 @@ def test_project_and_plugin_skill_ship_the_same_conversation_store() -> None:
     assert SCRIPT.read_bytes() == PROJECT_SCRIPT.read_bytes()
 
 
+def test_generated_lease_token_cannot_be_parsed_as_an_option(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+    with (
+        mock.patch.dict(os.environ, environment, clear=True),
+        mock.patch("secrets.token_urlsafe", return_value="-leading-hyphen-token-value"),
+    ):
+        script_globals = runpy.run_path(str(SCRIPT))
+        lease = script_globals["acquire"](SCOPE)
+
+    lease_token = str(lease["lease_token"])
+    completed = _run_process(
+        environment,
+        "release",
+        "--scope",
+        SCOPE,
+        "--lease-token",
+        lease_token,
+    )
+
+    assert not lease_token.startswith("-")
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_expired_but_still_owned_lease_can_save(tmp_path: Path) -> None:
+    environment = _environment(tmp_path)
+    lease = _run(environment, "acquire", "--scope", SCOPE)
+    _expire_lease(environment)
+
+    saved = _run(
+        environment,
+        "set",
+        "--scope",
+        SCOPE,
+        "--url",
+        URL,
+        "--lease-token",
+        lease["lease_token"],
+    )
+
+    assert saved == {"status": "saved"}
+    assert _run(environment, "acquire", "--scope", SCOPE) == {
+        "status": "found",
+        "url": URL,
+    }
+
+
+def test_reacquired_lease_fences_stale_creator_but_current_creator_can_save_after_expiry(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    stale_lease = _run(environment, "acquire", "--scope", SCOPE)
+    _expire_lease(environment)
+    current_lease = _run(environment, "acquire", "--scope", SCOPE)
+    _expire_lease(environment)
+
+    rejected = _run_process(
+        environment,
+        "set",
+        "--scope",
+        SCOPE,
+        "--url",
+        URL,
+        "--lease-token",
+        stale_lease["lease_token"],
+    )
+    saved = _run(
+        environment,
+        "set",
+        "--scope",
+        SCOPE,
+        "--url",
+        URL,
+        "--lease-token",
+        current_lease["lease_token"],
+    )
+
+    assert rejected.returncode == 2
+    assert "missing or was replaced" in rejected.stderr
+    assert saved == {"status": "saved"}
+
+
+def _environment(tmp_path: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "SIMDOREI_PRO_CONVERSATION_DB": str(tmp_path / "conversations.sqlite3"),
+    }
+
+
+def _expire_lease(environment: dict[str, str]) -> None:
+    with sqlite3.connect(environment["SIMDOREI_PRO_CONVERSATION_DB"]) as connection:
+        _ = connection.execute(
+            "UPDATE conversations SET lease_expires_at = 0 WHERE scope = ?",
+            (SCOPE,),
+        )
+
+
 def _run(
     environment: dict[str, str],
     *arguments: str,
 ) -> dict[str, str]:
-    completed = subprocess.run(
+    completed = _run_process(environment, *arguments)
+    assert completed.returncode == 0, completed.stderr
+    value = json.loads(completed.stdout)
+    assert isinstance(value, dict)
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _run_process(
+    environment: dict[str, str],
+    *arguments: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [sys.executable, str(SCRIPT), *arguments],
         capture_output=True,
         text=True,
@@ -59,7 +169,3 @@ def _run(
         env=environment,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr
-    value = json.loads(completed.stdout)
-    assert isinstance(value, dict)
-    return {str(key): str(item) for key, item in value.items()}

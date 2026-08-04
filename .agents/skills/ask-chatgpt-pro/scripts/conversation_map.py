@@ -59,7 +59,7 @@ def acquire(scope: str) -> dict[str, str]:
         ):
             connection.commit()
             return {"status": "busy"}
-        lease_token = secrets.token_urlsafe(24)
+        lease_token = "lease_" + secrets.token_urlsafe(24)
         connection.execute(
             """
             INSERT INTO conversations(
@@ -90,22 +90,18 @@ def save(scope: str, url: str, lease_token: str) -> dict[str, str]:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             """
-            SELECT lease_hash, lease_expires_at
+            SELECT lease_hash
             FROM conversations
             WHERE scope = ?
             """,
             (scope,),
         ).fetchone()
-        if (
-            row is None
-            or not secrets.compare_digest(
-                str(row["lease_hash"] or ""),
-                _token_hash(lease_token),
-            )
-            or int(row["lease_expires_at"] or 0) < now
+        if row is None or not secrets.compare_digest(
+            str(row["lease_hash"] or ""),
+            _token_hash(lease_token),
         ):
             raise ConversationMapError(
-                "The conversation creation lease is missing or expired."
+                "The conversation creation lease is missing or was replaced."
             )
         connection.execute(
             """
