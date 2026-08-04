@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Self, final
+from typing import Self, cast, final
 from uuid import uuid4
 
 import pytest
@@ -36,6 +37,18 @@ from simdorei_mcp_common.messages import (
     RequestId,
 )
 from simdorei_mcp_common.request_deadlines import RequestBudget
+
+
+_ExecuteAdmitted = Callable[
+    [
+        LocalProjectDispatcher,
+        GatewayCommand,
+        ActiveProject,
+        RequestBudget,
+        int | None,
+    ],
+    BridgeResult,
+]
 
 
 class ParallelSocket:
@@ -95,8 +108,8 @@ def test_two_project_reads_can_run_concurrently(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (tmp_path / "first.txt").write_text("first", encoding="utf-8")
-    (tmp_path / "second.txt").write_text("second", encoding="utf-8")
+    _ = (tmp_path / "first.txt").write_text("first", encoding="utf-8")
+    _ = (tmp_path / "second.txt").write_text("second", encoding="utf-8")
     socket = ParallelSocket()
     bridge = RemoteMcpBridge(
         _config(),
@@ -142,7 +155,7 @@ def test_two_project_reads_can_run_concurrently(
                 computer_session_generation=1,
             ).model_dump_json()
         )
-        _wait_for_result(socket.sent, ProjectSessionResult)
+        _ = _wait_for_result(socket.sent, ProjectSessionResult)
         for request_id, path in (
             ("read-first", "first.txt"),
             ("read-second", "second.txt"),
@@ -161,7 +174,7 @@ def test_two_project_reads_can_run_concurrently(
         assert first_started.wait(timeout=2)
         assert second_started.wait(timeout=0.5)
         release_first.set()
-        _wait_for_result_count(socket.sent, ReadFileResult, expected=2)
+        _ = _wait_for_result_count(socket.sent, ReadFileResult, expected=2)
     finally:
         release_first.set()
         bridge.close()
@@ -181,7 +194,10 @@ def test_older_session_command_cannot_win_after_newer_command(
     )
     old_started = threading.Event()
     release_old = threading.Event()
-    original = LocalProjectDispatcher._execute_admitted
+    original = cast(
+        _ExecuteAdmitted,
+        cast(object, getattr(LocalProjectDispatcher, "_execute_admitted")),
+    )
 
     def delay_old_before_lock(
         self: LocalProjectDispatcher,
@@ -250,12 +266,15 @@ def _wait_for_result_count(
     *,
     expected: int,
 ) -> str:
+    expected_type = (
+        "project_session_result"
+        if result_type is ProjectSessionResult
+        else "read_file_result"
+    )
     deadline = datetime.now(UTC).timestamp() + 2
     while datetime.now(UTC).timestamp() < deadline:
         matching = [
-            message
-            for message in messages
-            if f'"type":"{result_type.model_fields["type"].default}"' in message
+            message for message in messages if f'"type":"{expected_type}"' in message
         ]
         if len(matching) >= expected:
             return matching[-1]

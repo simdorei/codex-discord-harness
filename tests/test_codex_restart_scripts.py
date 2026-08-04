@@ -82,8 +82,8 @@ class RestartScriptTests(unittest.TestCase):
         if use_override:
             env["CODEX_DISCORD_PYTHON"] = sys.executable
         else:
-            env.pop("CODEX_DISCORD_PYTHON", None)
-            env.pop("PYTHON_EXE", None)
+            _ = env.pop("CODEX_DISCORD_PYTHON", None)
+            _ = env.pop("PYTHON_EXE", None)
         return subprocess.run(
             [
                 "powershell.exe",
@@ -225,7 +225,7 @@ class RestartScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
             _write_fake_restart_repo(repo_root, "")
-            (repo_root / "codex_discord_bot.py").write_text(
+            _ = (repo_root / "codex_discord_bot.py").write_text(
                 "import time\ntime.sleep(300)\n",
                 encoding="utf-8",
             )
@@ -378,8 +378,8 @@ class RestartScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             env = os.environ.copy()
-            env.pop("CODEX_DISCORD_PYTHON", None)
-            env.pop("PYTHON_EXE", None)
+            _ = env.pop("CODEX_DISCORD_PYTHON", None)
+            _ = env.pop("PYTHON_EXE", None)
 
             completed = subprocess.run(
                 [

@@ -6,7 +6,9 @@ import runpy
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 
@@ -57,7 +59,11 @@ def test_generated_lease_token_cannot_be_parsed_as_an_option(tmp_path: Path) -> 
         mock.patch("secrets.token_urlsafe", return_value="-leading-hyphen-token-value"),
     ):
         script_globals = runpy.run_path(str(SCRIPT))
-        lease = script_globals["acquire"](SCOPE)
+        acquire = cast(
+            Callable[[str], dict[str, str]],
+            cast(object, script_globals["acquire"]),
+        )
+        lease = acquire(SCOPE)
 
     lease_token = str(lease["lease_token"])
     completed = _run_process(
@@ -152,9 +158,10 @@ def _run(
 ) -> dict[str, str]:
     completed = _run_process(environment, *arguments)
     assert completed.returncode == 0, completed.stderr
-    value = json.loads(completed.stdout)
+    value = cast(object, json.loads(completed.stdout))
     assert isinstance(value, dict)
-    return {str(key): str(item) for key, item in value.items()}
+    mapping = cast(dict[object, object], value)
+    return {str(key): str(item) for key, item in mapping.items()}
 
 
 def _run_process(

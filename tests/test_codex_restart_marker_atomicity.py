@@ -46,7 +46,7 @@ def test_restart_marker_is_complete_when_a_concurrent_claimer_observes_it() -> N
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             try:
-                marker.replace(claim)
+                _ = marker.replace(claim)
                 break
             except (FileNotFoundError, PermissionError):
                 if process.poll() is not None and not marker.exists():
@@ -54,7 +54,7 @@ def test_restart_marker_is_complete_when_a_concurrent_claimer_observes_it() -> N
                 time.sleep(0.0005)
         stdout, stderr = process.communicate(timeout=30)
         if not claim.exists() and marker.exists():
-            marker.replace(claim)
+            _ = marker.replace(claim)
 
         assert process.returncode == 0, stdout + stderr
         assert claim.read_text(encoding="utf-8") == expected

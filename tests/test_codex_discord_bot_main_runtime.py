@@ -2,12 +2,34 @@ from __future__ import annotations
 
 from builtins import BaseExceptionGroup
 from collections.abc import Callable
+from typing import Protocol, cast, final
 
 import pytest
 
-from codex_discord_bot_main_runtime import _run_bot_and_close_services
+import codex_discord_bot_main_runtime
+from codex_discord_bot_main_runtime import BotRunner, RuntimeCloser
 
 
+class _RunBotAndCloseServices(Protocol):
+    def __call__(
+        self,
+        bot: BotRunner,
+        token: str,
+        *,
+        close_bridge: RuntimeCloser,
+        close_app_server: RuntimeCloser,
+    ) -> None: ...
+
+
+_run_bot_and_close_services = cast(
+    _RunBotAndCloseServices,
+    cast(
+        object, getattr(codex_discord_bot_main_runtime, "_run_bot_and_close_services")
+    ),
+)
+
+
+@final
 class _RecordingRunner:
     def __init__(
         self,
