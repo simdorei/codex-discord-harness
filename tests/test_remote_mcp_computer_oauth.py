@@ -19,6 +19,8 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
 )
 from remote_mcp_server.simdorei_mcp.tool_context import (
     OpenAiToolSession,
+    ToolIdentity,
+    tool_request_id,
 )
 from tests.remote_mcp_oauth_support import authorize, authorize_grant, oauth_settings
 
@@ -36,6 +38,7 @@ class _IdentityRequestContext:
 @dataclass(frozen=True, slots=True)
 class _IdentityContext:
     request_context: _IdentityRequestContext
+    request_id: str = "same-upstream-request"
 
 
 def _identity_context(session: str) -> _IdentityContext:
@@ -94,15 +97,15 @@ def test_file_only_refresh_token_cannot_add_computer_scopes() -> None:
     assert response.json()["error"] == "invalid_scope"
 
 
-def test_oauth_request_without_scope_does_not_grant_computer_access() -> None:
+def test_oauth_request_without_scope_grants_full_local_computer_access() -> None:
     app = create_app(oauth_settings())
     with TestClient(app, base_url="http://localhost") as client:
-        access_token = authorize_grant(client, None).access_token
+        grant = authorize_grant(client, None)
         response = client.post(
             "/mcp",
             headers={
                 **MCP_HEADERS,
-                "Authorization": f"Bearer {access_token}",
+                "Authorization": f"Bearer {grant.access_token}",
             },
             json={
                 "jsonrpc": "2.0",
@@ -118,7 +121,9 @@ def test_oauth_request_without_scope_does_not_grant_computer_access() -> None:
 
     result = response.json()["result"]
     assert result["isError"] is True
-    assert "computer:observe" in result["content"][0]["text"]
+    assert "computer:observe" not in result["content"][0]["text"]
+    assert "computer:observe" in grant.approval_page
+    assert "computer:control" in grant.approval_page
 
 
 def test_oauth_approval_discloses_requested_computer_capabilities() -> None:
@@ -200,6 +205,16 @@ def test_oauth_client_is_part_of_the_tool_identity(
 
     assert first.session == second.session == "shared-session"
     assert first.subject != second.subject
+
+
+def test_repeated_upstream_request_id_gets_a_fresh_local_invocation_id() -> None:
+    context = _identity_context("shared-session")
+    identity = ToolIdentity(session="shared-session", subject="subject-a")
+
+    first = tool_request_id(context, identity)
+    second = tool_request_id(context, identity)
+
+    assert first != second
 
 
 def test_computer_tools_publish_dedicated_scopes_truthful_risk_and_bounds() -> None:

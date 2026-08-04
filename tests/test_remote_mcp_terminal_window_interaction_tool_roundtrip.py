@@ -139,9 +139,37 @@ def test_interaction_tools_require_write_scope() -> None:
     assert "files:write" in str(result["content"])
 
 
+def test_repeated_chatgpt_request_id_gets_fresh_local_window_commands() -> None:
+    app = create_app(oauth_settings())
+    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
+        with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
+            headers = _activate(client, socket)
+            first, _ = _round_trip(
+                client,
+                socket,
+                headers,
+                2,
+                "terminal_window_capture",
+                {"terminal_window_id": WINDOW_ID},
+                _capture_output(),
+            )
+            second, _ = _round_trip(
+                client,
+                socket,
+                headers,
+                2,
+                "terminal_window_capture",
+                {"terminal_window_id": WINDOW_ID},
+                _capture_output(),
+            )
+
+    assert first.request_id != second.request_id
+
+
 def _activate(client: TestClient, socket: BridgeSocket) -> dict[str, str]:
     socket.send_text(
-        BridgeHello(protocol_version=11, device_id=DeviceId("device-a")).model_dump_json()
+        BridgeHello(protocol_version=9, device_id=DeviceId("device-a")).model_dump_json()
     )
     _ = parse_gateway_message(socket.receive_text())
     socket.send_text(
