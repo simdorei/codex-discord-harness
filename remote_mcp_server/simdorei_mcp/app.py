@@ -149,7 +149,11 @@ def create_app(settings: GatewaySettings) -> FastAPI:
         title="Simdorei Local Project MCP",
         lifespan=lifespan,
     )
-    app.include_router(create_approval_router(oauth_provider))
+    public_path = (settings.public_base_url.path or "").rstrip("/")
+    approval_path = f"{public_path}/oauth/approve"
+    app.include_router(
+        create_approval_router(oauth_provider, approval_path=approval_path)
+    )
 
     @app.get("/healthz")
     async def health() -> HealthResponse:

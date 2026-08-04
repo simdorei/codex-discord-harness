@@ -40,7 +40,11 @@ class ApprovalSubmission(BaseModel):
     owner_token: str = Field(min_length=1, max_length=500)
 
 
-def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
+def create_approval_router(
+    provider: SingleUserOAuthProvider,
+    *,
+    approval_path: str,
+) -> APIRouter:
     router = APIRouter()
 
     @router.get("/oauth/approve", response_class=HTMLResponse)
@@ -50,7 +54,7 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
         scopes = await provider.pending_scopes(request_id)
         if scopes is None:
             return _page("This authorization request expired.", status_code=400)
-        return _page(_approval_form(request_id, scopes))
+        return _page(_approval_form(request_id, scopes, approval_path))
 
     @router.post("/oauth/approve")
     async def approve(  # pyright: ignore[reportUnusedFunction]
@@ -75,6 +79,7 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
                 _approval_form(
                     submission.request_id,
                     scopes,
+                    approval_path,
                     message="The owner token did not match.",
                 ),
                 status_code=401,
@@ -96,9 +101,11 @@ def create_approval_router(provider: SingleUserOAuthProvider) -> APIRouter:
 def _approval_form(
     request_id: str,
     scopes: tuple[str, ...],
+    approval_path: str,
     message: str = "",
 ) -> str:
     safe_request_id = escape(request_id, quote=True)
+    safe_approval_path = escape(approval_path, quote=True)
     safe_message = escape(message)
     feedback = f'<p class="error">{safe_message}</p>' if safe_message else ""
     permissions = "".join(
@@ -112,7 +119,7 @@ def _approval_form(
       <p>This connection requests these permissions:</p>
       <ul>{permissions}</ul>
       {feedback}
-      <form method="post" action="/oauth/approve">
+      <form method="post" action="{safe_approval_path}">
         <input type="hidden" name="request_id" value="{safe_request_id}">
         <label>Owner token
           <input type="password" name="owner_token" required autofocus>

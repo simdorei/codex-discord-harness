@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +18,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import (
     READ_SCOPE,
     WRITE_SCOPE,
 )
+from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 from remote_mcp_server.simdorei_mcp.tool_context import (
     OpenAiToolSession,
     ToolIdentity,
@@ -135,6 +136,55 @@ def test_existing_oauth_client_can_request_new_server_scopes() -> None:
 
     assert authorization.status_code == 302, authorization.text
     assert urlparse(authorization.headers["location"]).path == "/oauth/approve"
+
+
+def test_oauth_approval_form_preserves_public_path_prefix() -> None:
+    settings = GatewaySettings.model_validate(
+        {
+            **oauth_settings().model_dump(),
+            "public_base_url": "https://simdorei.duckdns.org/v12",
+        }
+    )
+    app = create_app(settings)
+    redirect_uri = "https://chatgpt.com/connector/oauth/test"
+    with TestClient(app, base_url="http://localhost") as client:
+        registered = client.post(
+            "/register",
+            json={
+                "redirect_uris": [redirect_uri],
+                "token_endpoint_auth_method": "client_secret_post",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "scope": READ_SCOPE,
+                "client_name": "Prefixed ChatGPT client",
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        authorization = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": registered.json()["client_id"],
+                "redirect_uri": redirect_uri,
+                "state": "prefixed-state",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "scope": READ_SCOPE,
+                "resource": "https://simdorei.duckdns.org/v12/mcp",
+            },
+            follow_redirects=False,
+        )
+        assert authorization.status_code == 302, authorization.text
+        approval_url = urlparse(authorization.headers["location"])
+        request_id = parse_qs(approval_url.query)["request_id"][0]
+        approval_page = client.get(
+            "/oauth/approve",
+            params={"request_id": request_id},
+        )
+
+    assert approval_url.path == "/v12/oauth/approve"
+    assert approval_page.status_code == 200
+    assert 'action="/v12/oauth/approve"' in approval_page.text
 
 
 def test_oauth_request_without_scope_grants_full_local_computer_access() -> None:
