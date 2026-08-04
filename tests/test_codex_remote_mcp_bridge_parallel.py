@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Self, final
+from uuid import uuid4
 
 import pytest
 
@@ -273,7 +274,7 @@ def _wait_for_request(messages: list[str], request_id: str) -> str:
 def _config() -> RemoteMcpBridgeConfig:
     return RemoteMcpBridgeConfig(
         bridge_url="wss://example.test/bridge",
-        device_id="parallel-device",
+        device_id=f"parallel-device-{uuid4().hex}",
         device_token="secret-token",
         binding_ttl_seconds=600,
         binding_ack_timeout_seconds=2,
