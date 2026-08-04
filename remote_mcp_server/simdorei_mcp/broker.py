@@ -42,6 +42,7 @@ from simdorei_mcp_common.messages import (
     ProjectUpsert,
     RequestId,
 )
+from simdorei_mcp_common.leases import RenewableExpiry
 from simdorei_mcp_common.request_deadlines import (
     GATEWAY_REQUEST_TIMEOUT_SECONDS,
 )
@@ -129,6 +130,25 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             self._prune_expired_locked(now)
             if project.expires_at <= now:
                 raise BindingCodeError("project scope is already expired")
+            current = self._projects.get(project.project_scope)
+            if (
+                current is not None
+                and current.device_id == device_id
+                and current.value.binding_id == project.binding_id
+                and current.value.thread_id == project.thread_id
+                and current.value.project_name == project.project_name
+            ):
+                if project.expires_at > current.value.expires_at:
+                    self._projects[project.project_scope] = PendingProject(
+                        device_id=device_id,
+                        value=project,
+                    )
+                    self._routes.renew(
+                        device_id,
+                        project.thread_id,
+                        project.expires_at,
+                    )
+                return
             stale_scopes, stale_routes = stale_registration_targets(
                 self._projects,
                 self._sessions.values(),
@@ -172,7 +192,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                     subject=subject,
                     computer_session_id=uuid4().hex,
                     computer_session_generation=computer_session_generation,
-                    expires_at=pending.value.expires_at,
+                    lease=RenewableExpiry(pending.value.expires_at),
                 )
                 self._routes.require_compatible(route, now=now)
                 sender = self._devices.get(route.device_id)
@@ -188,9 +208,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                         request_id=RequestId(uuid4().hex),
                         thread_id=route.thread_id,
                         computer_session_id=route.computer_session_id,
-                        computer_session_generation=(
-                            route.computer_session_generation
-                        ),
+                        computer_session_generation=(route.computer_session_generation),
                     ),
                 )
                 require_project_session_result(result)
@@ -261,9 +279,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         for route in expired_routes:
             self._routes.remove(
                 route,
-                failure=ActiveBindingMissingError(
-                    "ChatGPT project selection expired"
-                ),
+                failure=ActiveBindingMissingError("ChatGPT project selection expired"),
             )
         self._prune_computer_session_generations_locked()
 
@@ -379,11 +395,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             now = self._now()
             self._prune_expired_locked(now)
             route = self._sessions.get(session)
-            if (
-                route is None
-                or route.expires_at <= now
-                or route.subject != subject
-            ):
+            if route is None or route.expires_at <= now or route.subject != subject:
                 raise ActiveBindingMissingError(
                     "ChatGPT session has no active project selection"
                 )

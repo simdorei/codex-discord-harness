@@ -51,7 +51,7 @@ def test_retrieve_image_returns_native_mcp_image_content() -> None:
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=9,
+                    protocol_version=10,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )
@@ -114,7 +114,7 @@ def test_file_apply_patch_sends_structured_changes_to_the_local_bridge() -> None
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=9,
+                    protocol_version=10,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

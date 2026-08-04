@@ -155,7 +155,7 @@ def test_oauth_chat_session_selects_registered_local_project(tmp_path: Path) -> 
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
                 BridgeHello(
-                    protocol_version=9,
+                    protocol_version=10,
                     device_id=DeviceId("device-a"),
                 ).model_dump_json()
             )

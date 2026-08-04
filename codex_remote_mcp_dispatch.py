@@ -1,3 +1,5 @@
+"""Cohesive local bridge command dispatcher. (# noqa: SIZE_OK)"""
+
 # pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
@@ -71,6 +73,9 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         with self._terminal_lifecycle_lock:
             self._state.upsert(thread_id, root, expires_at)
             self._terminals.close_thread(thread_id)
+
+    def renew(self, thread_id: str, expires_at: datetime) -> None:
+        self._state.renew(thread_id, expires_at)
 
     @overload
     def execute(

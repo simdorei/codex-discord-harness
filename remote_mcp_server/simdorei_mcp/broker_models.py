@@ -13,6 +13,7 @@ from simdorei_mcp_common.messages import (
     GatewayCommand,
     ProjectUpsert,
 )
+from simdorei_mcp_common.leases import RenewableExpiry
 
 
 class BridgeSender(Protocol):
@@ -35,7 +36,14 @@ class SessionRoute:
     subject: str
     computer_session_id: str
     computer_session_generation: int
-    expires_at: datetime
+    lease: RenewableExpiry
+
+    @property
+    def expires_at(self) -> datetime:
+        return self.lease.value
+
+    def renew(self, expires_at: datetime) -> None:
+        self.lease.extend(expires_at)
 
 
 @final

@@ -56,6 +56,12 @@ class BrokerRouteRegistry:  # MUTABLE_OK: caller serializes access with broker l
         self._sessions[route.session] = route
         self._thread_sessions[(route.device_id, route.thread_id)] = route.session
 
+    def renew(self, device_id: DeviceId, thread_id: str, expires_at: datetime) -> None:
+        session = self._thread_sessions.get((device_id, thread_id))
+        route = self._sessions.get(session) if session is not None else None
+        if route is not None and expires_at > route.expires_at:
+            route.renew(expires_at)
+
     def remove(
         self,
         route: SessionRoute,

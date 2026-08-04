@@ -337,7 +337,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         generation = self._workers.begin_connection()
         socket.send(
             BridgeHello(
-                protocol_version=9,
+                protocol_version=10,
                 device_id=DeviceId(self._config.device_id),
             ).model_dump_json()
         )
@@ -369,6 +369,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         self._log("remote_mcp_bridge_connected")
         while not self._stop.is_set():
             self._send_worker_results(socket, generation)
+            self._renew_active_projects()
             self._send_queued_projects(socket)
             try:
                 message = receive_message(socket, timeout=0.25)
@@ -410,6 +411,27 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
     ) -> None:
         for result in self._workers.drain(generation):
             socket.send(result.model_dump_json())
+
+    def _renew_active_projects(self) -> None:
+        ttl = timedelta(seconds=self._config.binding_ttl_seconds)
+        with self._condition:
+            now = self._now()
+            self._prune_expired_locked()
+            renewal_deadline = now + ttl / 2
+            pending_threads = {
+                project.thread_id for project in self._pending_projects.values()
+            }
+            renewals = tuple(
+                project.model_copy(update={"expires_at": now + ttl})
+                for project in self._active.values()
+                if project.thread_id not in pending_threads
+                and project.expires_at <= renewal_deadline
+            )
+            for project in renewals:
+                self._active[project.project_scope] = project
+                self._outbound.put(project)
+        for project in renewals:
+            self._dispatcher.renew(project.thread_id, project.expires_at)
 
     def _send_queued_projects(self, socket: BridgeSocket) -> None:
         while True:

@@ -170,13 +170,13 @@ class OperationErrorResult(ProtocolModel):
 
 class BridgeHello(ProtocolModel):
     type: Literal["hello"] = "hello"
-    protocol_version: Literal[9]
+    protocol_version: Literal[10]
     device_id: DeviceId
 
 
 class GatewayHello(ProtocolModel):
     type: Literal["hello_ack"] = "hello_ack"
-    protocol_version: Literal[9] = 9
+    protocol_version: Literal[10] = 10
 
 
 class ProjectAck(ProtocolModel):

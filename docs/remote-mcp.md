@@ -197,14 +197,14 @@ multi-platform digest so a later rebuild cannot silently change either input.
 These pins do not update automatically: when applying a security update, verify
 the new release and change its version tag and digest together before rebuilding.
 
-### Protocol 9 rollout
+### Protocol 10 rollout
 
 The expanded project-operation protocol intentionally rejects old bridge or
 gateway processes instead of mixing message formats. Upgrade in one coordinated
 maintenance window:
 
 1. Stop the local bridge.
-2. Deploy the gateway that reports bridge protocol 9.
+2. Deploy the gateway that reports bridge protocol 10.
 3. Restart the updated local bridge immediately.
 4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
    `project_status` round trip before allowing write tools.

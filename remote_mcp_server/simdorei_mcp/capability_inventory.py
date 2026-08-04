@@ -40,7 +40,7 @@ class CapabilityInventoryOutput(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     ready: bool
-    protocol_version: Literal[9] = 9
+    protocol_version: Literal[10] = 10
     expected_tool_count: int
     registered_tool_count: int
     missing_tools: tuple[str, ...]

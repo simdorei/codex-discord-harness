@@ -1,3 +1,5 @@
+"""Cohesive synchronized project and session state. (# noqa: SIZE_OK)"""
+
 from __future__ import annotations
 
 import threading
@@ -12,12 +14,13 @@ from codex_remote_mcp_computer import ComputerController
 from codex_remote_mcp_computer_errors import ComputerControlError
 from codex_remote_mcp_files import ProjectFileAccess
 from codex_remote_mcp_idempotency import IdempotentResultCache
+from simdorei_mcp_common.leases import RenewableExpiry
 
 
 @dataclass(frozen=True, slots=True)
 class ActiveProject:
     access: ProjectFileAccess
-    expires_at: datetime
+    lease: RenewableExpiry = field(repr=False)
     result_cache: IdempotentResultCache = field(
         default_factory=IdempotentResultCache,
         compare=False,
@@ -28,6 +31,13 @@ class ActiveProject:
         compare=False,
         repr=False,
     )
+
+    @property
+    def expires_at(self) -> datetime:
+        return self.lease.value
+
+    def renew(self, expires_at: datetime) -> None:
+        self.lease.extend(expires_at)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +84,10 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
             return self._projects.get(thread_id)
 
     def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
-        project = ActiveProject(access=ProjectFileAccess(root), expires_at=expires_at)
+        project = ActiveProject(
+            access=ProjectFileAccess(root),
+            lease=RenewableExpiry(expires_at),
+        )
         with self._lifecycle_lock:
             previous_project = self.binding(thread_id)
             if previous_project is None:
@@ -82,6 +95,13 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
             else:
                 with previous_project.execution_lock:
                     self._replace(thread_id, project)
+
+    def renew(self, thread_id: str, expires_at: datetime) -> None:
+        with self._lock:
+            project = self._projects.get(thread_id)
+            if project is None:
+                raise ComputerControlError("The project binding is no longer active.")
+            project.renew(expires_at)
 
     def computer_for(
         self,
@@ -273,10 +293,7 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
                 controllers = tuple(self._computers.items())
             failures: list[ComputerControlError] = []
             for thread_id, controller in controllers:
-                if (
-                    deadline_monotonic is not None
-                    and monotonic() >= deadline_monotonic
-                ):
+                if deadline_monotonic is not None and monotonic() >= deadline_monotonic:
                     raise TimeoutError(
                         "Timed out before local session cleanup completed."
                     )

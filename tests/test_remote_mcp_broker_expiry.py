@@ -115,6 +115,39 @@ def test_upsert_opportunistically_prunes_other_expired_projects() -> None:
     anyio.run(scenario)
 
 
+def test_same_binding_renewal_extends_the_selected_chat_route() -> None:
+    async def scenario() -> None:
+        clock = [datetime(2026, 8, 1, 12, tzinfo=UTC)]
+        broker = BindingBroker(now=lambda: clock[0])
+        sender = ProjectInfoSender(broker)
+        _ = await broker.attach(DeviceId("device-a"), sender)
+        scope = "codex-pro-renewed-project"
+        initial_expiry = clock[0] + timedelta(minutes=1)
+        await broker.upsert(
+            DeviceId("device-a"),
+            sender,
+            _project(scope, "thread-a", initial_expiry),
+        )
+        _ = await broker.select("session-a", "subject-a", scope)
+
+        renewed_expiry = clock[0] + timedelta(minutes=3)
+        await broker.upsert(
+            DeviceId("device-a"),
+            sender,
+            _project(scope, "thread-a", renewed_expiry),
+        )
+        clock[0] = initial_expiry + timedelta(seconds=1)
+
+        result = await broker.project_info("session-a", "subject-a")
+
+        assert result.thread_id == "thread-a"
+        assert broker.registered_project_count == 1
+        assert broker.session_route_count == 1
+        assert broker.thread_session_count == 1
+
+    anyio.run(scenario)
+
+
 def _project(
     scope: str,
     thread_id: str,

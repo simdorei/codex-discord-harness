@@ -232,7 +232,7 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
     assert envelope.result.is_error is False
     inventory = envelope.result.structured_content
     assert inventory.ready is True
-    assert inventory.protocol_version == 9
+    assert inventory.protocol_version == 10
     assert inventory.expected_tool_count == len(EXPECTED_TOOL_NAMES)
     assert inventory.registered_tool_count == len(EXPECTED_TOOL_NAMES)
     assert inventory.manifest_duplicate_tools == ()
@@ -279,9 +279,7 @@ def test_capability_inventory_tool_reports_grouped_runtime_registration() -> Non
         "terminal_window_type",
     )
     assert "write_project_file" in groups[CapabilitySurface.WRITE].tools
-    assert (
-        "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
-    )
+    assert "type_computer_text" in groups[CapabilitySurface.COMPUTER_CONTROL].tools
 
 
 def test_release_blocker_rejects_missing_and_unexpected_tools() -> None:
