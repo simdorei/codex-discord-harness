@@ -134,7 +134,9 @@ def test_real_cmd_capture_type_and_enter_creates_marker(tmp_path: Path) -> None:
         _wait_for_text(marker, "terminal-input-ok")
         assert first.data_base64.startswith("iVBOR")
         assert typed.receipt.unicode_chars == len(command)
+        assert typed.receipt.activated is True
         assert entered.receipt.keys == ("ENTER",)
+        assert entered.receipt.activated is True
     finally:
         manager.close_all()
 

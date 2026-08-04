@@ -48,14 +48,13 @@ def require_terminal_window_rect(
 def activate_terminal_window(window: OwnedTerminalWindow) -> bool:
     _ = require_terminal_window_rect(window)
     window_id = window.entry.window_id
-    already_active = int(USER32.GetForegroundWindow()) == window_id
     _ = USER32.ShowWindow(window_id, _SW_RESTORE)
-    if not already_active:
+    for _attempt in range(4):
+        if int(USER32.GetForegroundWindow()) == window_id:
+            return True
         _set_foreground(window_id)
         time.sleep(0.12)
-    if int(USER32.GetForegroundWindow()) != window_id:
-        raise TerminalExecutionError("Windows did not activate the terminal window")
-    return not already_active
+    raise TerminalExecutionError("Windows did not activate the terminal window")
 
 
 def require_active_terminal_window(window: OwnedTerminalWindow) -> None:
@@ -69,18 +68,22 @@ def _set_foreground(window_id: int) -> None:
         return
     foreground = int(USER32.GetForegroundWindow())
     foreground_thread = int(USER32.GetWindowThreadProcessId(foreground, None))
+    target_thread = int(USER32.GetWindowThreadProcessId(window_id, None))
     current_thread = int(KERNEL32.GetCurrentThreadId())
-    attached = bool(
-        foreground_thread
-        and foreground_thread != current_thread
-        and USER32.AttachThreadInput(current_thread, foreground_thread, True)
-    )
+    attached_threads: list[int] = []
+    for thread_id in {foreground_thread, target_thread}:
+        if (
+            thread_id
+            and thread_id != current_thread
+            and USER32.AttachThreadInput(current_thread, thread_id, True)
+        ):
+            attached_threads.append(thread_id)
     try:
         _ = USER32.BringWindowToTop(window_id)
         _ = USER32.SetForegroundWindow(window_id)
     finally:
-        if attached:
-            _ = USER32.AttachThreadInput(current_thread, foreground_thread, False)
+        for thread_id in reversed(attached_threads):
+            _ = USER32.AttachThreadInput(current_thread, thread_id, False)
 
 
 __all__ = [
