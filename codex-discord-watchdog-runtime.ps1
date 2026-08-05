@@ -147,7 +147,10 @@ function Wait-RuntimeBotExit {
 }
 
 function Request-GracefulRuntimeStop {
-    param([string]$ExpectedIdentity)
+    param(
+        [string]$ExpectedIdentity,
+        [switch]$PreserveRemoteMcpContext
+    )
 
     $expectedPid = [int]($ExpectedIdentity -split '\|', 2)[0]
     $currentIdentity = Get-CodexBotProcessIdentityById `
@@ -157,12 +160,19 @@ function Request-GracefulRuntimeStop {
         Write-LauncherLog "watchdog_graceful_stop_stale expected=$ExpectedIdentity current=$currentIdentity"
         return $true
     }
+    $stopContent = "identity=$ExpectedIdentity"
+    if ($PreserveRemoteMcpContext) {
+        $stopContent += "`nmode=restart"
+    }
     try {
         Publish-AtomicTextFile `
             -Path $StopRequestPath `
-            -Content "identity=$ExpectedIdentity"
+            -Content $stopContent
     } catch {
         Write-LauncherLog "watchdog_graceful_stop_marker_failed marker=$StopRequestPath error=$($_.Exception.GetType().Name)"
+        if ($PreserveRemoteMcpContext) {
+            throw
+        }
         return $false
     }
     Write-LauncherLog "watchdog_graceful_stop_requested marker=$StopRequestPath"
@@ -174,16 +184,25 @@ function Request-GracefulRuntimeStop {
         return $true
     }
     Write-LauncherLog "watchdog_graceful_stop_timeout marker=$StopRequestPath"
+    if ($PreserveRemoteMcpContext) {
+        Remove-Item -LiteralPath $StopRequestPath -Force -ErrorAction SilentlyContinue
+        throw 'Remote MCP restart handoff did not finish; refusing forced restart.'
+    }
     return $false
 }
 
 function Stop-RuntimeBotProcess {
-    param([string]$ExpectedIdentity)
+    param(
+        [string]$ExpectedIdentity,
+        [switch]$PreserveRemoteMcpContext
+    )
 
     if ($ExpectedIdentity -notmatch '^\d+\|\d+$') {
         throw 'A verified bot process identity is required before stopping the runtime.'
     }
-    if (Request-GracefulRuntimeStop -ExpectedIdentity $ExpectedIdentity) {
+    if (Request-GracefulRuntimeStop `
+        -ExpectedIdentity $ExpectedIdentity `
+        -PreserveRemoteMcpContext:$PreserveRemoteMcpContext) {
         return
     }
     Remove-Item -LiteralPath $StopRequestPath -Force -ErrorAction SilentlyContinue

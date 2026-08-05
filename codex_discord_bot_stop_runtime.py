@@ -35,6 +35,7 @@ class BotStopRuntimeDeps:
     wait_for_delivery_drain: discord_stop_marker.WaitForDeliveryDrain
     exit_bot_process: discord_stop_marker.ExitBotProcess
     log: Callable[[str], None]
+    prepare_restart_handoff: Callable[[], bool] = lambda: False
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class BotStopRuntime:
                 sleep=self.deps.sleep,
                 exit_bot_process=self.deps.exit_bot_process,
                 log=self.deps.log,
+                prepare_restart_handoff=self.deps.prepare_restart_handoff,
             )
         )
 

@@ -9,6 +9,7 @@ import codex_remote_mcp_binding as binding
 from codex_remote_mcp_bridge import LogFunc
 from codex_remote_mcp_bridge_config import ProjectTicket, RemoteMcpBridgeConfig
 from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
+from codex_remote_mcp_restart_models import RestartProject
 
 
 @final
@@ -29,6 +30,21 @@ class _FakeBridge:  # MUTABLE_OK: deterministic retry-state fake.
         root: Path,
     ) -> ProjectTicket:
         _ = thread_id, project_scope, root
+        raise AssertionError("not used by lifecycle tests")
+
+    def prepare_restart_projects(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> tuple[RestartProject, ...]:
+        _ = timeout_seconds
+        return ()
+
+    def cancel_restart_preparation(self) -> None:
+        return None
+
+    def restore_project(self, restart_project: RestartProject) -> ProjectTicket:
+        _ = restart_project
         raise AssertionError("not used by lifecycle tests")
 
 

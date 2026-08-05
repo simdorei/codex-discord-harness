@@ -10,6 +10,12 @@ from codex_remote_mcp_bridge_config import (
     RemoteMcpBridgeConfig,
     load_remote_mcp_config,
 )
+from codex_remote_mcp_restart_handoff import (
+    claim_restart_handoff,
+    write_restart_handoff,
+)
+from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
+from codex_remote_mcp_restart_models import RestartHandoffError, RestartProject
 
 _BRIDGE_LOCK = threading.Lock()
 
@@ -23,6 +29,16 @@ class ManagedRemoteMcpBridge(Protocol):
     ) -> ProjectTicket: ...
 
     def close(self) -> None: ...
+
+    def prepare_restart_projects(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> tuple[RestartProject, ...]: ...
+
+    def cancel_restart_preparation(self) -> None: ...
+
+    def restore_project(self, restart_project: RestartProject) -> ProjectTicket: ...
 
 
 _bridge: ManagedRemoteMcpBridge | None = None
@@ -51,6 +67,43 @@ def close_remote_mcp_bridge() -> None:
         bridge.close()
         _bridge = None
         _bridge_config = None
+
+
+def prepare_remote_mcp_restart_handoff(log: LogFunc) -> bool:
+    with _BRIDGE_LOCK:
+        bridge = _bridge
+        config = _bridge_config
+    if bridge is None or config is None:
+        return False
+    projects = bridge.prepare_restart_projects()
+    try:
+        prepared = write_restart_handoff(projects, config)
+    except (OSError, RestartHandoffError, RemoteMcpBridgeError):
+        bridge.cancel_restart_preparation()
+        raise
+    if prepared:
+        log(f"remote_mcp_restart_handoff_prepared projects={len(projects)}")
+    else:
+        bridge.cancel_restart_preparation()
+    return prepared
+
+
+def restore_remote_mcp_restart_handoff(log: LogFunc) -> bool:
+    config = load_remote_mcp_config()
+    if config is None:
+        return False
+    projects = claim_restart_handoff(config)
+    if not projects:
+        return False
+    bridge = _get_bridge(config, log)
+    try:
+        for project in projects:
+            _ = bridge.restore_project(project)
+    except (OSError, RestartHandoffError, RemoteMcpBridgeError):
+        close_remote_mcp_bridge()
+        raise
+    log(f"remote_mcp_restart_handoff_restored projects={len(projects)}")
+    return True
 
 
 def _get_bridge(config: RemoteMcpBridgeConfig, log: LogFunc) -> ManagedRemoteMcpBridge:

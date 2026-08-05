@@ -28,6 +28,7 @@ try {
 }
 $RestartClaimPath = Join-Path $ScriptDir ".codex_discord_bot.restart.claimed.$PID.$WatchdogStartedTicks"
 $RestartClaimPattern = Join-Path $ScriptDir '.codex_discord_bot.restart.claimed.*'
+$ResumeRemoteMcpContext = $false
 $HealthStatePath = Join-Path $ScriptDir '.codex_discord_bot.health'
 $HeartbeatPath = Join-Path $ScriptDir '.codex_discord_bot.heartbeat'
 $StopRequestPath = Join-Path $ScriptDir '.codex_discord_bot.stop'
@@ -289,7 +290,10 @@ if (Test-Path -LiteralPath $RestartRequestPath) {
         Write-LauncherLog "watchdog_restart_requested marker=$claimedRestartPath"
         $claimedIdentity = Get-BoundProcessIdentityFromMarker `
             -MarkerPath $claimedRestartPath
-        Stop-RuntimeBotProcess -ExpectedIdentity $claimedIdentity
+        Stop-RuntimeBotProcess `
+            -ExpectedIdentity $claimedIdentity `
+            -PreserveRemoteMcpContext
+        $ResumeRemoteMcpContext = $true
     } finally {
         Remove-Item -LiteralPath $claimedRestartPath -Force -ErrorAction SilentlyContinue
     }
@@ -333,5 +337,10 @@ if ($DryRun) {
 }
 
 Write-LauncherLog "watchdog_start_missing script=$BotScript launcher=$HeadlessLauncher"
+if ($ResumeRemoteMcpContext) {
+    $env:CODEX_REMOTE_MCP_RESTART_RESUME = '1'
+} else {
+    Remove-Item Env:CODEX_REMOTE_MCP_RESTART_RESUME -ErrorAction SilentlyContinue
+}
 Start-Process -FilePath 'wscript.exe' -ArgumentList @("`"$HeadlessLauncher`"") -WindowStyle Hidden
 exit 0

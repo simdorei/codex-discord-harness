@@ -46,6 +46,14 @@ class SessionRoute:
         self.lease.extend(expires_at)
 
 
+@dataclass(frozen=True, slots=True)
+class DormantSessionRoute:
+    route: SessionRoute
+    project_scope: str
+    binding_id: str
+    resume_until: datetime
+
+
 @final
 class PendingCall:
     """Mutable rendezvous for one in-flight local bridge request."""

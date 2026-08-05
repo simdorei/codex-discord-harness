@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
-from typing import final, override
+from datetime import UTC, datetime, timedelta
+from typing import Final, final, override
 from uuid import uuid4
 
 import anyio
@@ -16,12 +16,14 @@ from remote_mcp_server.simdorei_mcp.broker_errors import (
     BridgeProtocolError,
     BridgeTimeoutError,
     BridgeUnavailableError,
+    BrokerError,
 )
 from remote_mcp_server.simdorei_mcp.broker_idempotency import (
     command_fingerprint,
 )
 from remote_mcp_server.simdorei_mcp.broker_models import (
     BridgeSender,
+    DormantSessionRoute,
     PendingCall,
     PendingProject,
     SessionRoute,
@@ -50,6 +52,7 @@ from simdorei_mcp_common.request_deadlines import (
 
 logger = logging.getLogger(__name__)
 NowFactory = Callable[[], datetime]
+RESTART_ROUTE_GRACE_SECONDS: Final = 120
 
 
 @final
@@ -71,6 +74,9 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         self._sessions: dict[str, SessionRoute] = {}
         self._thread_sessions: dict[tuple[DeviceId, str], str] = {}
         self._computer_session_generations: dict[tuple[DeviceId, str], int] = {}
+        self._dormant_routes: dict[
+            tuple[DeviceId, str], DormantSessionRoute
+        ] = {}
         self._pending: dict[RequestId, PendingCall] = {}
         self._routes = BrokerRouteRegistry(
             self._sessions,
@@ -93,6 +99,10 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
     @property
     def thread_session_count(self) -> int:
         return len(self._thread_sessions)
+
+    @property
+    def dormant_route_count(self) -> int:
+        return len(self._dormant_routes)
 
     async def is_device_connected(self, device_id: DeviceId) -> bool:
         async with self._lock:
@@ -159,6 +169,13 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 del self._projects[scope]
             for route in stale_routes:
                 self._routes.remove(route)
+            dormant_key = (device_id, project.thread_id)
+            dormant = self._dormant_routes.get(dormant_key)
+            if dormant is not None and (
+                dormant.project_scope != project.project_scope
+                or dormant.binding_id != project.binding_id
+            ):
+                del self._dormant_routes[dormant_key]
             self._projects[project.project_scope] = PendingProject(
                 device_id=device_id,
                 value=project,
@@ -185,6 +202,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 self._computer_session_generations[generation_key] = (
                     computer_session_generation
                 )
+                _ = self._dormant_routes.pop(generation_key, None)
                 route = SessionRoute(
                     session=session,
                     device_id=pending.device_id,
@@ -225,6 +243,71 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 expires_at=route.expires_at,
             )
 
+    async def resume_project(
+        self,
+        device_id: DeviceId,
+        sender: BridgeSender,
+        project: ProjectUpsert,
+    ) -> bool:
+        async with self._selection_lock:
+            async with self._lock:
+                now = self._now()
+                self._prune_expired_locked(now)
+                if self._devices.get(device_id) is not sender:
+                    return False
+                pending = self._projects.get(project.project_scope)
+                key = (device_id, project.thread_id)
+                dormant = self._dormant_routes.get(key)
+                if (
+                    pending is None
+                    or pending.device_id != device_id
+                    or pending.value != project
+                    or dormant is None
+                    or dormant.project_scope != project.project_scope
+                    or dormant.binding_id != project.binding_id
+                    or dormant.resume_until <= now
+                ):
+                    return False
+                del self._dormant_routes[key]
+                computer_session_generation = max(
+                    self._computer_session_generations.get(key, 0),
+                    dormant.route.computer_session_generation,
+                ) + 1
+                self._computer_session_generations[key] = computer_session_generation
+                route = SessionRoute(
+                    session=dormant.route.session,
+                    device_id=device_id,
+                    thread_id=project.thread_id,
+                    subject=dormant.route.subject,
+                    computer_session_id=uuid4().hex,
+                    computer_session_generation=computer_session_generation,
+                    lease=RenewableExpiry(project.expires_at),
+                )
+                self._routes.replace(route)
+            activated = False
+            try:
+                result = await self._dispatch(
+                    route,
+                    sender,
+                    ProjectSessionCommand(
+                        request_id=RequestId(uuid4().hex),
+                        thread_id=route.thread_id,
+                        computer_session_id=route.computer_session_id,
+                        computer_session_generation=(route.computer_session_generation),
+                    ),
+                )
+                require_project_session_result(result)
+                activated = True
+            except BrokerError:
+                return False
+            finally:
+                if not activated:
+                    with anyio.CancelScope(shield=True):
+                        async with self._lock:
+                            if self._sessions.get(route.session) is route:
+                                self._routes.remove(route)
+            return True
+
     async def complete(
         self,
         device_id: DeviceId,
@@ -246,14 +329,33 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
 
     def _disconnect_device(self, device_id: DeviceId) -> None:
         _ = self._devices.pop(device_id, None)
+        now = self._now()
         stale_projects, stale_routes = disconnected_device_targets(
             self._projects,
             self._sessions.values(),
             device_id,
         )
-        for scope in stale_projects:
-            del self._projects[scope]
         for route in stale_routes:
+            project = next(
+                (
+                    self._projects[scope].value
+                    for scope in stale_projects
+                    if self._projects[scope].value.thread_id == route.thread_id
+                ),
+                None,
+            )
+            if project is not None and route.expires_at > now:
+                self._dormant_routes[(device_id, route.thread_id)] = (
+                    DormantSessionRoute(
+                        route=route,
+                        project_scope=project.project_scope,
+                        binding_id=project.binding_id,
+                        resume_until=min(
+                            route.expires_at,
+                            now + timedelta(seconds=RESTART_ROUTE_GRACE_SECONDS),
+                        ),
+                    )
+                )
             del self._sessions[route.session]
             self._routes.cancel(
                 route,
@@ -263,6 +365,8 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 (route.device_id, route.thread_id),
                 None,
             )
+        for scope in stale_projects:
+            del self._projects[scope]
         self._prune_computer_session_generations_locked()
 
     def _prune_expired_locked(self, now: datetime) -> None:
@@ -281,6 +385,13 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 route,
                 failure=ActiveBindingMissingError("ChatGPT project selection expired"),
             )
+        expired_dormant = tuple(
+            key
+            for key, dormant in self._dormant_routes.items()
+            if dormant.resume_until <= now or dormant.route.expires_at <= now
+        )
+        for key in expired_dormant:
+            del self._dormant_routes[key]
         self._prune_computer_session_generations_locked()
 
     def _prune_computer_session_generations_locked(self) -> None:

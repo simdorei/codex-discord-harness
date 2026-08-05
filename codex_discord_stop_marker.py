@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 LogFunc = Callable[[str], None]
 SetDeliveryStopping = Callable[[str], None]
 CloseWithTimeout = Callable[[], Awaitable[None]]
 SleepFunc = Callable[[float], Awaitable[None]]
+StopMode = Literal["stop", "restart"]
 
 
 class WaitForDeliveryDrain(Protocol):
@@ -35,6 +36,7 @@ class StopMarkerLoopDeps:
     sleep: SleepFunc
     exit_bot_process: ExitBotProcess
     log: LogFunc
+    prepare_restart_handoff: Callable[[], bool] = lambda: False
 
 
 async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
@@ -47,9 +49,11 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
                 + f"error_type={type(exc).__name__}"
             )
         if deps.stop_request_path.exists():
-            if not _marker_matches_process(deps):
+            mode = _marker_mode(deps)
+            if mode is None:
                 await deps.sleep(deps.poll_seconds)
                 continue
+            prepare_restart = mode == "restart"
             deps.log(f"stop_marker_detected path={deps.stop_request_path}")
             try:
                 deps.stop_request_path.unlink()
@@ -63,6 +67,9 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
                 timeout_seconds=deps.drain_timeout_seconds,
                 reason="stop_marker",
             )
+            if prepare_restart:
+                prepared = deps.prepare_restart_handoff()
+                deps.log(f"remote_mcp_restart_handoff_ready prepared={prepared}")
             deps.log(
                 f"stop_marker_close_start timeout_seconds={deps.close_timeout_seconds:g}"
             )
@@ -79,7 +86,7 @@ async def stop_marker_loop(deps: StopMarkerLoopDeps) -> None:
         await deps.sleep(deps.poll_seconds)
 
 
-def _marker_matches_process(deps: StopMarkerLoopDeps) -> bool:
+def _marker_mode(deps: StopMarkerLoopDeps) -> StopMode | None:
     try:
         marker = deps.stop_request_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
@@ -87,9 +94,12 @@ def _marker_matches_process(deps: StopMarkerLoopDeps) -> bool:
             f"stop_marker_read_failed path={deps.stop_request_path} "
             + f"error_type={type(exc).__name__}"
         )
-        return False
-    if marker == f"identity={deps.process_identity}":
-        return True
+        return None
+    identity = f"identity={deps.process_identity}"
+    if marker == identity:
+        return "stop"
+    if marker == f"{identity}\nmode=restart":
+        return "restart"
     deps.log(f"stop_marker_stale path={deps.stop_request_path}")
     try:
         deps.stop_request_path.unlink()
@@ -98,4 +108,4 @@ def _marker_matches_process(deps: StopMarkerLoopDeps) -> bool:
             f"stop_marker_remove_failed path={deps.stop_request_path} "
             + f"error_type={type(exc).__name__}"
         )
-    return False
+    return None

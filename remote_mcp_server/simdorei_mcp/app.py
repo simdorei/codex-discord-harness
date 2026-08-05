@@ -7,6 +7,7 @@ from contextlib import AbstractAsyncContextManager
 from contextlib import asynccontextmanager
 from typing import assert_never
 
+import anyio
 import structlog
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -44,6 +45,7 @@ from remote_mcp_server.simdorei_mcp.tools import (
 )
 from simdorei_mcp_common.messages import (
     BridgeHello,
+    DeviceId,
     GatewayHello,
     ListFilesResult,
     OperationErrorResult,
@@ -203,36 +205,12 @@ def create_app(settings: GatewaySettings) -> FastAPI:
                 # Preserve a runtime guard at the validated WebSocket boundary.
                 case unreachable:  # pyright: ignore[reportUnnecessaryComparison]
                     assert_never(unreachable)
-            while True:
-                message = parse_bridge_message(await socket.receive_text())
-                match message:
-                    case ProjectUpsert(
-                        project_scope=project_scope,
-                        binding_id=binding_id,
-                    ):
-                        await broker.upsert(expected_device_id, sender, message)
-                        await sender.send_control(
-                            ProjectAck(
-                                project_scope=project_scope,
-                                binding_id=binding_id,
-                            )
-                        )
-                        continue
-                    case (
-                        ProjectInfoResult()
-                        | ListFilesResult()
-                        | ReadFileResult()
-                        | WriteFileResult()
-                        | ProjectOperationResult()
-                        | ProjectSessionResult()
-                        | OperationErrorResult()
-                    ):
-                        await broker.complete(expected_device_id, sender, message)
-                        continue
-                    case BridgeHello():
-                        await sender.reject(1002, "duplicate hello")
-                        return
-                assert_never(message)
+            await _serve_bridge_messages(
+                socket,
+                sender,
+                broker,
+                expected_device_id,
+            )
         except WebSocketDisconnect:
             LOGGER.info("bridge.disconnected", device_id=expected_device_id)
         except (ValidationError, BrokerError) as exc:
@@ -248,6 +226,74 @@ def create_app(settings: GatewaySettings) -> FastAPI:
 
     app.mount("/", mcp_app)
     return app
+
+
+async def _serve_bridge_messages(
+    socket: WebSocket,
+    sender: WebSocketBridgeSender,
+    broker: BindingBroker,
+    device_id: DeviceId,
+) -> None:
+    async with anyio.create_task_group() as resume_tasks:
+        try:
+            while True:
+                message = parse_bridge_message(await socket.receive_text())
+                match message:
+                    case ProjectUpsert(
+                        project_scope=project_scope,
+                        binding_id=binding_id,
+                    ):
+                        await broker.upsert(device_id, sender, message)
+                        await sender.send_control(
+                            ProjectAck(
+                                project_scope=project_scope,
+                                binding_id=binding_id,
+                            )
+                        )
+                        resume_tasks.start_soon(
+                            _resume_project,
+                            broker,
+                            device_id,
+                            sender,
+                            message,
+                        )
+                    case (
+                        ProjectInfoResult()
+                        | ListFilesResult()
+                        | ReadFileResult()
+                        | WriteFileResult()
+                        | ProjectOperationResult()
+                        | ProjectSessionResult()
+                        | OperationErrorResult()
+                    ):
+                        await broker.complete(device_id, sender, message)
+                    case BridgeHello():
+                        await sender.reject(1002, "duplicate hello")
+                        return
+                    case unreachable:
+                        assert_never(unreachable)
+        except WebSocketDisconnect:
+            LOGGER.info("bridge.disconnected", device_id=device_id)
+        except (ValidationError, BrokerError) as exc:
+            LOGGER.warning(
+                "bridge.protocol_rejected",
+                device_id=device_id,
+                error_type=type(exc).__name__,
+            )
+            await sender.reject(1008, "invalid bridge message")
+        finally:
+            resume_tasks.cancel_scope.cancel()
+
+
+async def _resume_project(
+    broker: BindingBroker,
+    device_id: DeviceId,
+    sender: WebSocketBridgeSender,
+    project: ProjectUpsert,
+) -> None:
+    resumed = await broker.resume_project(device_id, sender, project)
+    if resumed:
+        LOGGER.info("bridge.project_session_resumed", device_id=device_id)
 
 
 @asynccontextmanager

@@ -25,6 +25,7 @@ import codex_discord_empty_content_notice as discord_empty_content_notice
 import codex_discord_message_payload_runtime as discord_message_payload_runtime
 import codex_discord_session_mirror_archive as discord_session_mirror_archive
 import codex_discord_stop_marker as discord_stop_marker
+from codex_remote_mcp_binding import prepare_remote_mcp_restart_handoff
 from codex_discord_text import build_startup_notice as build_startup_notice_text
 
 ModuleValue: TypeAlias = object
@@ -100,6 +101,9 @@ class BotServiceWiringRuntime:
                 wait_for_delivery_drain=self._wait_for_delivery_drain,
                 exit_bot_process=self._exit_bot_process,
                 log=self._log,
+                prepare_restart_handoff=lambda: prepare_remote_mcp_restart_handoff(
+                    self._log
+                ),
             )
         )
         self._set("STOP_RUNTIME", runtime)

@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from time import monotonic
 from typing import final
 
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
@@ -45,6 +46,9 @@ class BridgeCommandWorkers:
         self._generation = 0
         self._connection_cancel_event = threading.Event()
         self._close_lock = threading.Lock()
+        self._idle = threading.Condition(self._close_lock)
+        self._accepting = True
+        self._in_flight = 0
         self._closed = False
 
     def begin_connection(self) -> int:
@@ -61,8 +65,8 @@ class BridgeCommandWorkers:
         generation: int,
         command: GatewayCommand,
     ) -> OperationErrorResult | None:
-        with self._close_lock:
-            if self._closed:
+        with self._idle:
+            if self._closed or not self._accepting:
                 self._log("remote_mcp_bridge_command_rejected reason=closing")
                 return OperationErrorResult(
                     request_id=command.request_id,
@@ -76,6 +80,7 @@ class BridgeCommandWorkers:
                     error_code="bridge_busy",
                     message="The local bridge is busy. Retry this request shortly.",
                 )
+            self._in_flight += 1
             future = self._executor.submit(
                 self._dispatcher.execute,
                 command,
@@ -100,13 +105,32 @@ class BridgeCommandWorkers:
                 self._log("remote_mcp_bridge_result_discarded reason=stale_connection")
 
     def close(self) -> None:
-        with self._close_lock:
+        with self._idle:
             if self._closed:
                 return
             self._closed = True
+            self._accepting = False
             with self._generation_lock:
                 self._connection_cancel_event.set()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def prepare_restart(self, timeout_seconds: float) -> bool:
+        deadline = monotonic() + timeout_seconds
+        with self._idle:
+            self._accepting = False
+            ready = self._idle.wait_for(
+                lambda: self._in_flight == 0,
+                timeout=max(0.0, deadline - monotonic()),
+            )
+            if not ready:
+                self._accepting = True
+            return ready
+
+    def cancel_restart_preparation(self) -> None:
+        with self._idle:
+            if not self._closed:
+                self._accepting = True
+                self._idle.notify_all()
 
     def _cancel_event_for(self, generation: int) -> threading.Event:
         with self._generation_lock:
@@ -136,6 +160,9 @@ class BridgeCommandWorkers:
         finally:
             self._capacity.release()
         self._completed.put(WorkerCompletion(generation, result))
+        with self._idle:
+            self._in_flight -= 1
+            self._idle.notify_all()
 
 
 __all__ = ["BridgeCommandWorkers"]

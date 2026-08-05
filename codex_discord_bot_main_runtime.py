@@ -12,7 +12,12 @@ import codex_discord_cli as discord_cli
 import codex_discord_message_gate as discord_message_gate
 import codex_discord_runtime_config as discord_runtime_config
 from codex_discord_logging import log_line
-from codex_remote_mcp_binding import close_remote_mcp_bridge
+from codex_remote_mcp_binding import (
+    close_remote_mcp_bridge,
+    restore_remote_mcp_restart_handoff,
+)
+from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
+from codex_remote_mcp_restart_models import RestartHandoffError
 
 
 class BotRunner(Protocol):
@@ -65,6 +70,13 @@ def main(deps: BotMainDeps) -> int:
         if not runtime_lock_acquired:
             print("ERROR: Codex Discord bot is already running.")
             return 2
+        try:
+            _ = restore_remote_mcp_restart_handoff(log_line)
+        except (OSError, RestartHandoffError, RemoteMcpBridgeError) as exc:
+            log_line(
+                "remote_mcp_restart_handoff_restore_failed "
+                + f"error_type={type(exc).__name__} error={str(exc)[:300]}"
+            )
         bot = deps.bot_factory(
             allowed_channel_ids=channel_ids,
             allowed_user_ids=user_ids,
