@@ -319,7 +319,8 @@ matching ChatGPT Pro conversation inspect screenshots, operate safe Windows app
 windows, execute unrestricted shell text, and directly interact with terminal
 windows owned by that ChatGPT session while the thread's short-lived binding is
 active. Password/OTP and credential extraction remain outside the supported
-surface.
+surface. One gateway can keep up to eight PCs connected when each PC has its own
+device ID and token.
 See [docs/remote-mcp.md](docs/remote-mcp.md) for the exact controls and stop rule.
 
 Numeric refs follow the same DB-root numbering as `!list`.

@@ -28,7 +28,11 @@ from simdorei_mcp_common.terminal_window_protocol import (
     TerminalWindowOpenRequest,
     TerminalWindowOutput,
 )
-from tests.remote_mcp_oauth_support import authorize, oauth_settings
+from tests.remote_mcp_oauth_support import (
+    BRIDGE_DEVICE_TOKEN,
+    authorize,
+    oauth_settings,
+)
 
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
@@ -44,7 +48,7 @@ class BridgeSocket(Protocol):
 
 def test_terminal_window_tools_round_trip_all_lifecycle_operations() -> None:
     app = create_app(oauth_settings())
-    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    bridge_headers = {"Authorization": f"Bearer {BRIDGE_DEVICE_TOKEN}"}
     with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             headers = _activate(client, socket)

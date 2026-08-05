@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import hmac
 from builtins import BaseExceptionGroup
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
-from contextlib import asynccontextmanager
-from typing import assert_never
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import ClassVar
 
-import anyio
-import structlog
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from mcp.server.auth.settings import (
     AuthSettings,
@@ -18,11 +14,10 @@ from mcp.server.auth.settings import (
 )
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, ValidationError
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 
-from remote_mcp_server.simdorei_mcp.bridge_sender import WebSocketBridgeSender
+from remote_mcp_server.simdorei_mcp.bridge_router import create_bridge_router
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
-from remote_mcp_server.simdorei_mcp.broker_errors import BrokerError
 from remote_mcp_server.simdorei_mcp.capability_inventory import (
     require_complete_tool_inventory,
 )
@@ -43,23 +38,6 @@ from remote_mcp_server.simdorei_mcp.tools import (
     register_tools,
     registered_tool_names,
 )
-from simdorei_mcp_common.messages import (
-    BridgeHello,
-    DeviceId,
-    GatewayHello,
-    ListFilesResult,
-    OperationErrorResult,
-    ProjectAck,
-    ProjectInfoResult,
-    ProjectOperationResult,
-    ProjectSessionResult,
-    ProjectUpsert,
-    ReadFileResult,
-    WriteFileResult,
-    parse_bridge_message,
-)
-
-LOGGER = structlog.get_logger()
 
 
 class GatewayConfigurationError(Exception):
@@ -67,11 +45,13 @@ class GatewayConfigurationError(Exception):
 
 
 class HealthResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     ok: bool
     service: str
     upstream_ready: bool
+    configured_devices: int
+    connected_devices: int
 
 
 def create_app(settings: GatewaySettings) -> FastAPI:
@@ -156,144 +136,23 @@ def create_app(settings: GatewaySettings) -> FastAPI:
     app.include_router(
         create_approval_router(oauth_provider, approval_path=approval_path)
     )
+    app.include_router(create_bridge_router(settings, broker))
 
     @app.get("/healthz")
     async def health() -> HealthResponse:
-        bridge_connected = await broker.is_device_connected(settings.device_id)
+        connected_devices = await broker.connected_device_count()
         return HealthResponse(
             ok=True,
             service="simdorei-local-project-mcp",
-            upstream_ready=bridge_connected,
+            upstream_ready=connected_devices > 0,
+            configured_devices=len(settings.device_credentials.devices),
+            connected_devices=connected_devices,
         )
 
-    @app.websocket("/bridge")
-    async def bridge(socket: WebSocket) -> None:
-        expected_device_id = settings.device_id
-        if not _authorized(socket, settings):
-            await socket.close(code=1008, reason="unauthorized")
-            return
-        await socket.accept()
-        sender = WebSocketBridgeSender(socket)
-        attached = False
-        try:
-            first = parse_bridge_message(await socket.receive_text())
-            match first:
-                case BridgeHello(device_id=device_id) if (
-                    device_id == expected_device_id
-                ):
-                    displaced = await broker.attach(device_id, sender)
-                    attached = True
-                    if displaced is not None:
-                        await displaced.close()
-                    await sender.send_control(GatewayHello())
-                    LOGGER.info("bridge.connected", device_id=device_id)
-                case BridgeHello():
-                    await sender.reject(1008, "device mismatch")
-                    return
-                case (
-                    ProjectUpsert()
-                    | ProjectInfoResult()
-                    | ListFilesResult()
-                    | ReadFileResult()
-                    | WriteFileResult()
-                    | ProjectOperationResult()
-                    | ProjectSessionResult()
-                    | OperationErrorResult()
-                ):
-                    await sender.reject(1002, "hello required")
-                    return
-                # Preserve a runtime guard at the validated WebSocket boundary.
-                case unreachable:  # pyright: ignore[reportUnnecessaryComparison]
-                    assert_never(unreachable)
-            await _serve_bridge_messages(
-                socket,
-                sender,
-                broker,
-                expected_device_id,
-            )
-        except WebSocketDisconnect:
-            LOGGER.info("bridge.disconnected", device_id=expected_device_id)
-        except (ValidationError, BrokerError) as exc:
-            LOGGER.warning(
-                "bridge.protocol_rejected",
-                device_id=expected_device_id,
-                error_type=type(exc).__name__,
-            )
-            await sender.reject(1008, "invalid bridge message")
-        finally:
-            if attached:
-                await broker.detach(expected_device_id, sender)
+    _ = health
 
     app.mount("/", mcp_app)
     return app
-
-
-async def _serve_bridge_messages(
-    socket: WebSocket,
-    sender: WebSocketBridgeSender,
-    broker: BindingBroker,
-    device_id: DeviceId,
-) -> None:
-    async with anyio.create_task_group() as resume_tasks:
-        try:
-            while True:
-                message = parse_bridge_message(await socket.receive_text())
-                match message:
-                    case ProjectUpsert(
-                        project_scope=project_scope,
-                        binding_id=binding_id,
-                    ):
-                        await broker.upsert(device_id, sender, message)
-                        await sender.send_control(
-                            ProjectAck(
-                                project_scope=project_scope,
-                                binding_id=binding_id,
-                            )
-                        )
-                        resume_tasks.start_soon(
-                            _resume_project,
-                            broker,
-                            device_id,
-                            sender,
-                            message,
-                        )
-                    case (
-                        ProjectInfoResult()
-                        | ListFilesResult()
-                        | ReadFileResult()
-                        | WriteFileResult()
-                        | ProjectOperationResult()
-                        | ProjectSessionResult()
-                        | OperationErrorResult()
-                    ):
-                        await broker.complete(device_id, sender, message)
-                    case BridgeHello():
-                        await sender.reject(1002, "duplicate hello")
-                        return
-                    case unreachable:
-                        assert_never(unreachable)
-        except WebSocketDisconnect:
-            LOGGER.info("bridge.disconnected", device_id=device_id)
-        except (ValidationError, BrokerError) as exc:
-            LOGGER.warning(
-                "bridge.protocol_rejected",
-                device_id=device_id,
-                error_type=type(exc).__name__,
-            )
-            await sender.reject(1008, "invalid bridge message")
-        finally:
-            resume_tasks.cancel_scope.cancel()
-
-
-async def _resume_project(
-    broker: BindingBroker,
-    device_id: DeviceId,
-    sender: WebSocketBridgeSender,
-    project: ProjectUpsert,
-) -> None:
-    resumed = await broker.resume_project(device_id, sender, project)
-    if resumed:
-        LOGGER.info("bridge.project_session_resumed", device_id=device_id)
 
 
 @asynccontextmanager
@@ -304,7 +163,7 @@ async def _close_preserving_lifespan(
     try:
         async with session_context:
             yield
-    except BaseException as session_error:  # noqa: BLE001 - preserve teardown failures.
+    except BaseException as session_error:
         try:
             await close_oauth()
         except BaseException as close_error:  # noqa: BLE001 - preserve both failures.
@@ -314,18 +173,6 @@ async def _close_preserving_lifespan(
             ) from None
         raise
     await close_oauth()
-
-
-def _authorized(socket: WebSocket, settings: GatewaySettings) -> bool:
-    authorization = socket.headers.get("authorization", "")
-    prefix = "Bearer "
-    if not authorization.startswith(prefix):
-        return False
-    candidate = authorization.removeprefix(prefix)
-    return hmac.compare_digest(
-        candidate,
-        settings.device_token.get_secret_value(),
-    )
 
 
 def _public_host(settings: GatewaySettings) -> str:

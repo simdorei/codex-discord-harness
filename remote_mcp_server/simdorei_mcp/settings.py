@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from pathlib import Path
 from typing import ClassVar, Literal
@@ -7,7 +8,10 @@ from typing import ClassVar, Literal
 from pydantic import Field, HttpUrl, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from simdorei_mcp_common.messages import DeviceId
+from remote_mcp_server.simdorei_mcp.device_credentials import (
+    MAX_DEVICE_CREDENTIALS_JSON_BYTES,
+    DeviceCredentialRegistry,
+)
 from simdorei_mcp_common.request_deadlines import (
     GATEWAY_REQUEST_TIMEOUT_SECONDS,
 )
@@ -24,8 +28,7 @@ class GatewaySettings(BaseSettings):
         extra="ignore",
     )
 
-    device_id: DeviceId = Field(min_length=1, max_length=200)
-    device_token: SecretStr
+    device_credentials: DeviceCredentialRegistry
     public_base_url: HttpUrl
     owner_token: SecretStr = Field(min_length=24)
     oauth_database_path: Path = Path("/data/oauth.sqlite3")
@@ -80,9 +83,8 @@ class GatewaySettings(BaseSettings):
 
 
 def load_gateway_settings() -> GatewaySettings:
-    values: dict[str, str] = {
-        "device_id": _required_environment("SIMDOREI_MCP_DEVICE_ID"),
-        "device_token": _required_environment("SIMDOREI_MCP_DEVICE_TOKEN"),
+    values: dict[str, object] = {
+        "device_credentials": _load_device_credentials(),
         "public_base_url": _required_environment("SIMDOREI_MCP_PUBLIC_BASE_URL"),
         "owner_token": _required_environment("SIMDOREI_MCP_OWNER_TOKEN"),
     }
@@ -120,6 +122,72 @@ def load_gateway_settings() -> GatewaySettings:
         if value:
             values[field_name] = value
     return GatewaySettings.model_validate(values)
+
+
+def _load_device_credentials() -> DeviceCredentialRegistry:
+    registry_json = os.environ.get(
+        "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON",
+        "",
+    ).strip()
+    legacy_device_id = os.environ.get("SIMDOREI_MCP_DEVICE_ID", "")
+    legacy_token = os.environ.get("SIMDOREI_MCP_DEVICE_TOKEN", "")
+    if bool(legacy_device_id) != bool(legacy_token):
+        raise GatewaySettingsError(
+            "SIMDOREI_MCP_DEVICE_ID and SIMDOREI_MCP_DEVICE_TOKEN "
+            + "must be set together."
+        )
+    if registry_json:
+        if len(registry_json.encode("utf-8")) > MAX_DEVICE_CREDENTIALS_JSON_BYTES:
+            raise GatewaySettingsError(
+                "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON exceeds 16 KiB."
+            )
+        try:
+            registry = DeviceCredentialRegistry.model_validate_json(registry_json)
+        except ValueError:
+            raise GatewaySettingsError(
+                "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON is invalid."
+            ) from None
+        if legacy_device_id and not _registry_contains_legacy_pair(
+            registry,
+            legacy_device_id,
+            legacy_token,
+        ):
+            raise GatewaySettingsError(
+                "Legacy device credentials must exactly match a registry entry."
+            )
+        return registry
+    if not legacy_device_id:
+        raise GatewaySettingsError(
+            "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON or legacy device credentials "
+            + "are required."
+        )
+    try:
+        return DeviceCredentialRegistry.model_validate(
+            {
+                "version": 1,
+                "devices": [
+                    {"device_id": legacy_device_id, "token": legacy_token},
+                ],
+            }
+        )
+    except ValueError:
+        raise GatewaySettingsError("Legacy device credentials are invalid.") from None
+
+
+def _registry_contains_legacy_pair(
+    registry: DeviceCredentialRegistry,
+    device_id: str,
+    token: str,
+) -> bool:
+    matched = False
+    for credential in registry.devices:
+        id_matches = hmac.compare_digest(str(credential.device_id), device_id)
+        token_matches = hmac.compare_digest(
+            credential.token.get_secret_value(),
+            token,
+        )
+        matched = matched or (id_matches and token_matches)
+    return matched
 
 
 def _required_environment(name: str) -> str:

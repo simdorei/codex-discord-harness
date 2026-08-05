@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 NGINX_CONFIG = Path("remote_mcp_server/nginx-simdorei-mcp.conf")
 
 
@@ -23,8 +22,8 @@ def test_nginx_bounds_bridge_connections_without_breaking_replacement() -> None:
 
     assert "limit_conn_zone $binary_remote_addr zone=bridge_per_ip:10m;" in config
     assert 'limit_conn_zone "bridge_total_key" zone=bridge_total:10m;' in config
-    assert "limit_conn bridge_per_ip 2;" in location
-    assert "limit_conn bridge_total 8;" in location
+    assert "limit_conn bridge_per_ip 16;" in location
+    assert "limit_conn bridge_total 32;" in location
     assert "limit_conn_status 429;" in location
 
 

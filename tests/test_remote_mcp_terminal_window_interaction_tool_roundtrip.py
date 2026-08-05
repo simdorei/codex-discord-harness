@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from collections.abc import Mapping
 from typing import Protocol, cast
 
 from fastapi.testclient import TestClient
@@ -23,9 +23,9 @@ from simdorei_mcp_common.messages import (
     parse_gateway_message,
 )
 from simdorei_mcp_common.terminal_window_interaction_protocol import (
+    TerminalWindowAction,
     TerminalWindowActionOutput,
     TerminalWindowActionReceipt,
-    TerminalWindowAction,
     TerminalWindowActivateRequest,
     TerminalWindowCaptureOutput,
     TerminalWindowCaptureRequest,
@@ -36,7 +36,11 @@ from simdorei_mcp_common.terminal_window_interaction_protocol import (
     TerminalWindowTypeRequest,
 )
 from simdorei_mcp_common.terminal_window_protocol import TerminalWindowEntry
-from tests.remote_mcp_oauth_support import authorize, oauth_settings
+from tests.remote_mcp_oauth_support import (
+    BRIDGE_DEVICE_TOKEN,
+    authorize,
+    oauth_settings,
+)
 
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
@@ -53,7 +57,7 @@ class BridgeSocket(Protocol):
 
 def test_interaction_tools_round_trip_all_five_operations() -> None:
     app = create_app(oauth_settings())
-    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    bridge_headers = {"Authorization": f"Bearer {BRIDGE_DEVICE_TOKEN}"}
     with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             headers = _activate(client, socket)
@@ -141,7 +145,7 @@ def test_interaction_tools_require_write_scope() -> None:
 
 def test_repeated_chatgpt_request_id_gets_fresh_local_window_commands() -> None:
     app = create_app(oauth_settings())
-    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    bridge_headers = {"Authorization": f"Bearer {BRIDGE_DEVICE_TOKEN}"}
     with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             headers = _activate(client, socket)

@@ -35,6 +35,7 @@ from remote_mcp_server.simdorei_mcp.broker_registration import (
 from remote_mcp_server.simdorei_mcp.broker_requests import BrokerRequestsMixin
 from remote_mcp_server.simdorei_mcp.broker_results import require_project_session_result
 from remote_mcp_server.simdorei_mcp.broker_routes import BrokerRouteRegistry
+from simdorei_mcp_common.leases import RenewableExpiry
 from simdorei_mcp_common.messages import (
     BridgeResult,
     DeviceId,
@@ -44,11 +45,9 @@ from simdorei_mcp_common.messages import (
     ProjectUpsert,
     RequestId,
 )
-from simdorei_mcp_common.leases import RenewableExpiry
 from simdorei_mcp_common.request_deadlines import (
     GATEWAY_REQUEST_TIMEOUT_SECONDS,
 )
-
 
 logger = logging.getLogger(__name__)
 NowFactory = Callable[[], datetime]
@@ -108,6 +107,10 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         async with self._lock:
             return device_id in self._devices
 
+    async def connected_device_count(self) -> int:
+        async with self._lock:
+            return len(self._devices)
+
     async def attach(
         self,
         device_id: DeviceId,
@@ -137,9 +140,30 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
             if self._devices.get(device_id) is not sender:
                 raise BridgeUnavailableError("local bridge is disconnected")
             now = self._now()
-            self._prune_expired_locked(now)
             if project.expires_at <= now:
                 raise BindingCodeError("project scope is already expired")
+            current = self._projects.get(project.project_scope)
+            active_owner = (
+                current.device_id
+                if current is not None and current.value.expires_at > now
+                else None
+            )
+            if active_owner is None:
+                active_owner = next(
+                    (
+                        dormant_device_id
+                        for (dormant_device_id, _), dormant in (
+                            self._dormant_routes.items()
+                        )
+                        if dormant.project_scope == project.project_scope
+                        and dormant.resume_until > now
+                        and dormant.route.expires_at > now
+                    ),
+                    None,
+                )
+            if active_owner is not None and active_owner != device_id:
+                raise BindingCodeError("project scope is owned by another device")
+            self._prune_expired_locked(now)
             current = self._projects.get(project.project_scope)
             if (
                 current is not None
@@ -419,7 +443,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
         try:
             with anyio.move_on_after(close_grace_seconds, shield=True):
                 await sender.close()
-        except Exception:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK
+        except Exception:
             logger.warning(
                 "failed to close local bridge after send timeout",
                 exc_info=True,

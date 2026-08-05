@@ -12,6 +12,7 @@ from remote_mcp_server.simdorei_mcp.oauth_scopes import OAUTH_SCOPES
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
 
 DEFAULT_OAUTH_SCOPES = tuple(OAUTH_SCOPES)
+BRIDGE_DEVICE_TOKEN = "a" * 40
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,8 +27,12 @@ class OAuthGrant:
 def oauth_settings(oauth_database_path: Path | None = None) -> GatewaySettings:
     return GatewaySettings.model_validate(
         {
-            "device_id": "device-a",
-            "device_token": "bridge-secret-1234567890",
+            "device_credentials": {
+                "version": 1,
+                "devices": [
+                    {"device_id": "device-a", "token": BRIDGE_DEVICE_TOKEN},
+                ],
+            },
             "public_base_url": "https://simdorei.duckdns.org",
             "owner_token": "owner-secret-12345678901234567890",
             "oauth_database_path": oauth_database_path or Path(":memory:"),

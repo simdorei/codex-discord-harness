@@ -15,7 +15,11 @@ from simdorei_mcp_common.messages import (
     ProjectUpsert,
     parse_gateway_message,
 )
-from tests.remote_mcp_oauth_support import authorize, oauth_settings
+from tests.remote_mcp_oauth_support import (
+    BRIDGE_DEVICE_TOKEN,
+    authorize,
+    oauth_settings,
+)
 
 
 def test_mcp_initialize_and_tool_listing() -> None:
@@ -145,7 +149,7 @@ def test_mcp_requires_oauth_and_publishes_discovery(tmp_path: Path) -> None:
 
 def test_oauth_chat_session_selects_registered_local_project(tmp_path: Path) -> None:
     app = create_app(oauth_settings(tmp_path / "oauth.sqlite3"))
-    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    bridge_headers = {"Authorization": f"Bearer {BRIDGE_DEVICE_TOKEN}"}
     mcp_headers = {
         "Accept": "application/json, text/event-stream",
         "Content-Type": "application/json",

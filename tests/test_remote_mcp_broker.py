@@ -36,8 +36,15 @@ from simdorei_mcp_common.messages import (
 class ProjectInfoSender(BridgeSender):
     """In-memory bridge that completes project-info commands."""
 
-    def __init__(self, broker: BindingBroker) -> None:
+    def __init__(
+        self,
+        broker: BindingBroker,
+        device_id: DeviceId | None = None,
+    ) -> None:
         self._broker: BindingBroker = broker
+        self._device_id: DeviceId = (
+            device_id if device_id is not None else DeviceId("device-a")
+        )
         self.commands: list[ProjectInfoCommand] = []
 
     @override
@@ -66,7 +73,7 @@ class ProjectInfoSender(BridgeSender):
                 assert_never(command)
 
         # When
-        await self._broker.complete(DeviceId("device-a"), self, result)
+        await self._broker.complete(self._device_id, self, result)
 
     @override
     async def close(self) -> None:
@@ -173,6 +180,72 @@ def test_existing_chat_session_cannot_switch_to_another_codex_thread() -> None:
         assert output.thread_id == "thread-a"
         rebound = await broker.select("session-b", "subject-a", second_scope)
         assert rebound.thread_id == "thread-b"
+
+    anyio.run(scenario)
+
+
+def test_two_devices_cannot_claim_the_same_project_scope() -> None:
+    async def scenario() -> None:
+        broker = BindingBroker()
+        sender_a = ProjectInfoSender(broker, DeviceId("device-a"))
+        sender_b = ProjectInfoSender(broker, DeviceId("device-b"))
+        _ = await broker.attach(DeviceId("device-a"), sender_a)
+        _ = await broker.attach(DeviceId("device-b"), sender_b)
+        project_scope = "codex-pro-shared-scope"
+        await broker.upsert(DeviceId("device-a"), sender_a, _project(project_scope))
+
+        with pytest.raises(BindingCodeError, match="owned by another device"):
+            await broker.upsert(
+                DeviceId("device-b"),
+                sender_b,
+                _project(project_scope, "thread-b"),
+            )
+
+        selected = await broker.select("session-a", "subject-a", project_scope)
+        assert selected.thread_id == "thread-a"
+        output = await broker.project_info("session-a", "subject-a")
+        assert output.thread_id == "thread-a"
+        assert await broker.connected_device_count() == 2
+
+    anyio.run(scenario)
+
+
+def test_project_scope_race_has_one_owner_without_partial_mutation() -> None:
+    async def scenario() -> None:
+        broker = BindingBroker()
+        sender_a = ProjectInfoSender(broker, DeviceId("device-a"))
+        sender_b = ProjectInfoSender(broker, DeviceId("device-b"))
+        _ = await broker.attach(DeviceId("device-a"), sender_a)
+        _ = await broker.attach(DeviceId("device-b"), sender_b)
+        outcomes: list[str] = []
+
+        async def register(
+            device_id: DeviceId,
+            sender: ProjectInfoSender,
+            thread_id: str,
+        ) -> None:
+            try:
+                await broker.upsert(
+                    device_id,
+                    sender,
+                    _project("codex-pro-raced-scope", thread_id),
+                )
+            except BindingCodeError:
+                outcomes.append("conflict")
+            else:
+                outcomes.append("owner")
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(register, DeviceId("device-a"), sender_a, "thread-a")
+            tasks.start_soon(register, DeviceId("device-b"), sender_b, "thread-b")
+
+        assert sorted(outcomes) == ["conflict", "owner"]
+        selected = await broker.select(
+            "session-race",
+            "subject-a",
+            "codex-pro-raced-scope",
+        )
+        assert selected.thread_id in {"thread-a", "thread-b"}
 
     anyio.run(scenario)
 

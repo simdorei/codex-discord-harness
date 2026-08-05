@@ -4,8 +4,10 @@ from datetime import UTC, datetime, timedelta
 from typing import assert_never, final, override
 
 import anyio
+import pytest
 
 from remote_mcp_server.simdorei_mcp.broker import BindingBroker
+from remote_mcp_server.simdorei_mcp.broker_errors import BindingCodeError
 from remote_mcp_server.simdorei_mcp.broker_models import BridgeSender
 from simdorei_mcp_common.messages import (
     DeviceId,
@@ -25,8 +27,15 @@ from simdorei_mcp_common.messages import (
 
 @final
 class _RespondingSender(BridgeSender):
-    def __init__(self, broker: BindingBroker) -> None:
+    def __init__(
+        self,
+        broker: BindingBroker,
+        device_id: DeviceId | None = None,
+    ) -> None:
         self._broker = broker
+        self._device_id: DeviceId = (
+            device_id if device_id is not None else DeviceId("device-a")
+        )
         self.session_commands: list[ProjectSessionCommand] = []
 
     @override
@@ -52,7 +61,7 @@ class _RespondingSender(BridgeSender):
                 raise AssertionError(f"unexpected command: {command.type}")
             case unreachable:
                 assert_never(unreachable)
-        await self._broker.complete(DeviceId("device-a"), self, result)
+        await self._broker.complete(self._device_id, self, result)
 
     @override
     async def close(self) -> None:
@@ -157,5 +166,55 @@ def test_detached_chat_session_expires_before_late_bridge_reconnect() -> None:
             project,
         )
         assert broker.session_route_count == 0
+
+    anyio.run(scenario)
+
+
+def test_one_device_restart_preserves_other_device_and_dormant_scope_owner() -> None:
+    async def scenario() -> None:
+        broker = BindingBroker()
+        sender_a = _RespondingSender(broker, DeviceId("device-a"))
+        sender_b = _RespondingSender(broker, DeviceId("device-b"))
+        project_a = _project()
+        project_b = project_a.model_copy(
+            update={
+                "project_scope": "codex-pro-project-b",
+                "binding_id": "binding-generation-project-b",
+                "thread_id": "thread-b",
+                "project_name": "project-b",
+            }
+        )
+        _ = await broker.attach(DeviceId("device-a"), sender_a)
+        _ = await broker.attach(DeviceId("device-b"), sender_b)
+        await broker.upsert(DeviceId("device-a"), sender_a, project_a)
+        await broker.upsert(DeviceId("device-b"), sender_b, project_b)
+        _ = await broker.select("session-a", "subject-a", project_a.project_scope)
+        _ = await broker.select("session-b", "subject-a", project_b.project_scope)
+
+        await broker.detach(DeviceId("device-a"), sender_a)
+
+        output_b = await broker.project_info("session-b", "subject-a")
+        assert output_b.thread_id == "thread-b"
+        with pytest.raises(BindingCodeError, match="owned by another device"):
+            await broker.upsert(
+                DeviceId("device-b"),
+                sender_b,
+                project_a.model_copy(update={"thread_id": "thread-b"}),
+            )
+
+        replacement_a = _RespondingSender(broker, DeviceId("device-a"))
+        _ = await broker.attach(DeviceId("device-a"), replacement_a)
+        await broker.upsert(DeviceId("device-a"), replacement_a, project_a)
+        assert await broker.resume_project(
+            DeviceId("device-a"),
+            replacement_a,
+            project_a,
+        )
+        assert (await broker.project_info("session-a", "subject-a")).thread_id == (
+            "thread-a"
+        )
+        assert (await broker.project_info("session-b", "subject-a")).thread_id == (
+            "thread-b"
+        )
 
     anyio.run(scenario)

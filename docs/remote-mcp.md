@@ -113,8 +113,10 @@ running because a hosted server cannot directly read files that remain on a PC.
   no longer be proved, forced termination is refused. Failed process cleanup
   stays retryable and is reported instead of being acknowledged as complete.
 
-This is a single-owner gateway. OAuth protects the ChatGPT-to-VPS side; the
-existing device token separately protects the VPS-to-local-PC bridge.
+This is a single-owner gateway that accepts up to eight separately authenticated
+PCs at the same time. OAuth protects the ChatGPT-to-VPS side; one unique device
+token per PC separately protects each VPS-to-local-PC bridge. Device IDs and
+tokens are never returned by the health endpoint.
 
 ## Local configuration
 
@@ -128,12 +130,20 @@ CODEX_REMOTE_MCP_DEVICE_TOKEN=your-private-device-token
 CODEX_REMOTE_MCP_BINDING_TTL_SECONDS=1800
 ```
 
+Use a different ID and token on every PC. For example, the desktop can use
+`office-pc` and the laptop can use `laptop-pc`. Both can remain connected, and
+restarting one does not disconnect the other. Copying the same pair to two PCs
+is not supported because the newer connection intentionally replaces the older
+one for that ID.
+
 Install or update dependencies with the normal project installer, then restart
 the bot.
 
 ## ChatGPT configuration
 
-Add the MCP server URL once in ChatGPT developer/connectors settings:
+Add the MCP server URL once in ChatGPT developer/connectors settings. The same
+connector reaches whichever registered PC owns the short-lived project selected
+by that ChatGPT conversation:
 
 ```text
 https://simdorei.duckdns.org/mcp
@@ -164,8 +174,7 @@ login, CAPTCHA, password, and OTP surfaces are never returned to ChatGPT.
 The gateway container lives in `remote_mcp_server/`. Its private `.env` requires:
 
 ```dotenv
-SIMDOREI_MCP_DEVICE_ID=the-same-device-id
-SIMDOREI_MCP_DEVICE_TOKEN=the-same-device-token
+SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON={"version":1,"devices":[{"device_id":"office-pc","token":"first-random-secret-at-least-32-characters"},{"device_id":"laptop-pc","token":"second-random-secret-at-least-32-characters"}]}
 SIMDOREI_MCP_PUBLIC_BASE_URL=https://simdorei.duckdns.org
 SIMDOREI_MCP_OWNER_TOKEN=a-separate-random-secret-at-least-24-characters
 SIMDOREI_MCP_OAUTH_DATABASE_PATH=/data/oauth.sqlite3
@@ -182,6 +191,27 @@ SIMDOREI_MCP_OAUTH_REFRESH_HISTORY_PER_FAMILY_LIMIT=1024
 SIMDOREI_MCP_REQUEST_TIMEOUT_SECONDS=3630
 SIMDOREI_MCP_LOG_LEVEL=INFO
 ```
+
+The registry must be one JSON object with `version` set to `1`. It accepts one
+to eight devices. IDs use ASCII letters, numbers, `.`, `_`, or `-`; tokens are
+32 to 512 printable ASCII characters and must all be different. The gateway
+refuses malformed JSON, duplicate IDs, duplicate tokens, and unknown tokens at
+startup or connection time instead of guessing.
+
+For a no-downtime upgrade from the old single-PC variables:
+
+1. Add `SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON` with the existing PC pair first.
+2. Keep `SIMDOREI_MCP_DEVICE_ID` and `SIMDOREI_MCP_DEVICE_TOKEN` during that
+   first deployment. They must exactly match one registry entry.
+3. Confirm `/healthz` reports the expected `configured_devices` and
+   `connected_devices` counts, then remove the two legacy variables in a later
+   deployment.
+4. Give each additional PC a new pair, add it to the server registry, and place
+   only that pair in the new PC's local `.env`.
+
+The public MCP URL and ChatGPT OAuth connection do not change during this
+migration. A same-scope registration from another PC is rejected atomically, so
+it cannot steal an active or restart-resumable project route.
 
 The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed

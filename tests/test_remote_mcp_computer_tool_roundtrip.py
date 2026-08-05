@@ -24,7 +24,11 @@ from simdorei_mcp_common.operation_outputs import (
     ComputerWindowEntry,
 )
 from simdorei_mcp_common.operation_requests import ComputerScreenshotRequest
-from tests.remote_mcp_oauth_support import authorize, oauth_settings
+from tests.remote_mcp_oauth_support import (
+    BRIDGE_DEVICE_TOKEN,
+    authorize,
+    oauth_settings,
+)
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\ncomputer-roundtrip"
 MCP_HEADERS = {
@@ -40,7 +44,7 @@ class BridgeSocket(Protocol):
 
 def test_computer_screenshot_returns_observation_and_native_image() -> None:
     app = create_app(oauth_settings())
-    bridge_headers = {"Authorization": "Bearer bridge-secret-1234567890"}
+    bridge_headers = {"Authorization": f"Bearer {BRIDGE_DEVICE_TOKEN}"}
     with TestClient(app, base_url="http://localhost") as client:  # noqa: SIM117
         with client.websocket_connect("/bridge", headers=bridge_headers) as socket:
             socket.send_text(
