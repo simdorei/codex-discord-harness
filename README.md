@@ -14,6 +14,7 @@ This repo lets a Discord bot send messages into local Codex Desktop threads, mir
 - Linux status: not a desktop-control target.
 - Secrets: `.env` contains the Discord bot token and must not be committed.
 - Start here when changing code: `codex_discord_bot.py`, `codex_desktop_bridge.py`, `codex_app_server_transport.py`, and the tests matching the touched file.
+- End-to-end flow: [architecture route map](docs/architecture-route-map.md).
 
 ## Support Matrix
 
@@ -420,6 +421,7 @@ The macOS smoke workflow checks Python compilation, selected unit tests, `instal
 
 ## More Documentation
 
+- [End-to-end architecture route map](docs/architecture-route-map.md)
 - [Bundled skills and attribution](docs/plugin-skills.md)
 - [ChatGPT Pro local-project MCP](docs/remote-mcp.md)
 - [Daily workflow and Discord commands](docs/operations.md)
