@@ -68,6 +68,8 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertIn("git_push", ask_skill)
         self.assertIn("conversation_map.py", ask_skill)
         self.assertIn("browser_evidence_hook.py print-probe-code", ask_skill)
+        self.assertIn("use `type()` instead of `fill()`", ask_skill)
+        self.assertIn("both literal MCP block tags remain", ask_skill)
         self.assertTrue(conversation_map.is_file())
         self.assertTrue(browser_evidence.is_file())
         self.assertEqual(

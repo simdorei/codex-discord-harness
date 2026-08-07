@@ -86,6 +86,10 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    once for every newly supplied scope instruction, including when reusing a
    conversation, so access is renewed for the originating Codex thread. Treat the
    scope as a temporary access capability: never quote, repeat, log, or share it.
+   For a contenteditable ChatGPT composer, use `type()` instead of `fill()` when
+   entering this request because `fill()` may parse the angle-bracket block as
+   markup and remove it. Before sending, verify that both literal MCP block tags remain.
+   If either tag is missing, do not send; clear and re-enter the request with `type()`.
    After selection, prefer the dedicated project tools: search/read before
    editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
    for visual inspection, commands returned by `command_list` for verification,
