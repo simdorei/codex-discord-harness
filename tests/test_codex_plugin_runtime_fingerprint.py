@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -37,6 +39,38 @@ def _inventory(remote_root: Path, browser_root: Path) -> str:
 
 
 class PluginRuntimeFingerprintTests(unittest.TestCase):
+    def test_inventory_uses_configured_executable_when_codex_is_not_on_path(
+        self,
+    ) -> None:
+        # Given
+        configured = "configured-codex.exe"
+        inventory = '{"installed":[]}'
+        completed = subprocess.CompletedProcess(
+            [configured, "plugin", "list", "--json"],
+            0,
+            inventory,
+            "",
+        )
+
+        # When
+        with (
+            mock.patch.dict(os.environ, {"CODEX_EXE": configured}),
+            mock.patch(
+                "codex_plugin_runtime_fingerprint.shutil.which",
+                return_value=None,
+            ) as which,
+            mock.patch(
+                "codex_plugin_runtime_fingerprint.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            actual = fingerprint.read_codex_plugin_inventory()
+
+        # Then
+        self.assertEqual(actual, inventory)
+        self.assertEqual(run.call_args.args[0][0], configured)
+        which.assert_not_called()
+
     def test_fingerprint_is_deterministic_for_same_plugin_trees(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             root = Path(raw_dir)
