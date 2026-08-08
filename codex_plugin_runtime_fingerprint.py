@@ -35,7 +35,7 @@ class PluginContentFingerprintError(PluginRuntimeFingerprintError):
 
 
 def read_codex_plugin_inventory() -> str:
-    executable = shutil.which("codex")
+    executable = os.environ.get("CODEX_EXE", "").strip() or shutil.which("codex")
     if executable is None:
         raise PluginRuntimeFingerprintError("Codex executable was not found on PATH")
     try:
