@@ -24,7 +24,11 @@ def make_prompt_preprocessor(module: ModuleType) -> mapped_delivery.PromptPrepro
     )
     runtime_preflight = cast(
         prompt_rewrite.RuntimePreflight,
-        getattr(module, "PRO_RUNTIME_PREFLIGHT", pro_preflight.run_pro_runtime_preflight),
+        getattr(
+            module,
+            "PRO_RUNTIME_PREFLIGHT",
+            pro_preflight.run_pro_runtime_preflight_with_recovery,
+        ),
     )
 
     def preprocess(
@@ -46,7 +50,9 @@ def make_prompt_preprocessor(module: ModuleType) -> mapped_delivery.PromptPrepro
     return preprocess
 
 
-def make_discord_origin_prompt_marker(module: ModuleType) -> mapped_delivery.DiscordOriginPromptMarker:
+def make_discord_origin_prompt_marker(
+    module: ModuleType,
+) -> mapped_delivery.DiscordOriginPromptMarker:
     return cast(
         mapped_delivery.DiscordOriginPromptMarker,
         module.mark_recent_discord_origin_prompt,

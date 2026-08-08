@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -30,6 +30,8 @@ PLUGIN_MANIFEST_PATH = (
 
 InventoryReader = Callable[[], str]
 ResidentSnapshotReader = Callable[[], AppServerLifecycleSnapshot]
+RuntimeCheck = Callable[[], "ProRuntimeStatus"]
+ResidentRefresh = Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,4 +201,39 @@ def run_pro_runtime_preflight(
         plugin_status,
         resident_snapshot=resident_snapshot_reader(),
         current_plugin_fingerprint=current_fingerprint,
+    )
+
+
+def recover_stale_pro_runtime(
+    check: RuntimeCheck,
+    refresh: ResidentRefresh,
+) -> ProRuntimeStatus:
+    try:
+        return check()
+    except ProRuntimePreflightError as exc:
+        if exc.diagnostic.code is not ProDiagnosticCode.RESIDENT_STALE:
+            raise
+        try:
+            refreshed = refresh()
+        except Exception as refresh_exc:  # noqa: BLE001  # noqa: BROAD_EXCEPT_OK - recovery boundary normalizes resident startup failures.
+            raise ProRuntimePreflightError(
+                replace(
+                    exc.diagnostic,
+                    internal_detail=(
+                        exc.diagnostic.internal_detail
+                        + "; automatic resident refresh failed "
+                        + f"error_type={type(refresh_exc).__name__} "
+                        + f"error={str(refresh_exc)[:300]}"
+                    ),
+                )
+            ) from None
+        if not refreshed:
+            raise
+    return check()
+
+
+def run_pro_runtime_preflight_with_recovery() -> ProRuntimeStatus:
+    return recover_stale_pro_runtime(
+        run_pro_runtime_preflight,
+        app_server_transport.DEFAULT_CLIENT.try_restart_if_quiescent,
     )

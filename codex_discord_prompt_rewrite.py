@@ -11,7 +11,7 @@ import codex_discord_prompt_mapped_delivery as mapped_delivery
 from codex_pro_runtime_preflight import (
     ProRuntimePreflightError,
     ProRuntimeStatus,
-    run_pro_runtime_preflight,
+    run_pro_runtime_preflight_with_recovery,
 )
 from codex_pro_runtime_diagnostics import (
     ProDiagnosticCode,
@@ -75,7 +75,7 @@ def rewrite_prompt(
     cwd: Path,
     log: LogFunc,
     project_registrar: ProjectRegistrar = register_remote_mcp_project,
-    runtime_preflight: RuntimePreflight = run_pro_runtime_preflight,
+    runtime_preflight: RuntimePreflight = run_pro_runtime_preflight_with_recovery,
 ) -> mapped_delivery.PromptPreprocessResult:
     rewritten = _rewrite_pro_command(prompt)
     if rewritten is None:
