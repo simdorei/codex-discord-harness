@@ -24,6 +24,10 @@ from codex_remote_mcp_bridge_config import (
     RemoteMcpConfigurationError,
 )
 from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
+from simdorei_mcp_common.connector_contract import (
+    PRODUCTION_CONNECTOR_NAME,
+    PRODUCTION_CONNECTOR_RESOURCE,
+)
 
 LogFunc = Callable[[str], None]
 ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
@@ -140,12 +144,17 @@ def rewrite_prompt(
     project_instruction = "\n".join(
         (
             "",
-            "<local-project-mcp>",
-            "A local Codex project is available through the configured MCP connector.",
+            (
+                f'<local-project-mcp connector="{PRODUCTION_CONNECTOR_NAME}" '
+                f'resource="{PRODUCTION_CONNECTOR_RESOURCE}">'
+            ),
+            "Use only the connector named in this tag and select it explicitly.",
+            "Do not use Simdorei Local Project or Simdorei Local Project v12 QA.",
             f"conversation_scope: {pro_conversation_scope(target_thread_id)}",
             f"project_scope: {ticket.project_scope}",
             "Before inspecting or changing local files, call select_project exactly once",
-            "with the project_scope above. Read a file before updating it,",
+            "with the project_scope above and connector_resource set to the resource",
+            "attribute in this tag. Read a file before updating it,",
             "and pass its SHA-256 when writing an existing file.",
             "</local-project-mcp>",
         )

@@ -80,12 +80,20 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
 4. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
 5. Do not silently fall back to a non-Pro model.
 6. When the request includes a `<local-project-mcp>` block, send that block with
-   the consultation request. In ChatGPT, use the configured local-project MCP
-   connector and call `select_project` with the supplied short-lived
-   `project_scope` before asking ChatGPT to inspect or edit project files. Call it
-   once for every newly supplied scope instruction, including when reusing a
-   conversation, so access is renewed for the originating Codex thread. Treat the
-   scope as a temporary access capability: never quote, repeat, log, or share it.
+   the consultation request. Before sending, open ChatGPT's plugin picker and
+   attach the plugin whose visible name exactly matches the block's `connector`
+   attribute. Require exactly one match. Never let ChatGPT choose a connector
+   from the shared `select_project` tool name, and never attach `Simdorei Local
+   Project` or `Simdorei Local Project v12 QA`. If the exact plugin is unavailable,
+   duplicated, or cannot be attached, stop without sending the request and report
+   the connector-selection failure.
+   Call `select_project` with both the supplied short-lived `project_scope` and
+   `connector_resource` set to the block's `resource` attribute before asking
+   ChatGPT to inspect or edit project files. Call it once for every newly supplied
+   scope instruction, including when reusing a conversation, so access is renewed
+   for the originating Codex thread. If `select_project` reports an OAuth connector
+   mismatch, stop; do not retry through another connector. Treat the scope as a
+   temporary access capability: never quote, repeat, log, or share it.
    For a contenteditable ChatGPT composer, use `type()` instead of `fill()` when
    entering this request because `fill()` may parse the angle-bracket block as
    markup and remove it. Before sending, verify that both literal MCP block tags remain.

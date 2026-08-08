@@ -20,6 +20,10 @@ from remote_mcp_server.simdorei_mcp.tool_context import (
     tool_identity,
     tool_request_id,
 )
+from simdorei_mcp_common.connector_contract import (
+    PRODUCTION_CONNECTOR_NAME,
+    PRODUCTION_CONNECTOR_RESOURCE,
+)
 from simdorei_mcp_common.messages import (
     ListFilesOutput,
     ProjectInfoOutput,
@@ -31,7 +35,12 @@ from simdorei_mcp_common.messages import (
 )
 
 
-def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
+def register_tools(
+    mcp: FastMCP,
+    broker: BindingBroker,
+    *,
+    resource_url: str,
+) -> None:
     @mcp.tool(
         title="Show MCP capability inventory",
         annotations=READ_ONLY_ANNOTATIONS,
@@ -53,9 +62,18 @@ def register_tools(mcp: FastMCP, broker: BindingBroker) -> None:
     )
     async def select_project(  # pyright: ignore[reportUnusedFunction]
         project_scope: str,
+        connector_resource: str,
         ctx: ToolContext,
     ) -> ProjectSelectionOutput:
         """Select the active Codex project registered for this ChatGPT conversation."""
+        if (
+            resource_url != PRODUCTION_CONNECTOR_RESOURCE
+            or connector_resource != PRODUCTION_CONNECTOR_RESOURCE
+        ):
+            raise ToolError(
+                "OAuth connector mismatch: select "
+                + f"{PRODUCTION_CONNECTOR_NAME!r} and retry !pro."
+            )
         identity = tool_identity(ctx, READ_SCOPE)
         try:
             return await broker.select(

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from remote_mcp_server.simdorei_mcp.oauth_scopes import OAUTH_SCOPES
 from remote_mcp_server.simdorei_mcp.settings import GatewaySettings
+from simdorei_mcp_common.connector_contract import PRODUCTION_CONNECTOR_RESOURCE
 
 DEFAULT_OAUTH_SCOPES = tuple(OAUTH_SCOPES)
 BRIDGE_DEVICE_TOKEN = "a" * 40
@@ -43,13 +44,17 @@ def oauth_settings(oauth_database_path: Path | None = None) -> GatewaySettings:
 def authorize(
     client: TestClient,
     scopes: tuple[str, ...] = DEFAULT_OAUTH_SCOPES,
+    *,
+    resource: str = PRODUCTION_CONNECTOR_RESOURCE,
 ) -> str:
-    return authorize_grant(client, scopes).access_token
+    return authorize_grant(client, scopes, resource=resource).access_token
 
 
 def authorize_grant(
     client: TestClient,
     scopes: tuple[str, ...] | None = DEFAULT_OAUTH_SCOPES,
+    *,
+    resource: str = PRODUCTION_CONNECTOR_RESOURCE,
 ) -> OAuthGrant:
     redirect_uri = "https://chatgpt.com/connector/oauth/test"
     scope_text = " ".join(scopes) if scopes is not None else None
@@ -79,7 +84,7 @@ def authorize_grant(
         "state": "integration-state",
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "resource": "https://simdorei.duckdns.org/mcp",
+        "resource": resource,
     }
     if scope_text is not None:
         authorization_params["scope"] = scope_text
@@ -114,7 +119,7 @@ def authorize_grant(
             "client_secret": client_info["client_secret"],
             "redirect_uri": redirect_uri,
             "code_verifier": verifier,
-            "resource": "https://simdorei.duckdns.org/mcp",
+            "resource": resource,
         },
     )
     assert token.status_code == 200, token.text

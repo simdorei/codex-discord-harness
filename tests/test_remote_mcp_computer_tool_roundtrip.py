@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import JsonValue
 
 from remote_mcp_server.simdorei_mcp.app import create_app
+from simdorei_mcp_common.connector_contract import PRODUCTION_CONNECTOR_RESOURCE
 from simdorei_mcp_common.messages import (
     BridgeHello,
     DeviceId,
@@ -124,7 +125,10 @@ def _select_project(
                 "method": "tools/call",
                 "params": {
                     "name": "select_project",
-                    "arguments": {"project_scope": "codex-pro-project-a"},
+                    "arguments": {
+                        "project_scope": "codex-pro-project-a",
+                        "connector_resource": PRODUCTION_CONNECTOR_RESOURCE,
+                    },
                     "_meta": {"openai/session": "chat-session-a"},
                 },
             },

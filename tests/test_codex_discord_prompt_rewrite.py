@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import xml.etree.ElementTree as element_tree
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -73,6 +74,34 @@ class PromptRewriteTests(unittest.TestCase):
         self.assertIn(
             f"conversation_scope: {prompt_rewrite.pro_conversation_scope('thread-1')}",
             result.prompt,
+        )
+
+    def test_rewrite_prompt_requires_the_production_oauth_connector(self) -> None:
+        # Given
+        result = prompt_rewrite.rewrite_prompt(
+            "!pro inspect",
+            target_thread_id="thread-1",
+            cwd=Path.cwd(),
+            log=lambda _: None,
+            project_registrar=lambda *_: ProjectTicket(
+                project_scope="codex-project-test",
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            ),
+            runtime_preflight=_pass_preflight,
+        )
+
+        # When
+        start = result.prompt.index("<local-project-mcp")
+        end = result.prompt.index("</local-project-mcp>") + len("</local-project-mcp>")
+        instruction = element_tree.fromstring(result.prompt[start:end])
+
+        # Then
+        self.assertEqual(
+            instruction.attrib,
+            {
+                "connector": "Simdorei Local Project Oauth",
+                "resource": "https://simdorei.duckdns.org/mcp",
+            },
         )
 
     def test_each_pro_registration_uses_a_fresh_project_scope(self) -> None:

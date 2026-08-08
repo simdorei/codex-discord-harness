@@ -318,8 +318,13 @@ def test_manifest_duplicate_detection_is_independent_of_registered_names() -> No
 def test_create_app_fails_closed_after_registered_inventory_drifts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def register_without_git_push(mcp: FastMCP, broker: BindingBroker) -> None:
-        register_tools(mcp, broker)
+    def register_without_git_push(
+        mcp: FastMCP,
+        broker: BindingBroker,
+        *,
+        resource_url: str,
+    ) -> None:
+        register_tools(mcp, broker, resource_url=resource_url)
         mcp.remove_tool("git_push")
 
     monkeypatch.setattr(app_module, "register_tools", register_without_git_push)

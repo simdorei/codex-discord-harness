@@ -114,7 +114,7 @@ def create_app(settings: GatewaySettings) -> FastAPI:
             allowed_origins=[str(settings.public_base_url).rstrip("/")],
         ),
     )
-    register_tools(mcp, broker)
+    register_tools(mcp, broker, resource_url=resource_url)
     _ = require_complete_tool_inventory(registered_tool_names(mcp))
     mcp_app = mcp.streamable_http_app()
     mcp_app.add_exception_handler(TokenCapacityError, _token_capacity_error_response)

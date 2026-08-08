@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from remote_mcp_server.simdorei_mcp.app import create_app
 from remote_mcp_server.simdorei_mcp.oauth_scopes import READ_SCOPE, WRITE_SCOPE
+from simdorei_mcp_common.connector_contract import PRODUCTION_CONNECTOR_RESOURCE
 from simdorei_mcp_common.messages import (
     BridgeHello,
     DeviceId,
@@ -142,7 +143,10 @@ def _activate(
             json=_tool_call(
                 1,
                 "select_project",
-                {"project_scope": "codex-pro-project-terminal-window"},
+                {
+                    "project_scope": "codex-pro-project-terminal-window",
+                    "connector_resource": PRODUCTION_CONNECTOR_RESOURCE,
+                },
             ),
         )
         command = parse_gateway_message(socket.receive_text())
