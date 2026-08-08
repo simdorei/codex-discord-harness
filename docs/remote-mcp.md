@@ -113,7 +113,7 @@ running because a hosted server cannot directly read files that remain on a PC.
   no longer be proved, forced termination is refused. Failed process cleanup
   stays retryable and is reported instead of being acknowledged as complete.
 
-This is a single-owner gateway that accepts up to eight separately authenticated
+This is a single-owner gateway that accepts up to 32 separately authenticated
 PCs at the same time. OAuth protects the ChatGPT-to-VPS side; one unique device
 token per PC separately protects each VPS-to-local-PC bridge. Device IDs and
 tokens are never returned by the health endpoint.
@@ -193,7 +193,7 @@ SIMDOREI_MCP_LOG_LEVEL=INFO
 ```
 
 The registry must be one JSON object with `version` set to `1`. It accepts one
-to eight devices. IDs use ASCII letters, numbers, `.`, `_`, or `-`; tokens are
+to 32 devices. IDs use ASCII letters, numbers, `.`, `_`, or `-`; tokens are
 32 to 512 printable ASCII characters and must all be different. The gateway
 refuses malformed JSON, duplicate IDs, duplicate tokens, and unknown tokens at
 startup or connection time instead of guessing.

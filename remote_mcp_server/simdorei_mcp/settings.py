@@ -83,7 +83,7 @@ class GatewaySettings(BaseSettings):
 
 
 def load_gateway_settings() -> GatewaySettings:
-    values: dict[str, object] = {
+    values: dict[str, object] = {  # noqa: ANN401  # noqa: OBJECT_OK - heterogeneous Pydantic input.
         "device_credentials": _load_device_credentials(),
         "public_base_url": _required_environment("SIMDOREI_MCP_PUBLIC_BASE_URL"),
         "owner_token": _required_environment("SIMDOREI_MCP_OWNER_TOKEN"),
@@ -139,7 +139,7 @@ def _load_device_credentials() -> DeviceCredentialRegistry:
     if registry_json:
         if len(registry_json.encode("utf-8")) > MAX_DEVICE_CREDENTIALS_JSON_BYTES:
             raise GatewaySettingsError(
-                "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON exceeds 16 KiB."
+                "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON exceeds 24 KiB."
             )
         try:
             registry = DeviceCredentialRegistry.model_validate_json(registry_json)

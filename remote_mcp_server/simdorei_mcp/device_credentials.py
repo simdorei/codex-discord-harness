@@ -17,8 +17,8 @@ from pydantic import (
 
 from simdorei_mcp_common.messages import DeviceId
 
-MAX_DEVICE_CREDENTIALS = 8
-MAX_DEVICE_CREDENTIALS_JSON_BYTES = 16 * 1024
+MAX_DEVICE_CREDENTIALS = 32
+MAX_DEVICE_CREDENTIALS_JSON_BYTES = 24 * 1024
 _DEVICE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
@@ -32,15 +32,21 @@ class DeviceCredential(BaseModel):
     @classmethod
     def validate_device_id(cls, value: DeviceId) -> DeviceId:
         if _DEVICE_ID_PATTERN.fullmatch(value) is None:
-            raise ValueError("device_id must use portable ASCII characters")
+            raise ValueError(  # noqa: EM101  # noqa: GENERIC_ERR_OK - Pydantic validator contract.
+                "device_id must use portable ASCII characters"
+            )
         return value
 
     @field_validator("token")
     @classmethod
     def validate_token(cls, value: SecretStr) -> SecretStr:
         token = value.get_secret_value()
-        if not token.isascii() or any(not 33 <= ord(character) <= 126 for character in token):
-            raise ValueError("token must contain printable ASCII without whitespace")
+        if not token.isascii() or any(
+            not 33 <= ord(character) <= 126 for character in token
+        ):
+            raise ValueError(  # noqa: EM101  # noqa: GENERIC_ERR_OK - Pydantic validator contract.
+                "token must contain printable ASCII without whitespace"
+            )
         return value
 
 
@@ -61,9 +67,13 @@ class DeviceCredentialRegistry(BaseModel):
             for credential in self.devices
         ]
         if len(device_ids) != len(set(device_ids)):
-            raise ValueError("device IDs must be unique")
+            raise ValueError(  # noqa: EM101  # noqa: GENERIC_ERR_OK - Pydantic validator contract.
+                "device IDs must be unique"
+            )
         if len(token_digests) != len(set(token_digests)):
-            raise ValueError("device tokens must be unique")
+            raise ValueError(  # noqa: EM101  # noqa: GENERIC_ERR_OK - Pydantic validator contract.
+                "device tokens must be unique"
+            )
         return self
 
 

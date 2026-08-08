@@ -25,8 +25,7 @@ def _registry(*devices: tuple[str, str]) -> str:
         {
             "version": 1,
             "devices": [
-                {"device_id": device_id, "token": token}
-                for device_id, token in devices
+                {"device_id": device_id, "token": token} for device_id, token in devices
             ],
         }
     )
@@ -82,12 +81,29 @@ def test_rejects_oversized_registry_before_parsing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_environment(monkeypatch)
-    monkeypatch.setenv("SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON", "{" + "x" * 16_384)
+    monkeypatch.setenv("SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON", "{" + "x" * 24_576)
     monkeypatch.delenv("SIMDOREI_MCP_DEVICE_ID", raising=False)
     monkeypatch.delenv("SIMDOREI_MCP_DEVICE_TOKEN", raising=False)
 
-    with pytest.raises(GatewaySettingsError, match="exceeds 16 KiB"):
+    with pytest.raises(GatewaySettingsError, match="exceeds 24 KiB"):
         _ = load_gateway_settings()
+
+
+def test_loads_thirty_two_devices_with_maximum_sized_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given the approved registration capacity at the token-size boundary.
+    _set_required_environment(monkeypatch)
+    devices = tuple((f"pc-{index}", f"{index:02d}" * 256) for index in range(32))
+    monkeypatch.setenv("SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON", _registry(*devices))
+    monkeypatch.delenv("SIMDOREI_MCP_DEVICE_ID", raising=False)
+    monkeypatch.delenv("SIMDOREI_MCP_DEVICE_TOKEN", raising=False)
+
+    # When the gateway loads its device registry.
+    settings = load_gateway_settings()
+
+    # Then all thirty-two devices are available for authentication.
+    assert len(settings.device_credentials.devices) == 32
 
 
 @pytest.mark.parametrize("use_registry", [True, False])
@@ -100,8 +116,7 @@ def test_invalid_credentials_do_not_leak_tokens_through_exception_chaining(
     if use_registry:
         monkeypatch.setenv(
             "SIMDOREI_MCP_DEVICE_CREDENTIALS_JSON",
-            '{"version":1,"devices":[{"device_id":"office-pc","token":"'
-            + secret_token,
+            '{"version":1,"devices":[{"device_id":"office-pc","token":"' + secret_token,
         )
         monkeypatch.delenv("SIMDOREI_MCP_DEVICE_ID", raising=False)
         monkeypatch.delenv("SIMDOREI_MCP_DEVICE_TOKEN", raising=False)
@@ -189,13 +204,13 @@ def test_rejects_partial_or_mismatched_legacy_credentials(
             "version": 1,
             "devices": [
                 {"device_id": f"pc-{index}", "token": str(index) * 40}
-                for index in range(9)
+                for index in range(33)
             ],
         },
     ],
 )
 def test_registry_rejects_ambiguous_or_unsupported_credentials(
-    payload: object,
+    payload: object,  # noqa: ANN401  # noqa: OBJECT_OK - parametrized invalid input shapes.
 ) -> None:
     with pytest.raises(ValueError):
         _ = DeviceCredentialRegistry.model_validate(payload)
