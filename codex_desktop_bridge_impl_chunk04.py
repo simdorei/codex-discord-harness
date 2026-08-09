@@ -79,6 +79,7 @@ def _make_window_focus_deps() -> window_focus.WindowFocusDeps:
         enum_windows=windows_input.enum_windows,
         is_window_visible=windows_input.is_window_visible,
         get_window_text=get_window_text,
+        get_window_process_path=_get_window_process_path,
         get_window_rect=windows_input.get_window_rect_tuple,
         get_foreground_window=windows_input.get_foreground_window,
         show_window=lambda hwnd: windows_input.show_window(hwnd, SW_RESTORE),
@@ -91,6 +92,13 @@ def _make_window_focus_deps() -> window_focus.WindowFocusDeps:
         tab_key=VK_TAB,
         create_no_window=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+
+def _get_window_process_path(hwnd: int) -> str:
+    pid = desktop_resolver.get_window_process_id(hwnd)
+    if not pid:
+        return ""
+    candidate = desktop_resolver.query_process_image_path(pid)
+    return str(candidate) if candidate is not None else ""
 
 def activate_thread_by_sidebar_v2(thread_name: str, project_name: str | None = None) -> str:
     return sidebar_activation.activate_thread_by_sidebar_v2(
@@ -151,6 +159,9 @@ def wait_for_thread_activation(thread: ThreadInfo, thread_name: str, timeout_sec
 def activate_thread_in_ui(thread: ThreadInfo) -> str:
     return thread_activation.activate_thread_in_ui(thread, _make_thread_activation_deps())
 
+def activate_thread_for_ipc(thread: ThreadInfo) -> str:
+    return thread_activation.activate_thread_via_deep_link(thread, _make_thread_activation_deps())
+
 def verify_thread_in_ui(thread: ThreadInfo) -> str | None:
     return thread_activation.verify_thread_in_ui(thread, _make_thread_activation_deps())
 
@@ -159,6 +170,7 @@ def _make_thread_activation_deps() -> thread_activation.ThreadActivationDeps:
         get_thread_ui_name_candidates=get_thread_ui_name_candidates,
         verify_active_thread_by_header=verify_active_thread_by_header,
         verify_active_thread=verify_active_thread,
+        activate_thread_deep_link=bridge_protocol.open_codex_thread_deep_link,
         activate_thread_by_sidebar_v2=activate_thread_by_sidebar_v2,
         wait_for_thread_activation=wait_for_thread_activation,
         now=time.time,
@@ -240,4 +252,4 @@ def send_prompt_to_codex(
         _make_prompt_sender_deps(),
     )
 
-__all__ = ('_make_active_thread_deps', '_make_permission_ui_deps', '_make_sidebar_activation_deps', '_make_thread_action_deps', '_make_thread_activation_deps', '_make_window_focus_deps', '_make_window_text_deps', '_print_background_watch_status', 'activate_thread_by_sidebar_v2', 'activate_thread_in_ui', 'annotations', 'cancel_codex_reply_if_busy', 'classify_permission_approval_ui_reply', 'click_window', 'ensure_codex_composer_focus', 'find_codex_window', 'focus_window', 'get_clipboard_text', 'get_window_text', 'is_codex_desktop_window_title', 'send_hotkey', 'send_key_event', 'send_prompt_to_codex', 'set_clipboard_text', 'start_background_watch', 'submit_permission_approval_via_ui', 'submit_permission_approval_via_ui_row_select', 'verify_active_thread', 'verify_active_thread_by_header', 'verify_thread_in_ui', 'wait_for_new_thread', 'wait_for_thread_activation', 'watch_for_final_answer')
+__all__ = ('_make_active_thread_deps', '_make_permission_ui_deps', '_make_sidebar_activation_deps', '_make_thread_action_deps', '_make_thread_activation_deps', '_make_window_focus_deps', '_make_window_text_deps', '_print_background_watch_status', 'activate_thread_by_sidebar_v2', 'activate_thread_for_ipc', 'activate_thread_in_ui', 'annotations', 'cancel_codex_reply_if_busy', 'classify_permission_approval_ui_reply', 'click_window', 'ensure_codex_composer_focus', 'find_codex_window', 'focus_window', 'get_clipboard_text', 'get_window_text', 'is_codex_desktop_window_title', 'send_hotkey', 'send_key_event', 'send_prompt_to_codex', 'set_clipboard_text', 'start_background_watch', 'submit_permission_approval_via_ui', 'submit_permission_approval_via_ui_row_select', 'verify_active_thread', 'verify_active_thread_by_header', 'verify_thread_in_ui', 'wait_for_new_thread', 'wait_for_thread_activation', 'watch_for_final_answer')

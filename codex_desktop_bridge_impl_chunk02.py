@@ -5,7 +5,7 @@ from codex_desktop_bridge_impl_common import *
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from codex_desktop_bridge_impl_type_exports import typed_close_ipc_pipe as _close_ipc_pipe, typed_discover_owner_client_for_thread as _discover_owner_client_for_thread, typed_extract_thread_snapshot_from_ipc_message as _extract_thread_snapshot_from_ipc_message, typed_initialize_ipc_client as _initialize_ipc_client, typed_make_ipc_runtime_deps as _make_ipc_runtime_deps, typed_make_pending_reply_deps as _make_pending_reply_deps, typed_open_codex_ipc_pipe as _open_codex_ipc_pipe, typed_read_ipc_message as _read_ipc_message, typed_record_owner_client_from_ipc_message as _record_owner_client_from_ipc_message, typed_request_start_turn_via_ipc as _request_start_turn_via_ipc, activate_thread_in_ui, cache_live_approval_request, collapse_list_text
+    from codex_desktop_bridge_impl_type_exports import typed_close_ipc_pipe as _close_ipc_pipe, typed_discover_owner_client_for_thread as _discover_owner_client_for_thread, typed_extract_thread_snapshot_from_ipc_message as _extract_thread_snapshot_from_ipc_message, typed_initialize_ipc_client as _initialize_ipc_client, typed_make_ipc_runtime_deps as _make_ipc_runtime_deps, typed_make_pending_reply_deps as _make_pending_reply_deps, typed_open_codex_ipc_pipe as _open_codex_ipc_pipe, typed_read_ipc_message as _read_ipc_message, typed_record_owner_client_from_ipc_message as _record_owner_client_from_ipc_message, typed_request_start_turn_via_ipc as _request_start_turn_via_ipc, activate_thread_for_ipc, cache_live_approval_request, collapse_list_text
 
 def _request_submit_user_input_via_ipc(
     handle: int,
@@ -102,7 +102,7 @@ def _make_ipc_turn_deps() -> ipc_turn.IpcTurnDeps:
         request_submit_user_input=_request_submit_user_input_via_ipc,
         request_submit_approval_decision=_request_submit_approval_decision_for_ipc_turn,
         approval_decision_method_for_request_kind=ipc_runtime.approval_decision_method_for_request_kind,
-        activate_thread_in_ui=activate_thread_in_ui,
+        activate_thread_in_ui=activate_thread_for_ipc,
         discover_owner_client_for_thread=_discover_owner_client_for_thread,
         sleep=time.sleep,
     )

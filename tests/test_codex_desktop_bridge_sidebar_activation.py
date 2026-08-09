@@ -51,6 +51,7 @@ class SidebarActivationHappyTests(unittest.TestCase):
             v2.calls,
             [("focus", 7), ("read", "v2.ps1"), ("run", "v2.ps1", 25.0)],
         )
+        self.assertEqual(v2.environ["CODEX_WINDOW_HANDLE"], "7")
 
         original_deps = bridge._make_sidebar_activation_deps
         try:

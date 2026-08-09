@@ -5,7 +5,9 @@ public static class Native {
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo);
@@ -31,14 +33,40 @@ function Get-SidebarActivationErrors {
   return ($script:SidebarActivationErrors -join ' | ')
 }
 
+function Test-CodexWindowHandle {
+  param([IntPtr]$Handle)
+  if ($Handle -eq [IntPtr]::Zero -or -not [Native]::IsWindow($Handle) -or -not [Native]::IsWindowVisible($Handle)) {
+    return $false
+  }
+  $sb = New-Object System.Text.StringBuilder 512
+  [void][Native]::GetWindowText($Handle, $sb, $sb.Capacity)
+  $title = (($sb.ToString() -replace "`r|`n", ' ') -replace '\s+', ' ').Trim()
+  if ($title -eq 'Codex' -or $title -like 'Codex - *') { return $true }
+  if ($title -ne 'ChatGPT') { return $false }
+
+  [uint32]$ownerProcessId = 0
+  [void][Native]::GetWindowThreadProcessId($Handle, [ref]$ownerProcessId)
+  try {
+    $ownerPath = (Get-Process -Id $ownerProcessId -ErrorAction Stop).Path
+  } catch {
+    return $false
+  }
+  $windowsAppsRoot = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
+  $expectedPath = '^{0}\\OpenAI\.Codex_[^\\]+\\app\\ChatGPT\.exe$' -f [Regex]::Escape($windowsAppsRoot.TrimEnd('\'))
+  return [Regex]::IsMatch($ownerPath, $expectedPath, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+}
+
 function Get-CodexWindowHandle {
+  $windowHandle = 0L
+  if ([long]::TryParse($env:CODEX_WINDOW_HANDLE, [ref]$windowHandle) -and $windowHandle -ne 0) {
+    $suppliedHandle = [IntPtr]$windowHandle
+    if (Test-CodexWindowHandle $suppliedHandle) { return $suppliedHandle }
+    return [IntPtr]::Zero
+  }
   $script:result = [IntPtr]::Zero
   $cb = [Native+EnumWindowsProc]{
 param($hWnd, $lParam)
-if (-not [Native]::IsWindowVisible($hWnd)) { return $true }
-$sb = New-Object System.Text.StringBuilder 512
-[void][Native]::GetWindowText($hWnd, $sb, $sb.Capacity)
-if ($sb.ToString() -like '*Codex*') { $script:result = $hWnd; return $false }
+if (Test-CodexWindowHandle $hWnd) { $script:result = $hWnd; return $false }
 return $true
   }
   [void][Native]::EnumWindows($cb, [IntPtr]::Zero)

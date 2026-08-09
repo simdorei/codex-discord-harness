@@ -24,6 +24,7 @@ import codex_discord_message_gate as message_gate
 import codex_desktop_bridge as bridge
 import codex_desktop_bridge_final_answer_types as final_answer_types
 import codex_desktop_bridge_ipc_start_turn as ipc_start_turn
+import codex_desktop_bridge_protocol as bridge_protocol
 import codex_desktop_bridge_sidecar_resolver as sidecar_resolver
 import codex_windows_harness as harness
 
@@ -1374,6 +1375,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
         original_name_candidates = bridge.get_thread_ui_name_candidates
         original_verify_header = bridge.verify_active_thread_by_header
         original_verify_thread = bridge.verify_active_thread
+        original_activate_deep_link = bridge_protocol.open_codex_thread_deep_link
         original_activate_sidebar = bridge.activate_thread_by_sidebar_v2
         original_wait_activation = bridge.wait_for_thread_activation
         wait_calls = []
@@ -1393,6 +1395,11 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bridge.get_thread_ui_name_candidates = lambda thread: ["Thread"]
             bridge.verify_active_thread_by_header = lambda thread_name: None
             bridge.verify_active_thread = lambda thread_id: None
+
+            def fail_deep_link(_thread_id: str) -> None:
+                raise OSError("deep link unavailable")
+
+            bridge_protocol.open_codex_thread_deep_link = fail_deep_link
             bridge.activate_thread_by_sidebar_v2 = lambda thread_name, project_name=None: "Thread row"
 
             def fake_wait_activation(thread: bridge.ThreadInfo, thread_name: str, timeout_sec: float = 5.0) -> str | None:
@@ -1409,6 +1416,7 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             bridge.get_thread_ui_name_candidates = original_name_candidates
             bridge.verify_active_thread_by_header = original_verify_header
             bridge.verify_active_thread = original_verify_thread
+            bridge_protocol.open_codex_thread_deep_link = original_activate_deep_link
             bridge.activate_thread_by_sidebar_v2 = original_activate_sidebar
             bridge.wait_for_thread_activation = original_wait_activation
 

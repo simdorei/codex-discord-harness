@@ -23,6 +23,37 @@ class RunProcessKwargs(TypedDict):
 
 
 class WindowFocusTests(unittest.TestCase):
+    def test_appx_chatgpt_window_is_recognized_as_codex_desktop(self) -> None:
+        appx_path = (
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.727.6591.0_x64__2p2nqsd0c76g0"
+            r"\app\ChatGPT.exe"
+        )
+        deps = _deps(
+            windows=[7],
+            titles={7: "ChatGPT"},
+            rects={7: (10, 20, 810, 620)},
+            process_paths={7: appx_path},
+        )
+
+        window = window_focus.find_codex_window(deps)
+
+        self.assertEqual(window.hwnd, 7)
+        self.assertEqual(window.title, "ChatGPT")
+
+    def test_appx_chatgpt_window_rejects_lookalike_process_path(self) -> None:
+        self.assertFalse(
+            window_focus.is_codex_desktop_appx_window(
+                "ChatGPT",
+                r"C:\fake\OpenAI.Codex_fake\app\ChatGPT.exe",
+            )
+        )
+        self.assertFalse(
+            window_focus.is_codex_desktop_appx_window(
+                "ChatGPT",
+                r"C:\fake\WindowsApps\OpenAI.Codex_fake\app\ChatGPT.exe",
+            )
+        )
+
     def test_title_window_selection_focus_and_composer_retry(self) -> None:
         self.assertTrue(window_focus.is_codex_desktop_window_title(" Codex   -  Thread "))
         self.assertFalse(window_focus.is_codex_desktop_window_title("Other Codex"))
@@ -110,6 +141,7 @@ def _deps(
     titles: dict[int, str] | None = None,
     rects: dict[int, tuple[int, int, int, int]] | None = None,
     foreground: int = 0,
+    process_paths: dict[int, str] | None = None,
     calls: list[str] | None = None,
     run: window_focus.RunProcess | None = None,
 ) -> window_focus.WindowFocusDeps:
@@ -117,6 +149,7 @@ def _deps(
     visible_map = visible or {}
     title_map = titles or {}
     rect_map = rects or {}
+    process_path_map = process_paths or {}
 
     def enum_windows(callback: window_focus.WindowCallback) -> None:
         for hwnd in windows or []:
@@ -127,6 +160,7 @@ def _deps(
         enum_windows=enum_windows,
         is_window_visible=lambda hwnd: visible_map.get(hwnd, True),
         get_window_text=lambda hwnd: title_map.get(hwnd, ""),
+        get_window_process_path=lambda hwnd: process_path_map.get(hwnd, ""),
         get_window_rect=lambda hwnd: rect_map.get(hwnd),
         get_foreground_window=lambda: foreground,
         show_window=lambda hwnd: call_log.append(f"show:{hwnd}"),

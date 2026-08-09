@@ -47,7 +47,10 @@ class ActiveThreadHappyTests(unittest.TestCase):
 
         header = active_thread.verify_active_thread_by_header("Thread", _clipboard_harness(["original"], run=run_process).deps)
         self.assertEqual(header, "header")
-        self.assertEqual(run_calls[0]["env"], {"CODEX_THREAD_NAME": "Thread"})
+        self.assertEqual(
+            run_calls[0]["env"],
+            {"CODEX_THREAD_NAME": "Thread", "CODEX_WINDOW_HANDLE": "1"},
+        )
 
         original_deps = bridge._make_active_thread_deps
         try:

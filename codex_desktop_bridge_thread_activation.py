@@ -10,6 +10,7 @@ from codex_thread_models import ThreadInfo
 GetThreadUiNameCandidates = Callable[[ThreadInfo], list[str]]
 VerifyHeader = Callable[[str], str | None]
 VerifyThread = Callable[[str], str | None]
+ActivateThreadDeepLink = Callable[[str], None]
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
 
@@ -31,6 +32,7 @@ class ThreadActivationDeps:
     get_thread_ui_name_candidates: GetThreadUiNameCandidates
     verify_active_thread_by_header: VerifyHeader
     verify_active_thread: VerifyThread
+    activate_thread_deep_link: ActivateThreadDeepLink
     activate_thread_by_sidebar_v2: ActivateSidebar
     wait_for_thread_activation: WaitForThreadActivation
     now: Clock
@@ -76,6 +78,17 @@ def activate_thread_in_ui(thread: ThreadInfo, deps: ThreadActivationDeps) -> str
         return f"already-open [{verified_by}]"
 
     last_error = ""
+    verification_name = ui_name_candidates[0] if ui_name_candidates else ""
+    try:
+        activation_method = activate_thread_via_deep_link(thread, deps)
+    except OSError as exc:
+        last_error = f"Exact Codex thread deep link failed: {exc}"
+    else:
+        verified_by = deps.wait_for_thread_activation(thread, verification_name, timeout_sec=8.0)
+        if verified_by:
+            return f"{activation_method} [{verified_by}]"
+        last_error = "Opened the exact Codex thread deep link, but the Codex UI did not confirm the active thread."
+
     for thread_name in ui_name_candidates:
         try:
             matched_label = deps.activate_thread_by_sidebar_v2(
@@ -98,6 +111,11 @@ def activate_thread_in_ui(thread: ThreadInfo, deps: ThreadActivationDeps) -> str
     raise ThreadActivationError(
         "Unable to activate the target thread in the Codex UI sidebar because no usable UI label was found."
     )
+
+
+def activate_thread_via_deep_link(thread: ThreadInfo, deps: ThreadActivationDeps) -> str:
+    deps.activate_thread_deep_link(thread.id)
+    return "deeplink:codex"
 
 
 def verify_thread_in_ui(thread: ThreadInfo, deps: ThreadActivationDeps) -> str | None:

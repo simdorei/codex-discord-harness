@@ -11,6 +11,7 @@ WindowCallback = Callable[[int], bool]
 EnumWindows = Callable[[WindowCallback], None]
 GetWindowTextLength = Callable[[int], int]
 ReadWindowText = Callable[[int, int], str]
+GetWindowProcessPath = Callable[[int], str]
 GetWindowRect = Callable[[int], tuple[int, int, int, int] | None]
 NativeWindowCall = Callable[[int], None]
 Sleep = Callable[[float], None]
@@ -45,6 +46,7 @@ class WindowFocusDeps:
     enum_windows: EnumWindows
     is_window_visible: Callable[[int], bool]
     get_window_text: Callable[[int], str]
+    get_window_process_path: GetWindowProcessPath
     get_window_rect: GetWindowRect
     get_foreground_window: Callable[[], int]
     show_window: NativeWindowCall
@@ -67,6 +69,7 @@ public static class Native {
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int maxCount);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 }
 '@
 Add-Type -AssemblyName UIAutomationClient
@@ -79,7 +82,16 @@ $cb = [Native+EnumWindowsProc]{
   if (-not [Native]::IsWindowVisible($hWnd)) { return $true }
   $sb = New-Object System.Text.StringBuilder 512
   [void][Native]::GetWindowText($hWnd, $sb, $sb.Capacity)
-  if ($sb.ToString() -like '*Codex*') { $script:result = $hWnd; return $false }
+  $title = $sb.ToString().Trim()
+  $isCodexTitle = $title -eq 'Codex' -or $title -like 'Codex - *'
+  $isCodexAppx = $false
+  if ($title -eq 'ChatGPT') {
+    [uint32]$ownerProcessId = 0
+    [void][Native]::GetWindowThreadProcessId($hWnd, [ref]$ownerProcessId)
+    $ownerPath = (Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue).Path
+    $isCodexAppx = $ownerPath -like '*\WindowsApps\OpenAI.Codex_*\app\ChatGPT.exe'
+  }
+  if ($isCodexTitle -or $isCodexAppx) { $script:result = $hWnd; return $false }
   return $true
 }
 [void][Native]::EnumWindows($cb, [IntPtr]::Zero)
@@ -127,6 +139,24 @@ def is_codex_desktop_window_title(title: str) -> bool:
     return normalized == "Codex" or normalized.startswith("Codex - ")
 
 
+def is_codex_desktop_appx_window(title: str, process_path: str) -> bool:
+    normalized_title = " ".join(title.strip().split())
+    normalized_path = process_path.strip().replace("/", "\\").casefold()
+    if normalized_path.startswith("\\\\?\\"):
+        normalized_path = normalized_path[4:]
+    path_parts = tuple(part for part in normalized_path.split("\\") if part)
+    return (
+        normalized_title == "ChatGPT"
+        and len(path_parts) == 6
+        and path_parts[0].endswith(":")
+        and path_parts[1] == "program files"
+        and path_parts[2] == "windowsapps"
+        and path_parts[3].startswith("openai.codex_")
+        and path_parts[3] != "openai.codex_"
+        and path_parts[4:] == ("app", "chatgpt.exe")
+    )
+
+
 def find_codex_window(deps: WindowFocusDeps) -> WindowInfo:
     found: list[WindowInfo] = []
 
@@ -135,7 +165,9 @@ def find_codex_window(deps: WindowFocusDeps) -> WindowInfo:
             return True
 
         title = deps.get_window_text(hwnd).strip()
-        if not is_codex_desktop_window_title(title):
+        if not is_codex_desktop_window_title(title) and not is_codex_desktop_appx_window(
+            title, deps.get_window_process_path(hwnd)
+        ):
             return True
 
         rect = deps.get_window_rect(hwnd)

@@ -81,17 +81,12 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type $code
 
-$script:result = [IntPtr]::Zero
-$cb = [Native+EnumWindowsProc]{
-  param($hWnd, $lParam)
-  if (-not [Native]::IsWindowVisible($hWnd)) { return $true }
-  $sb = New-Object System.Text.StringBuilder 512
-  [void][Native]::GetWindowText($hWnd, $sb, $sb.Capacity)
-  if ($sb.ToString() -like '*Codex*') { $script:result = $hWnd; return $false }
-  return $true
+$windowHandle = 0L
+if (-not [long]::TryParse($env:CODEX_WINDOW_HANDLE, [ref]$windowHandle) -or $windowHandle -eq 0) {
+  Write-Output 'NO_CODEX_WINDOW'
+  exit 3
 }
-[void][Native]::EnumWindows($cb, [IntPtr]::Zero)
-if ($script:result -eq [IntPtr]::Zero) { Write-Output 'NO_CODEX_WINDOW'; exit 3 }
+$script:result = [IntPtr]$windowHandle
 [void][Native]::SetForegroundWindow($script:result)
 Start-Sleep -Milliseconds 120
 $cond = New-Object System.Windows.Automation.PropertyCondition(
@@ -165,8 +160,11 @@ def verify_active_thread_by_header(thread_name: str, deps: ActiveThreadDeps) -> 
     if not thread_name.strip():
         return None
 
+    window = deps.find_codex_window()
+    deps.focus_window(window)
     env = deps.environ_copy()
     env["CODEX_THREAD_NAME"] = thread_name
+    env["CODEX_WINDOW_HANDLE"] = str(window.hwnd)
     try:
         result = deps.run_process(
             ["powershell", "-NoProfile", "-Command", HEADER_VERIFICATION_SCRIPT],

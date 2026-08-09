@@ -88,14 +88,18 @@ def _activate_thread_by_sidebar(
     if not thread_name.strip():
         raise SidebarActivationError("Missing thread_name for sidebar activation.")
 
+    window: WindowInfo | None = None
     if focus_first:
-        deps.focus_window(deps.find_codex_window())
+        window = deps.find_codex_window()
+        deps.focus_window(window)
 
     script = deps.read_text(script_path)
     env = deps.environ_copy()
     env["CODEX_THREAD_NAME"] = thread_name
     env["CODEX_PROJECT_NAME"] = project_name or ""
     env["CODEX_DESKTOP_BRIDGE_SCRIPT_DIR"] = str(script_path.parent)
+    if window is not None:
+        env["CODEX_WINDOW_HANDLE"] = str(window.hwnd)
 
     try:
         result = deps.run_process(
