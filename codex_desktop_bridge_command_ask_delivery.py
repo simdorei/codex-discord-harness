@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import argparse
+from typing import Final
 
 from codex_desktop_bridge_command_ask_types import CommandAskDeps, SessionOffsets
 from codex_desktop_bridge_sidecar import CodexAppServerSidecar
+from codex_pro_prompt_contract import is_pro_skill_prompt
 from codex_thread_models import ThreadInfo
+
+
+UI_DELIVERY_CONFIRM_TIMEOUT_SECONDS: Final = 4.0
+PRO_UI_DELIVERY_CONFIRM_TIMEOUT_SECONDS: Final = 15.0
 
 
 class CommandAskDeliveryError(RuntimeError):
@@ -124,7 +130,12 @@ def _deliver_via_ui(
             f"rect=({window.left},{window.top})-({window.right},{window.bottom})"
         )
     )
-    delivered_thread = deps.wait_for_prompt_delivery(recent_offsets, prompt, timeout_sec=4.0)
+    delivery_timeout = (
+        PRO_UI_DELIVERY_CONFIRM_TIMEOUT_SECONDS
+        if is_pro_skill_prompt(prompt)
+        else UI_DELIVERY_CONFIRM_TIMEOUT_SECONDS
+    )
+    delivered_thread = deps.wait_for_prompt_delivery(recent_offsets, prompt, timeout_sec=delivery_timeout)
     if delivered_thread is None:
         raise CommandAskDeliveryError(
             "Prompt delivery could not be confirmed in any recent Codex thread. "

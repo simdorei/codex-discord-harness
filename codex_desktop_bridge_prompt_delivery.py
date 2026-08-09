@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 from codex_bridge_state import JsonObject
+from codex_pro_prompt_contract import BROWSER_MENTION_NAME, BROWSER_PLUGIN_URI
 from codex_thread_models import ThreadInfo
 
 
@@ -14,6 +17,10 @@ ReadNewSessionEvents = Callable[[Path, int], tuple[list[JsonObject], int]]
 SessionOffsets = dict[str, tuple[ThreadInfo, Path, int]]
 Sleep = Callable[[float], None]
 TimeNow = Callable[[], float]
+_BROWSER_MENTION_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"\[@[^\]\r\n]+\]\({re.escape(BROWSER_PLUGIN_URI)}\)",
+    re.IGNORECASE,
+)
 
 
 def extract_user_text_from_event(
@@ -30,7 +37,11 @@ def extract_user_text_from_event(
 
 
 def normalize_prompt_text(text: str) -> str:
-    return " ".join(str(text).replace("\r", " ").replace("\n", " ").split()).strip()
+    canonical_mentions = _BROWSER_MENTION_PATTERN.sub(
+        f"[@{BROWSER_MENTION_NAME}]({BROWSER_PLUGIN_URI})",
+        str(text),
+    )
+    return " ".join(canonical_mentions.replace("\r", " ").replace("\n", " ").split()).strip()
 
 
 def snapshot_recent_session_offsets(

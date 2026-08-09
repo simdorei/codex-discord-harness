@@ -2,12 +2,40 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import codex_desktop_bridge_ipc_start_turn as ipc_start_turn
+import codex_desktop_bridge_ipc_start_turn_requests as start_turn_requests
 from codex_thread_models import ThreadInfo
 
 
 class IpcStartTurnTests(unittest.TestCase):
+    def test_pro_prompt_attaches_skill_and_browser_to_desktop_turn(self) -> None:
+        prompt = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
+
+        request = start_turn_requests.build_start_turn_request(
+            request_id="request-1",
+            source_client_id="source-client",
+            thread_id="thread-1",
+            prompt=prompt,
+            owner_client_id="owner-client",
+        )
+
+        params = _require_json_object(request.get("params"))
+        turn_start_params = _require_json_object(params.get("turnStartParams"))
+        inputs = _require_json_list(turn_start_params.get("input"))
+        input_objects = [_require_json_object(item) for item in inputs]
+        self.assertEqual([item.get("type") for item in input_objects], ["text", "skill", "mention"])
+        skill = input_objects[1]
+        self.assertEqual(skill.get("name"), "ask-chatgpt-pro")
+        self.assertEqual(
+            Path(str(skill.get("path"))).resolve(),
+            (Path.cwd() / ".agents/skills/ask-chatgpt-pro/SKILL.md").resolve(),
+        )
+        browser = input_objects[2]
+        self.assertEqual(browser.get("name"), "Browser")
+        self.assertEqual(browser.get("path"), "plugin://browser@openai-bundled")
+
     def test_request_start_turn_builds_thread_follower_payload(self) -> None:
         written_payloads: list[ipc_start_turn.JsonObject] = []
 
@@ -144,6 +172,12 @@ def _deps_for_response(response: ipc_start_turn.JsonObject) -> ipc_start_turn.Ip
 def _require_json_object(value: ipc_start_turn.JsonValue | None) -> ipc_start_turn.JsonObject:
     if not isinstance(value, dict):
         raise AssertionError(f"Expected JSON object, got {value!r}")
+    return value
+
+
+def _require_json_list(value: ipc_start_turn.JsonValue | None) -> list[ipc_start_turn.JsonValue]:
+    if not isinstance(value, list):
+        raise AssertionError(f"Expected JSON list, got {value!r}")
     return value
 
 

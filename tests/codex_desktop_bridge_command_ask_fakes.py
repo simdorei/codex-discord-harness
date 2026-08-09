@@ -53,6 +53,7 @@ class FakeDeps:
         self.background_started: bool = background_started
         self.window: WindowInfo = window or window_info()
         self.calls: list[str] = []
+        self.delivery_timeouts: list[float] = []
 
     def as_command_deps(self) -> ask_types.CommandAskDeps:
         return ask_types.CommandAskDeps(
@@ -107,7 +108,8 @@ class FakeDeps:
         prompt: str,
         timeout_sec: float = 4.0,
     ) -> ThreadInfo | None:
-        _ = (session_offsets, prompt, timeout_sec)
+        _ = (session_offsets, prompt)
+        self.delivery_timeouts.append(timeout_sec)
         return self.delivery_thread
 
     def start_turn_via_sidecar(

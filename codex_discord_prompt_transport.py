@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
+from codex_pro_prompt_contract import is_pro_skill_prompt
+
 
 class PromptRelay(Protocol):
     def finish(self) -> None: ...
@@ -109,7 +111,8 @@ def run_transport_prompt_no_wait(
     target_thread_id: str | None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
-    if not deps.app_server_transport_enabled():
+    resident_enabled = deps.app_server_transport_enabled() or is_pro_skill_prompt(prompt)
+    if not resident_enabled:
         return deps.run_legacy_prompt_no_wait(prompt, target_thread_id)
     try:
         return deps.run_resident_prompt_no_wait(prompt, target_thread_id)
@@ -132,7 +135,8 @@ def run_ask_stream(
     target_thread_id: str | None = None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
-    if not deps.app_server_transport_enabled():
+    resident_enabled = deps.app_server_transport_enabled() or is_pro_skill_prompt(prompt)
+    if not resident_enabled:
         return deps.run_legacy_stream(
             prompt,
             relay,

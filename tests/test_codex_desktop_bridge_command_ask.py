@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 import codex_desktop_bridge as bridge
+from codex_pro_prompt_contract import PRO_SKILL_CALL
 from tests import codex_desktop_bridge_command_ask_fakes as fakes
 
 
@@ -68,6 +69,15 @@ class CommandAskHappyTests(unittest.TestCase):
             self.assertIn("ui_activation: already-open [header]", ui_output)
             self.assertIn("sent_to_window: hwnd=100 title=Codex", ui_output)
             self.assertIn("[delivery_verified] thread-1", ui_output)
+            self.assertEqual(ui_deps.delivery_timeouts, [4.0])
+
+            pro_ui_deps = fakes.FakeDeps(thread=thread, delivery_thread=thread, window=fakes.window_info())
+            _, pro_ui_exit = fakes.run_with_output(
+                fakes.args(prompt=PRO_SKILL_CALL, ipc=False, wait=False),
+                pro_ui_deps,
+            )
+            self.assertEqual(pro_ui_exit, 0)
+            self.assertEqual(pro_ui_deps.delivery_timeouts, [15.0])
 
             background_deps = fakes.FakeDeps(thread=thread, background_started=True)
             background_output, background_exit = fakes.run_with_output(

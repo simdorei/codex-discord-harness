@@ -1,4 +1,5 @@
 """Persistent Codex app-server transport for Discord delivery."""
+# noqa: SIZE_OK — cohesive typed facade for the resident app-server protocol.
 
 from __future__ import annotations
 
@@ -52,6 +53,7 @@ from codex_app_server_transport_turn_outcomes import (
     parse_thread_turn_states,
 )
 from codex_app_server_transport_subscriptions import ThreadReleaseOutcome
+from codex_pro_prompt_contract import build_turn_input
 
 
 __all__ = [
@@ -290,7 +292,7 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
             "turn/start",
             {
                 "threadId": thread_id,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                "input": build_turn_input(prompt),
             },
             timeout_sec=12.0,
             expected_generation=expected_generation,
@@ -309,7 +311,7 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
             {
                 "threadId": thread_id,
                 "expectedTurnId": expected_turn_id,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                "input": build_turn_input(prompt),
             },
             timeout_sec=10.0,
             expected_generation=expected_generation,
@@ -326,7 +328,7 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
         registered = self.register_remote_interrupt_intent(thread_id, turn_id)
         try:
             return self.interrupt_turn(thread_id, turn_id)
-        except Exception:
+        except Exception:  # noqa: BROAD_EXCEPT_OK - rollback must cover every interrupt failure.
             if registered:
                 self.cancel_remote_interrupt_intent(thread_id, turn_id)
             raise

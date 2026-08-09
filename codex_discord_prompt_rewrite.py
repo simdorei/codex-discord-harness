@@ -18,6 +18,7 @@ from codex_pro_runtime_diagnostics import (
     ProDiagnosticStage,
     diagnostic,
 )
+from codex_pro_prompt_contract import PRO_SKILL_CALL
 from codex_remote_mcp_binding import register_remote_mcp_project
 from codex_remote_mcp_bridge_config import (
     ProjectTicket,
@@ -32,7 +33,6 @@ from simdorei_mcp_common.connector_contract import (
 LogFunc = Callable[[str], None]
 ProjectRegistrar = Callable[[str, str, Path, LogFunc], ProjectTicket | None]
 RuntimePreflight = Callable[[], ProRuntimeStatus]
-PRO_SKILL_CALL: Final = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
 PRO_CONVERSATION_SCOPE_LENGTH: Final = 24
 PRO_REVIEW_MARKER: Final = "<pro-review>"
 PROJECT_SCOPE_RANDOM_BYTES: Final = 24

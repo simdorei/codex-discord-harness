@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import TypeAlias
-
-JsonScalar: TypeAlias = str | int | float | bool | None
-JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
-JsonObject: TypeAlias = dict[str, JsonValue]
+from codex_pro_prompt_contract import (
+    build_turn_input,
+)
+from codex_app_server_transport_reply_types import JsonObject
 
 
 def build_start_turn_request(
@@ -25,7 +24,7 @@ def build_start_turn_request(
             "conversationId": thread_id,
             "turnStartParams": {
                 "inheritThreadSettings": True,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                "input": build_turn_input(prompt),
                 "cwd": None,
                 "approvalPolicy": None,
                 "sandboxPolicy": None,
