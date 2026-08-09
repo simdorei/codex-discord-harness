@@ -80,6 +80,7 @@ def read_ipc_response(
     deadline = deps.time_now() + timeout_sec
     while deps.time_now() < deadline:
         message = deps.read_ipc_message(handle, max(deps.pipe_peek_retry_sec, deadline - deps.time_now()))
+        _decline_unhandled_client_discovery(handle, message, deps)
         record_owner_client_from_ipc_message(message, owner_clients)
         if message.get("type") == "response" and message.get("requestId") == request_id:
             return message
@@ -131,10 +132,31 @@ def discover_owner_client_for_thread(
             message = deps.read_ipc_message(handle, max(deps.pipe_peek_retry_sec, deadline - deps.time_now()))
         except TimeoutError:
             return owner_clients.get(thread_id)
+        _decline_unhandled_client_discovery(handle, message, deps)
         record_owner_client_from_ipc_message(message, owner_clients)
         if thread_id in owner_clients:
             return owner_clients[thread_id]
     return None
+
+
+def _decline_unhandled_client_discovery(
+    handle: int,
+    message: JsonObject,
+    deps: IpcSessionDeps,
+) -> None:
+    if message.get("type") != "client-discovery-request":
+        return
+    request_id = str(message.get("requestId") or "").strip()
+    if not request_id:
+        return
+    deps.write_ipc_message(
+        handle,
+        {
+            "type": "client-discovery-response",
+            "requestId": request_id,
+            "response": {"canHandle": False},
+        },
+    )
 
 
 def _object_value(value: JsonValue | None) -> JsonObject | None:

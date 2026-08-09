@@ -7,6 +7,45 @@ from codex_bridge_state import JsonObject
 
 
 class IpcSessionTests(unittest.TestCase):
+    def test_read_response_declines_unhandled_client_discovery_request(self) -> None:
+        messages = iter(
+            [
+                {
+                    "type": "client-discovery-request",
+                    "requestId": "discovery-1",
+                    "request": {"method": "thread-follower-start-turn"},
+                },
+                {
+                    "type": "response",
+                    "requestId": "request-1",
+                    "resultType": "success",
+                },
+            ]
+        )
+        written_payloads: list[JsonObject] = []
+        deps = ipc_session.IpcSessionDeps(
+            read_ipc_message=lambda _handle, _timeout: next(messages),
+            write_ipc_message=lambda _handle, payload: written_payloads.append(payload),
+            read_ipc_response=lambda _handle, _request, _timeout, _owners: {},
+            uuid_factory=lambda: "unused",
+            time_now=lambda: 0.0,
+            pipe_peek_retry_sec=0.01,
+        )
+
+        result = ipc_session.read_ipc_response(7, "request-1", 1.0, {}, deps)
+
+        self.assertEqual(result["resultType"], "success")
+        self.assertEqual(
+            written_payloads,
+            [
+                {
+                    "type": "client-discovery-response",
+                    "requestId": "discovery-1",
+                    "response": {"canHandle": False},
+                }
+            ],
+        )
+
     def test_initialize_ipc_client_writes_initialize_request_and_returns_client_id(self) -> None:
         written_payloads: list[JsonObject] = []
         owner_clients: ipc_session.OwnerClients = {}
