@@ -9,6 +9,7 @@ import codex_discord_prompt_transport as prompt_transport
 
 
 PromptNoWaitFunc: TypeAlias = Callable[[str, str | None], tuple[int, str]]
+PrepareProBrowserSessionFunc: TypeAlias = Callable[[str | None], None]
 StartTurnNoWaitFunc: TypeAlias = Callable[[str, str | None], "FakeDeliveryResult"]
 LogFunc: TypeAlias = Callable[[str], None]
 WatchStreamFunc: TypeAlias = Callable[["FakeSteeringResult", "FakeRelay"], tuple[int, str]]
@@ -73,6 +74,7 @@ def build_deps(
     enabled: bool = True,
     run_resident_prompt_no_wait: PromptNoWaitFunc | None = None,
     run_legacy_prompt_no_wait: PromptNoWaitFunc | None = None,
+    prepare_pro_browser_session: PrepareProBrowserSessionFunc | None = None,
     start_turn_no_wait: StartTurnNoWaitFunc | None = None,
     run_watch_stream: WatchStreamFunc | None = None,
     run_legacy_stream: LegacyStreamFunc | None = None,
@@ -105,8 +107,12 @@ def build_deps(
     def discard_log(message: str) -> None:
         _ = message
 
+    def discard_pro_browser_session(_target_thread_id: str | None) -> None:
+        return
+
     return prompt_transport.PromptTransportDeps(
         app_server_transport_enabled=app_server_transport_enabled,
+        prepare_pro_browser_session=prepare_pro_browser_session or discard_pro_browser_session,
         run_resident_prompt_no_wait=run_resident_prompt_no_wait or unexpected_prompt_no_wait,
         run_legacy_prompt_no_wait=run_legacy_prompt_no_wait or unexpected_prompt_no_wait,
         start_turn_no_wait=start_turn_no_wait or unexpected_start_turn,
@@ -134,6 +140,26 @@ class PromptTransportTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(output, "legacy ipc")
         self.assertEqual(calls, [("please run", "thread-1")])
+
+    def test_run_transport_prompt_no_wait_does_not_activate_browser_for_normal_prompt(self) -> None:
+        activations: list[str | None] = []
+
+        def resident(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            return 0, f"resident: {prompt} {target_thread_id}"
+
+        exit_code, output = prompt_transport.run_transport_prompt_no_wait(
+            "please run",
+            "thread-1",
+            build_deps(
+                enabled=True,
+                prepare_pro_browser_session=activations.append,
+                run_resident_prompt_no_wait=resident,
+            ),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(output, "resident: please run thread-1")
+        self.assertEqual(activations, [])
 
     def test_run_transport_prompt_no_wait_logs_resident_exception_without_fallback(self) -> None:
         logs: list[str] = []
@@ -169,8 +195,8 @@ class PromptTransportTests(unittest.TestCase):
         def resident(_prompt: str, _target_thread_id: str | None) -> tuple[int, str]:
             raise RuntimeError(
                 "thread/resume failed: failed to load rollout "
-                "C:\\Users\\SHJ\\.codex\\sessions\\2026\\07\\04\\rollout.jsonl: "
-                "failed to parse thread ID from rollout file"
+                + "C:\\Users\\SHJ\\.codex\\sessions\\2026\\07\\04\\rollout.jsonl: "
+                + "failed to parse thread ID from rollout file"
             )
 
         def legacy(prompt: str, target_thread_id: str | None) -> tuple[int, str]:

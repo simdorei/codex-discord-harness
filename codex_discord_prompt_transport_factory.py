@@ -5,6 +5,7 @@ from typing import Final, TypeAlias, TypeVar
 
 import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
+import codex_desktop_bridge_protocol as bridge_protocol
 import codex_discord_app_server as discord_app_server
 import codex_discord_app_server_admission as discord_app_server_admission
 import codex_discord_prompt_transport as prompt_transport
@@ -42,6 +43,12 @@ def make_prompt_transport_deps(
     run_resident_prompt_no_wait: prompt_transport.PromptNoWait | None = None,
     start_turn_no_wait: AppServerStartTurnNoWait | None = None,
 ) -> prompt_transport.PromptTransportDeps[RelayT, AppServerDeliveryResult, SteeringResultT]:
+    def prepare_pro_browser_session(target_thread_id: str | None) -> None:
+        if not target_thread_id:
+            raise RuntimeError("Pro in-app Browser requires a mapped Codex thread.")
+        bridge_protocol.open_codex_thread_deep_link(target_thread_id)
+        log(f"pro_browser_session_activation_requested target={target_thread_id}")
+
     def run_resident_prompt_no_wait_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
         if run_resident_prompt_no_wait is not None:
             return run_resident_prompt_no_wait(prompt, target_thread_id)
@@ -100,6 +107,7 @@ def make_prompt_transport_deps(
 
     return prompt_transport.PromptTransportDeps(
         app_server_transport_enabled=app_server_transport_enabled,
+        prepare_pro_browser_session=prepare_pro_browser_session,
         run_resident_prompt_no_wait=run_resident_prompt_no_wait_impl,
         run_legacy_prompt_no_wait=run_legacy_prompt_no_wait,
         start_turn_no_wait=start_turn_no_wait_impl,

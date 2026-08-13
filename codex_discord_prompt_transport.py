@@ -40,6 +40,7 @@ DeliveryResultT = TypeVar("DeliveryResultT", bound=PromptDeliveryResult)
 SteeringResultT = TypeVar("SteeringResultT")
 PromptNoWait = Callable[[str, str | None], tuple[int, str]]
 TransportEnabled = Callable[[], bool]
+PrepareProBrowserSession = Callable[[str | None], None]
 StartTurnNoWait = Callable[[str, str | None], DeliveryResultT]
 MakeSteeringResult = Callable[[DeliveryResultT], SteeringResultT]
 WatchStream = Callable[[SteeringResultT, RelayT], tuple[int, str]]
@@ -61,6 +62,7 @@ class LegacyAskStream(Protocol[RelayContraT]):
 @dataclass(frozen=True, slots=True)
 class PromptTransportDeps(Generic[RelayT, DeliveryResultT, SteeringResultT]):
     app_server_transport_enabled: TransportEnabled
+    prepare_pro_browser_session: PrepareProBrowserSession
     run_resident_prompt_no_wait: PromptNoWait
     run_legacy_prompt_no_wait: PromptNoWait
     start_turn_no_wait: StartTurnNoWait[DeliveryResultT]
@@ -111,10 +113,13 @@ def run_transport_prompt_no_wait(
     target_thread_id: str | None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
-    resident_enabled = deps.app_server_transport_enabled() or is_pro_skill_prompt(prompt)
+    pro_prompt = is_pro_skill_prompt(prompt)
+    resident_enabled = deps.app_server_transport_enabled() or pro_prompt
     if not resident_enabled:
         return deps.run_legacy_prompt_no_wait(prompt, target_thread_id)
     try:
+        if pro_prompt:
+            deps.prepare_pro_browser_session(target_thread_id)
         return deps.run_resident_prompt_no_wait(prompt, target_thread_id)
     except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces resident failure.
         _log_transport_failure(
@@ -135,7 +140,8 @@ def run_ask_stream(
     target_thread_id: str | None = None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
-    resident_enabled = deps.app_server_transport_enabled() or is_pro_skill_prompt(prompt)
+    pro_prompt = is_pro_skill_prompt(prompt)
+    resident_enabled = deps.app_server_transport_enabled() or pro_prompt
     if not resident_enabled:
         return deps.run_legacy_stream(
             prompt,
@@ -145,6 +151,8 @@ def run_ask_stream(
             target_thread_id=target_thread_id,
         )
     try:
+        if pro_prompt:
+            deps.prepare_pro_browser_session(target_thread_id)
         result = deps.start_turn_no_wait(prompt, target_thread_id)
     except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces resident failure.
         _log_transport_failure(

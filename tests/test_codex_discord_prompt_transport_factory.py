@@ -9,6 +9,8 @@ from unittest import mock
 
 import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
+import codex_desktop_bridge_protocol as bridge_protocol
+import codex_discord_app_server as discord_app_server
 import codex_discord_prompt_transport_factory as prompt_transport_factory
 import codex_discord_stream as discord_stream
 
@@ -96,6 +98,15 @@ class PromptTransportFactoryTests(unittest.TestCase):
             run_resident_prompt_no_wait=resident_prompt,
             start_turn_no_wait=start_turn,
         )
+
+        with mock.patch.object(
+            bridge_protocol,
+            "open_codex_thread_deep_link",
+        ) as open_deep_link:
+            deps.prepare_pro_browser_session("thread-browser")
+        open_deep_link.assert_called_once_with("thread-browser")
+        with self.assertRaisesRegex(RuntimeError, "requires a mapped Codex thread"):
+            deps.prepare_pro_browser_session(None)
 
         self.assertEqual(deps.run_resident_prompt_no_wait("p", "thread-1"), (0, "resident:p:thread-1"))
         self.assertEqual(deps.run_legacy_prompt_no_wait("p", "thread-2"), (0, "legacy"))
@@ -197,7 +208,7 @@ class PromptTransportFactoryTests(unittest.TestCase):
         with (
             mock.patch.dict("os.environ", {"DISCORD_STEERING_DELIVERY_CONFIRM_TIMEOUT_SECONDS": "42"}),
             mock.patch.object(
-                prompt_transport_factory.discord_app_server,
+                discord_app_server,
                 "run_prompt_no_wait",
                 return_value=(0, "delivered"),
             ) as run_prompt,
