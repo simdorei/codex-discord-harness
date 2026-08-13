@@ -27,6 +27,8 @@ _MAX_RETRY_SECONDS = 60.0
 
 
 class ThreadSubscriptionReleaseClient(Protocol):
+    def cancel_pending_server_requests(self, thread_id: str) -> int: ...
+
     def has_active_turn_or_raise(
         self,
         thread_id: str,
@@ -170,8 +172,6 @@ class ThreadSubscriptionCoordinator:
                 )
             if has_active_turn:
                 return ThreadReleaseOutcome(ThreadReleaseStatus.ACTIVE_TURN)
-            if client.get_pending_server_requests(thread_id):
-                return ThreadReleaseOutcome(ThreadReleaseStatus.PENDING_REQUEST)
             if expected_generation is None:
                 goal = client.get_thread_goal_lookup(thread_id)
             else:
@@ -183,6 +183,9 @@ class ThreadSubscriptionCoordinator:
                 return self._record_failure(thread_id, goal.message, "GoalTransportError", log)
             if isinstance(goal, GoalPresent) and not is_terminal_goal_status(goal.status):
                 return ThreadReleaseOutcome(ThreadReleaseStatus.ACTIVE_GOAL)
+            pending_requests = client.get_pending_server_requests(thread_id)
+            if pending_requests:
+                _ = client.cancel_pending_server_requests(thread_id)
             if expected_generation is None:
                 _ = client.request(
                     "thread/unsubscribe",

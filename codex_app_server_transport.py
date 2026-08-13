@@ -82,6 +82,32 @@ INITIAL_RESUME_TIMEOUT_SEC: Final = 10.0
 
 @final
 class PersistentCodexAppServer(ResidentCodexAppServerTransport):
+    def cancel_pending_server_requests(self, thread_id: str) -> int:
+        with self._condition:
+            requests = self._pending.pending_requests(thread_id)
+        cancelled = 0
+        for request in requests:
+            raw_request_id = request["id"]
+            request_id = str(raw_request_id)
+            self._write_message(
+                {
+                    "id": raw_request_id,
+                    "error": {
+                        "code": -32800,
+                        "message": "Request cancelled because the remote operation ended.",
+                    },
+                }
+            )
+            with self._condition:
+                self._pending.resolve_request(request_id)
+            self._log(
+                f"app_server_request_cancelled_by_remote_cleanup id={request_id} target={thread_id}"
+            )
+            cancelled += 1
+        if cancelled:
+            self.notify_child_cleanup_blocker_changed()
+        return cancelled
+
     def reply_to_pending_approval(self, thread_id: str, answer_text: str) -> JsonObject:
         request = self.get_latest_pending_approval_request(thread_id)
         if request is None:

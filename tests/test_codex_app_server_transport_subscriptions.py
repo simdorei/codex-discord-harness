@@ -61,12 +61,20 @@ class ThreadSubscriptionCoordinatorTests(unittest.TestCase):
         self.assertTrue(outcome.released)
         self.assertEqual(client.requests, [])
 
-    def test_active_turn_pending_request_and_active_goal_each_defer_release(self) -> None:
+    def test_active_turn_and_active_goal_each_defer_release(self) -> None:
         cases = (
-            (_ReleaseClient(active_turn_id="turn-1"), ThreadReleaseStatus.ACTIVE_TURN),
-            (_ReleaseClient(pending_requests=[{"id": "approval-1"}]), ThreadReleaseStatus.PENDING_REQUEST),
             (
-                _ReleaseClient(goal_lookup=GoalPresent(ThreadGoalStatus.ACTIVE)),
+                _ReleaseClient(
+                    active_turn_id="turn-1",
+                    pending_requests=[{"id": "approval-1"}],
+                ),
+                ThreadReleaseStatus.ACTIVE_TURN,
+            ),
+            (
+                _ReleaseClient(
+                    pending_requests=[{"id": "approval-1"}],
+                    goal_lookup=GoalPresent(ThreadGoalStatus.ACTIVE),
+                ),
                 ThreadReleaseStatus.ACTIVE_GOAL,
             ),
         )
@@ -80,6 +88,19 @@ class ThreadSubscriptionCoordinatorTests(unittest.TestCase):
                 self.assertEqual(outcome.status, expected)
                 self.assertTrue(coordinator.is_subscribed("thread-1"))
                 self.assertEqual(client.requests, [])
+                self.assertEqual(client.cancelled_thread_ids, [])
+
+    def test_inactive_thread_pending_requests_are_cancelled_before_release(self) -> None:
+        coordinator = ThreadSubscriptionCoordinator()
+        client = _ReleaseClient(pending_requests=[{"id": "approval-1"}])
+        coordinator.mark_subscribed("thread-1")
+
+        outcome = coordinator.release_if_terminal(client, "thread-1", log=lambda _line: None)
+
+        self.assertEqual(outcome.status, ThreadReleaseStatus.RELEASED)
+        self.assertEqual(client.pending_requests, [])
+        self.assertEqual(client.cancelled_thread_ids, ["thread-1"])
+        self.assertFalse(coordinator.is_subscribed("thread-1"))
 
     def test_complete_goal_allows_release(self) -> None:
         coordinator = ThreadSubscriptionCoordinator()
@@ -203,7 +224,14 @@ class _ReleaseClient:
         self.goal_lookup = goal_lookup or GoalAbsent()
         self.unsubscribe_error = unsubscribe_error
         self.requests: list[tuple[str, JsonObject, float]] = []
+        self.cancelled_thread_ids: list[str] = []
         self.expected_generations: list[int | None] = []
+
+    def cancel_pending_server_requests(self, thread_id: str) -> int:
+        self.cancelled_thread_ids.append(thread_id)
+        cancelled = len(self.pending_requests)
+        self.pending_requests.clear()
+        return cancelled
 
     def has_active_turn_or_raise(
         self,

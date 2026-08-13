@@ -17,8 +17,14 @@ GetBridgeProcessModuleFunc = Callable[[], bridge_process.BridgeModule]
 GetStreamRedirectLockFunc = Callable[[], bridge_process.RedirectLock]
 GetThreadStateBridgeFunc = Callable[[], discord_thread_state.ThreadStateBridge]
 AppServerTransportEnabledFunc = Callable[[], bool]
-GetAppServerClientFunc = Callable[[], discord_app_server.AppServerClient | None]
 IsActiveSessionMirrorOutputTargetFunc = Callable[[str | None], bool]
+
+
+class BridgeAppServerClient(discord_app_server.AppServerClient, Protocol):
+    def cancel_pending_server_requests(self, thread_id: str) -> int: ...
+
+
+GetAppServerClientFunc = Callable[[], BridgeAppServerClient | None]
 
 
 class GetPendingInteractiveStateFunc(Protocol):
@@ -80,11 +86,28 @@ class BridgeCommandRuntime:
         )
 
     def run_bridge_command(self, argv: list[str]) -> tuple[int, str]:
-        return bridge_process.run_bridge_command(
+        result = bridge_process.run_bridge_command(
             argv,
             bridge_module=self.get_bridge_process_module(),
             stream_redirect_lock=self.get_stream_redirect_lock(),
         )
+        if result[0] != 0 or not argv or argv[0] != "stop":
+            return result
+        target_thread_id = ""
+        for index, value in enumerate(argv[:-1]):
+            if value == "--thread-id":
+                target_thread_id = argv[index + 1].strip()
+                break
+        if not target_thread_id:
+            target_thread_id = self.resolve_selected_target_func()[0] or ""
+        client = self.get_app_server_client()
+        if target_thread_id and client is not None:
+            cancelled = client.cancel_pending_server_requests(target_thread_id)
+            self.log(
+                f"app_server_stop_cleanup target={target_thread_id} "
+                + f"cancelled_requests={cancelled}"
+            )
+        return result
 
     def resolve_selected_target(self) -> tuple[str | None, str]:
         return discord_thread_state.resolve_selected_target(
