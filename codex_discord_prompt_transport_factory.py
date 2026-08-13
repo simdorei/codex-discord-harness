@@ -5,13 +5,13 @@ from typing import Final, TypeAlias, TypeVar
 
 import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
-import codex_desktop_bridge_protocol as bridge_protocol
 import codex_discord_app_server as discord_app_server
 import codex_discord_app_server_admission as discord_app_server_admission
 import codex_discord_prompt_transport as prompt_transport
 import codex_discord_runtime_config as runtime_config
 import codex_discord_stream as discord_stream
 import codex_discord_ui_ask as discord_ui_ask
+import codex_pro_browser_evidence as pro_browser_evidence
 
 
 RelayT = TypeVar("RelayT", bound=discord_stream.AskStreamRelay)
@@ -19,6 +19,18 @@ SteeringResultT = TypeVar("SteeringResultT")
 AppServerDeliveryResult: TypeAlias = app_server_transport.AppServerDeliveryResult
 AppServerStartTurnNoWait: TypeAlias = prompt_transport.StartTurnNoWait[AppServerDeliveryResult]
 DEFAULT_APP_SERVER_DELIVERY_CONFIRM_TIMEOUT_SECONDS: Final = 25.0
+
+
+class ProMappedThreadRequiredError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("Pro in-app Browser requires a mapped Codex thread.")
+
+
+class ProDeliveryIdentityMissingError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Pro Desktop IPC delivery returned no exact thread and turn identity."
+        )
 
 
 def get_app_server_delivery_confirm_timeout() -> float:
@@ -42,12 +54,35 @@ def make_prompt_transport_deps(
     log: prompt_transport.LogFunc,
     run_resident_prompt_no_wait: prompt_transport.PromptNoWait | None = None,
     start_turn_no_wait: AppServerStartTurnNoWait | None = None,
+    complete_pro_browser_session: prompt_transport.CompleteProBrowserSession | None = None,
 ) -> prompt_transport.PromptTransportDeps[RelayT, AppServerDeliveryResult, SteeringResultT]:
     def prepare_pro_browser_session(target_thread_id: str | None) -> None:
         if not target_thread_id:
-            raise RuntimeError("Pro in-app Browser requires a mapped Codex thread.")
-        bridge_protocol.open_codex_thread_deep_link(target_thread_id)
-        log(f"pro_browser_session_activation_requested target={target_thread_id}")
+            raise ProMappedThreadRequiredError
+        log(f"pro_browser_session_admitted target={target_thread_id}")
+
+    def complete_pro_browser_session_impl(
+        target_thread_id: str | None,
+        turn_id: str | None,
+    ) -> None:
+        if complete_pro_browser_session is not None:
+            complete_pro_browser_session(target_thread_id, turn_id)
+            return
+        if not target_thread_id or not turn_id:
+            raise ProDeliveryIdentityMissingError
+        pro_browser_evidence.require_available_evidence(target_thread_id, turn_id)
+        log(f"pro_browser_session_verified target={target_thread_id} turn={turn_id}")
+
+    def run_pro_prompt_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+        argv = discord_stream.build_stream_ask_argv(
+            prompt,
+            wait=True,
+            target_thread_id=target_thread_id,
+            use_sidecar=False,
+            ipc_recover_ui=True,
+            no_fallback=True,
+        )
+        return run_bridge_command_stream(argv, lambda _line: None)
 
     def run_resident_prompt_no_wait_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
         if run_resident_prompt_no_wait is not None:
@@ -108,6 +143,8 @@ def make_prompt_transport_deps(
     return prompt_transport.PromptTransportDeps(
         app_server_transport_enabled=app_server_transport_enabled,
         prepare_pro_browser_session=prepare_pro_browser_session,
+        complete_pro_browser_session=complete_pro_browser_session_impl,
+        run_pro_prompt=run_pro_prompt_impl,
         run_resident_prompt_no_wait=run_resident_prompt_no_wait_impl,
         run_legacy_prompt_no_wait=run_legacy_prompt_no_wait,
         start_turn_no_wait=start_turn_no_wait_impl,

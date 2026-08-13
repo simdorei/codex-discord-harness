@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: ANYIO_OK -- Discord.py exposes asyncio-based boundaries.
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -145,15 +145,21 @@ class MappedPromptDeliveryResult:
     error_message: str = ""
 
 
-def parse_app_server_delivery_turn_id(output: str) -> str | None:
-    prefix = "[app_server_delivery] turn_id="
+def parse_transport_delivery_turn_id(output: str) -> str | None:
+    prefixes = ("[app_server_delivery] turn_id=", "[ipc_delivery]")
     for line in output.splitlines():
-        if line.startswith(prefix):
-            return line.removeprefix(prefix).strip() or None
+        if line.startswith(prefixes[0]):
+            return line.removeprefix(prefixes[0]).strip() or None
+        if line.startswith(prefixes[1]):
+            for field in line.split():
+                if field.startswith("turn_id="):
+                    return field.removeprefix("turn_id=").strip() or None
     return None
 
 
 def format_mapped_transport_failure(exit_code: int, output: str) -> str:
+    if output.strip() == "pro_iab_unavailable":
+        return "pro_iab_unavailable"
     if "Prompt landed in a different thread" in output:
         return "Ask failed: Codex recorded this message in a different thread. I did not resend it here."
     return f"Ask failed (transport exit {exit_code})\n\n{output or '(no output)'}"
@@ -203,7 +209,7 @@ async def handle_mapped_prompt_delivery(
         exit_code, output = await deps.run_transport_prompt_no_wait(
             preprocessed.prompt, target_thread_id
         )
-    turn_id = parse_app_server_delivery_turn_id(output)
+    turn_id = parse_transport_delivery_turn_id(output)
     deps.log(
         f"ask_transport_no_wait_done exit={exit_code} target={target_thread_id or '-'} "
         + f"output_len={deps.format_log_text_len(output)}"

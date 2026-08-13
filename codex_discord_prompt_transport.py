@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+import re
+from threading import Lock
+from typing import Final, Generic, Protocol, TypeVar
 
+import codex_pro_session_mirror_gate as pro_session_mirror_gate
+from codex_pro_browser_evidence import ProIabUnavailableError
 from codex_pro_prompt_contract import is_pro_skill_prompt
 
 
 class PromptRelay(Protocol):
+    def feed_line(self, line: str) -> None: ...
+
     def finish(self) -> None: ...
 
 
@@ -20,6 +26,9 @@ class PromptDeliveryResult(Protocol):
 
     @property
     def thread_id(self) -> str | None: ...
+
+    @property
+    def turn_id(self) -> str | None: ...
 
     @property
     def target_ref(self) -> str: ...
@@ -39,12 +48,18 @@ RelayContraT = TypeVar("RelayContraT", bound=PromptRelay, contravariant=True)
 DeliveryResultT = TypeVar("DeliveryResultT", bound=PromptDeliveryResult)
 SteeringResultT = TypeVar("SteeringResultT")
 PromptNoWait = Callable[[str, str | None], tuple[int, str]]
+ProPrompt = Callable[[str, str | None], tuple[int, str]]
 TransportEnabled = Callable[[], bool]
 PrepareProBrowserSession = Callable[[str | None], None]
+CompleteProBrowserSession = Callable[[str | None, str | None], None]
 StartTurnNoWait = Callable[[str, str | None], DeliveryResultT]
 MakeSteeringResult = Callable[[DeliveryResultT], SteeringResultT]
 WatchStream = Callable[[SteeringResultT, RelayT], tuple[int, str]]
 LogFunc = Callable[[str], None]
+
+
+_PRO_BROWSER_TURN_LOCK: Final = Lock()
+_IPC_TURN_ID = re.compile(r"(?m)^\[ipc_delivery\].*\bturn_id=(\S+)\s*$")
 
 
 class LegacyAskStream(Protocol[RelayContraT]):
@@ -63,6 +78,8 @@ class LegacyAskStream(Protocol[RelayContraT]):
 class PromptTransportDeps(Generic[RelayT, DeliveryResultT, SteeringResultT]):
     app_server_transport_enabled: TransportEnabled
     prepare_pro_browser_session: PrepareProBrowserSession
+    complete_pro_browser_session: CompleteProBrowserSession
+    run_pro_prompt: ProPrompt
     run_resident_prompt_no_wait: PromptNoWait
     run_legacy_prompt_no_wait: PromptNoWait
     start_turn_no_wait: StartTurnNoWait[DeliveryResultT]
@@ -73,6 +90,8 @@ class PromptTransportDeps(Generic[RelayT, DeliveryResultT, SteeringResultT]):
 
 
 def _transport_error_output(exc: Exception) -> str:
+    if isinstance(exc, ProIabUnavailableError):
+        return str(exc)
     message = str(exc)
     lines = [f"ERROR: resident app-server transport failed: {message}"]
     if "Thread not found:" in message:
@@ -104,8 +123,44 @@ def _transport_error_output(exc: Exception) -> str:
     return "\n".join(lines)
 
 
+def _pro_transport_error_output(exc: Exception) -> str:
+    if isinstance(exc, ProIabUnavailableError):
+        return str(exc)
+    return f"ERROR: Desktop IPC Pro transport failed: {exc}"
+
+
 def _log_transport_failure(log: LogFunc, *, event: str, target_thread_id: str | None, exc: Exception) -> None:
     log(f"{event} target={target_thread_id or '-'} " + f"error_type={type(exc).__name__} error={str(exc)[:300]}")
+
+
+def _ipc_turn_id(output: str) -> str | None:
+    match = _IPC_TURN_ID.search(output)
+    return match.group(1) if match is not None else None
+
+
+def _run_pro_prompt(
+    prompt: str,
+    target_thread_id: str | None,
+    deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
+) -> tuple[int, str]:
+    with _PRO_BROWSER_TURN_LOCK:
+        pro_session_mirror_gate.hold(target_thread_id)
+        try:
+            deps.prepare_pro_browser_session(target_thread_id)
+            exit_code, output = deps.run_pro_prompt(prompt, target_thread_id)
+            if exit_code == 0:
+                deps.complete_pro_browser_session(
+                    target_thread_id,
+                    _ipc_turn_id(output),
+                )
+        except Exception:  # noqa: BROAD_EXCEPT_OK - mirror gate must close for every transport failure.
+            pro_session_mirror_gate.reject(target_thread_id)
+            raise
+        if exit_code == 0:
+            pro_session_mirror_gate.approve(target_thread_id)
+        else:
+            pro_session_mirror_gate.reject(target_thread_id)
+        return exit_code, output
 
 
 def run_transport_prompt_no_wait(
@@ -113,13 +168,32 @@ def run_transport_prompt_no_wait(
     target_thread_id: str | None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
+    if not pro_session_mirror_gate.wait_until_open(target_thread_id):
+        gate_error = pro_session_mirror_gate.ProSessionMirrorGateTimeoutError(
+            target_thread_id
+        )
+        _log_transport_failure(
+            deps.log,
+            event="pro_session_mirror_gate_timeout",
+            target_thread_id=target_thread_id,
+            exc=gate_error,
+        )
+        return 1, _transport_error_output(gate_error)
     pro_prompt = is_pro_skill_prompt(prompt)
-    resident_enabled = deps.app_server_transport_enabled() or pro_prompt
-    if not resident_enabled:
+    if pro_prompt:
+        try:
+            return _run_pro_prompt(prompt, target_thread_id, deps)
+        except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces Pro failure.
+            _log_transport_failure(
+                deps.log,
+                event="pro_ipc_prompt_failed",
+                target_thread_id=target_thread_id,
+                exc=exc,
+            )
+            return 1, _pro_transport_error_output(exc)
+    if not deps.app_server_transport_enabled():
         return deps.run_legacy_prompt_no_wait(prompt, target_thread_id)
     try:
-        if pro_prompt:
-            deps.prepare_pro_browser_session(target_thread_id)
         return deps.run_resident_prompt_no_wait(prompt, target_thread_id)
     except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces resident failure.
         _log_transport_failure(
@@ -140,9 +214,37 @@ def run_ask_stream(
     target_thread_id: str | None = None,
     deps: PromptTransportDeps[RelayT, DeliveryResultT, SteeringResultT],
 ) -> tuple[int, str]:
+    if not pro_session_mirror_gate.wait_until_open(target_thread_id):
+        gate_error = pro_session_mirror_gate.ProSessionMirrorGateTimeoutError(
+            target_thread_id
+        )
+        _log_transport_failure(
+            deps.log,
+            event="pro_session_mirror_gate_timeout",
+            target_thread_id=target_thread_id,
+            exc=gate_error,
+        )
+        relay.finish()
+        return 1, _transport_error_output(gate_error)
     pro_prompt = is_pro_skill_prompt(prompt)
-    resident_enabled = deps.app_server_transport_enabled() or pro_prompt
-    if not resident_enabled:
+    if pro_prompt:
+        try:
+            exit_code, output = _run_pro_prompt(prompt, target_thread_id, deps)
+        except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces Pro failure.
+            _log_transport_failure(
+                deps.log,
+                event="pro_ipc_stream_prompt_failed",
+                target_thread_id=target_thread_id,
+                exc=exc,
+            )
+            relay.finish()
+            return 1, _pro_transport_error_output(exc)
+        if exit_code == 0:
+            for line in output.splitlines():
+                relay.feed_line(line)
+        relay.finish()
+        return exit_code, output
+    if not deps.app_server_transport_enabled():
         return deps.run_legacy_stream(
             prompt,
             relay,
@@ -151,8 +253,6 @@ def run_ask_stream(
             target_thread_id=target_thread_id,
         )
     try:
-        if pro_prompt:
-            deps.prepare_pro_browser_session(target_thread_id)
         result = deps.start_turn_no_wait(prompt, target_thread_id)
     except Exception as exc:  # noqa: BROAD_EXCEPT_OK - transport boundary surfaces resident failure.
         _log_transport_failure(

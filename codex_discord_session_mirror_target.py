@@ -11,6 +11,7 @@ import codex_discord_session_mirror_delivery_flow as delivery_flow
 import codex_discord_session_mirror_event_flow as event_flow
 import codex_discord_session_mirror_item_sender as item_sender
 import codex_discord_session_mirror_cursor as session_mirror_cursor
+import codex_pro_session_mirror_output as pro_session_mirror_output
 from codex_app_server_transport_goal import GoalAbsent, GoalPresent, GoalTransportError, ThreadGoalLookup
 from codex_app_server_transport_goal import is_terminal_goal_status
 
@@ -111,10 +112,7 @@ async def _get_or_init_cursor(
     initial_cursor: int,
 ) -> int:
     return await asyncio.to_thread(
-        deps.get_or_init_session_mirror_cursor,
-        codex_thread_id,
-        rollout_path,
-        initial_cursor,
+        deps.get_or_init_session_mirror_cursor, codex_thread_id, rollout_path, initial_cursor
     )
 
 
@@ -195,6 +193,9 @@ async def mirror_session_target(
         return
     codex_thread_id = mirror_target.codex_thread_id
     discord_thread_id = mirror_target.discord_thread_id
+
+    if await pro_session_mirror_output.gate_session_mirror_output(deps, codex_thread_id):
+        return
 
     prepared_items = await event_flow.prepare_session_mirror_delivery_items(
         codex_thread_id,

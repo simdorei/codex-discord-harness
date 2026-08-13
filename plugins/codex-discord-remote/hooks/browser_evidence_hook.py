@@ -80,7 +80,13 @@ def process_post_tool_use(
     if not isinstance(tool_name, str):
         return False
     expected = _expected_code(tool_name, plugin_root)
-    if expected is None or _tool_code(payload.get("tool_input")) != expected:
+    tool_code = _tool_code(payload.get("tool_input"))
+    accepted_codes = (
+        {expected, f"{expected}\n", f"{expected}\r\n"}
+        if expected is not None
+        else set()
+    )
+    if tool_code not in accepted_codes:
         return False
     if not _probe_integrity_ok(plugin_root):
         return False
@@ -280,7 +286,7 @@ def _receipt_authorizes_unavailable(receipt: Mapping[str, object]) -> bool:
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "print-probe-code":
-        print(canonical_probe_code())
+        _ = sys.stdout.write(canonical_probe_code())
         return 0
     try:
         payload = cast(object, json.loads(sys.stdin.read()))

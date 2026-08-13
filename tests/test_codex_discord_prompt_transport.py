@@ -10,6 +10,7 @@ import codex_discord_prompt_transport as prompt_transport
 
 PromptNoWaitFunc: TypeAlias = Callable[[str, str | None], tuple[int, str]]
 PrepareProBrowserSessionFunc: TypeAlias = Callable[[str | None], None]
+CompleteProBrowserSessionFunc: TypeAlias = Callable[[str | None, str | None], None]
 StartTurnNoWaitFunc: TypeAlias = Callable[[str, str | None], "FakeDeliveryResult"]
 LogFunc: TypeAlias = Callable[[str], None]
 WatchStreamFunc: TypeAlias = Callable[["FakeSteeringResult", "FakeRelay"], tuple[int, str]]
@@ -32,6 +33,7 @@ class FakeDeliveryResult:
     exit_code: int
     output: str
     thread_id: str | None = None
+    turn_id: str | None = None
     target_ref: str = ""
     session_path: str | None = None
     start_offset: int | None = None
@@ -52,6 +54,10 @@ class FakeSteeringResult:
 class FakeRelay:
     def __init__(self) -> None:
         self.finished: bool = False
+        self.lines: list[str] = []
+
+    def feed_line(self, line: str) -> None:
+        self.lines.append(line)
 
     def finish(self) -> None:
         self.finished = True
@@ -75,6 +81,8 @@ def build_deps(
     run_resident_prompt_no_wait: PromptNoWaitFunc | None = None,
     run_legacy_prompt_no_wait: PromptNoWaitFunc | None = None,
     prepare_pro_browser_session: PrepareProBrowserSessionFunc | None = None,
+    complete_pro_browser_session: CompleteProBrowserSessionFunc | None = None,
+    run_pro_prompt: PromptNoWaitFunc | None = None,
     start_turn_no_wait: StartTurnNoWaitFunc | None = None,
     run_watch_stream: WatchStreamFunc | None = None,
     run_legacy_stream: LegacyStreamFunc | None = None,
@@ -110,9 +118,17 @@ def build_deps(
     def discard_pro_browser_session(_target_thread_id: str | None) -> None:
         return
 
+    def discard_pro_browser_completion(
+        _target_thread_id: str | None,
+        _turn_id: str | None,
+    ) -> None:
+        return
+
     return prompt_transport.PromptTransportDeps(
         app_server_transport_enabled=app_server_transport_enabled,
         prepare_pro_browser_session=prepare_pro_browser_session or discard_pro_browser_session,
+        complete_pro_browser_session=complete_pro_browser_session or discard_pro_browser_completion,
+        run_pro_prompt=run_pro_prompt or unexpected_prompt_no_wait,
         run_resident_prompt_no_wait=run_resident_prompt_no_wait or unexpected_prompt_no_wait,
         run_legacy_prompt_no_wait=run_legacy_prompt_no_wait or unexpected_prompt_no_wait,
         start_turn_no_wait=start_turn_no_wait or unexpected_start_turn,

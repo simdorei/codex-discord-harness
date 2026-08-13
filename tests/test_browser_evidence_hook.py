@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Mapping
@@ -99,6 +100,28 @@ class BrowserEvidenceHookTests(unittest.TestCase):
                 _stop_payload("The in-app Browser is unavailable."), data_dir
             )
             self.assertIsNone(output)
+
+    def test_printed_probe_code_is_exact_and_legacy_newline_is_accepted(self) -> None:
+        completed = subprocess.run(
+            [
+                str(Path(".python-portable/python.exe").resolve()),
+                str(HOOK_PATH),
+                "print-probe-code",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(completed.stdout, self.hook.canonical_probe_code())
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            payload = _post_payload(self.hook)
+            payload["tool_input"] = f"{payload['tool_input']}\n"
+
+            recorded = self.hook.process_post_tool_use(payload, Path(raw_dir))
+
+            self.assertTrue(recorded)
 
     def test_self_reported_code_cannot_record_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

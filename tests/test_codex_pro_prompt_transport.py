@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from threading import Event, Lock, Thread
+from typing import override
 
 import codex_discord_prompt_transport as prompt_transport
+import codex_pro_browser_evidence as browser_evidence
+import codex_pro_session_mirror_gate as mirror_gate
 from tests.test_codex_discord_prompt_transport import (
-    FakeDeliveryResult,
     FakeRelay,
     build_deps,
 )
@@ -14,15 +17,171 @@ PRO_PROMPT = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
 
 
 class ProPromptTransportTests(unittest.TestCase):
-    def test_pro_prompt_no_wait_activates_target_thread_before_resident_turn(self) -> None:
+    @override
+    def tearDown(self) -> None:
+        mirror_gate.reset_for_tests()
+
+    def test_iab_failure_rejects_mirrored_turn_and_preserves_public_error(self) -> None:
+        def complete(_target: str | None, _turn: str | None) -> None:
+            raise browser_evidence.ProIabUnavailableError("pro_iab_unavailable")
+
+        exit_code, output = prompt_transport.run_transport_prompt_no_wait(
+            PRO_PROMPT,
+            "thread-1",
+            build_deps(
+                enabled=False,
+                run_pro_prompt=lambda _prompt, _target: (
+                    0,
+                    "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1",
+                ),
+                complete_pro_browser_session=complete,
+            ),
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(output, "pro_iab_unavailable")
+        self.assertEqual(mirror_gate.mode("thread-1"), mirror_gate.GateMode.DISCARD)
+
+    def test_verified_iab_releases_buffered_mirror_output(self) -> None:
+        observed_modes: list[mirror_gate.GateMode] = []
+
+        def complete(target: str | None, _turn: str | None) -> None:
+            observed_modes.append(mirror_gate.mode(target))
+
+        exit_code, _ = prompt_transport.run_transport_prompt_no_wait(
+            PRO_PROMPT,
+            "thread-1",
+            build_deps(
+                enabled=False,
+                run_pro_prompt=lambda _prompt, _target: (
+                    0,
+                    "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1",
+                ),
+                complete_pro_browser_session=complete,
+            ),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(observed_modes, [mirror_gate.GateMode.HOLD])
+        self.assertEqual(mirror_gate.mode("thread-1"), mirror_gate.GateMode.OPEN)
+
+    def test_concurrent_pro_prompts_do_not_switch_target_before_desktop_delivery(self) -> None:
+        events: list[str] = []
+        events_lock = Lock()
+        first_activated = Event()
+        second_prepare_entered = Event()
+
+        def record(event: str) -> None:
+            with events_lock:
+                events.append(event)
+
+        def prepare(target_thread_id: str | None) -> None:
+            record(f"activate:{target_thread_id}")
+            if target_thread_id == "thread-1":
+                first_activated.set()
+            else:
+                second_prepare_entered.set()
+
+        def desktop_ipc(_prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            if target_thread_id == "thread-1":
+                _ = second_prepare_entered.wait(timeout=0.5)
+            record(f"desktop:{target_thread_id}")
+            return 0, (
+                "[ipc_delivery] owner_client=desktop-1 "
+                + f"turn_id=turn-{target_thread_id}"
+            )
+
+        def complete(target_thread_id: str | None, turn_id: str | None) -> None:
+            record(f"complete:{target_thread_id}:{turn_id}")
+
+        deps = build_deps(
+            enabled=False,
+            prepare_pro_browser_session=prepare,
+            complete_pro_browser_session=complete,
+            run_pro_prompt=desktop_ipc,
+        )
+
+        first = Thread(
+            target=prompt_transport.run_transport_prompt_no_wait,
+            args=(PRO_PROMPT, "thread-1", deps),
+        )
+
+        def run_second() -> None:
+            self.assertTrue(first_activated.wait(timeout=1.0))
+            _ = prompt_transport.run_transport_prompt_no_wait(PRO_PROMPT, "thread-2", deps)
+
+        second = Thread(target=run_second)
+        first.start()
+        second.start()
+        first.join(timeout=2.0)
+        second.join(timeout=2.0)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(
+            events,
+            [
+                "activate:thread-1",
+                "desktop:thread-1",
+                "complete:thread-1:turn-thread-1",
+                "activate:thread-2",
+                "desktop:thread-2",
+                "complete:thread-2:turn-thread-2",
+            ],
+        )
+
+    def test_pro_paths_require_same_turn_browser_completion(self) -> None:
+        completions: list[tuple[str | None, str | None]] = []
+
+        exit_code, _ = prompt_transport.run_transport_prompt_no_wait(
+            PRO_PROMPT,
+            "thread-1",
+            build_deps(
+                enabled=False,
+                run_pro_prompt=lambda _prompt, _target: (
+                    0,
+                    "[ipc_delivery] owner_client=desktop-1 turn_id=turn-no-wait",
+                ),
+                complete_pro_browser_session=lambda target, turn: completions.append(
+                    (target, turn)
+                ),
+            ),
+        )
+
+        relay = FakeRelay()
+        stream_exit_code, _ = prompt_transport.run_ask_stream(
+            PRO_PROMPT,
+            relay,
+            wait=False,
+            target_thread_id="thread-2",
+            deps=build_deps(
+                enabled=False,
+                run_pro_prompt=lambda _prompt, _target: (
+                    0,
+                    "[ipc_delivery] owner_client=desktop-1 turn_id=turn-stream",
+                ),
+                complete_pro_browser_session=lambda target, turn: completions.append(
+                    (target, turn)
+                ),
+            ),
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stream_exit_code, 0)
+        self.assertEqual(
+            completions,
+            [("thread-1", "turn-no-wait"), ("thread-2", "turn-stream")],
+        )
+
+    def test_pro_prompt_no_wait_admits_target_before_desktop_turn(self) -> None:
         events: list[str] = []
 
         def prepare(target_thread_id: str | None) -> None:
             events.append(f"activate:{target_thread_id}")
 
-        def resident(_prompt: str, target_thread_id: str | None) -> tuple[int, str]:
-            events.append(f"resident:{target_thread_id}")
-            return 0, "resident app server"
+        def desktop_ipc(_prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            events.append(f"desktop:{target_thread_id}")
+            return 0, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1"
 
         exit_code, _ = prompt_transport.run_transport_prompt_no_wait(
             PRO_PROMPT,
@@ -30,23 +189,23 @@ class ProPromptTransportTests(unittest.TestCase):
             build_deps(
                 enabled=False,
                 prepare_pro_browser_session=prepare,
-                run_resident_prompt_no_wait=resident,
+                run_pro_prompt=desktop_ipc,
             ),
         )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(events, ["activate:thread-1", "resident:thread-1"])
+        self.assertEqual(events, ["activate:thread-1", "desktop:thread-1"])
 
-    def test_pro_stream_activates_target_thread_before_resident_turn(self) -> None:
+    def test_pro_stream_admits_target_before_desktop_turn(self) -> None:
         relay = FakeRelay()
         events: list[str] = []
 
         def prepare(target_thread_id: str | None) -> None:
             events.append(f"activate:{target_thread_id}")
 
-        def start_turn(_prompt: str, target_thread_id: str | None) -> FakeDeliveryResult:
-            events.append(f"resident:{target_thread_id}")
-            return FakeDeliveryResult(0, "resident app server stream")
+        def desktop_ipc(_prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            events.append(f"desktop:{target_thread_id}")
+            return 0, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1"
 
         exit_code, _ = prompt_transport.run_ask_stream(
             PRO_PROMPT,
@@ -56,56 +215,47 @@ class ProPromptTransportTests(unittest.TestCase):
             deps=build_deps(
                 enabled=False,
                 prepare_pro_browser_session=prepare,
-                start_turn_no_wait=start_turn,
+                run_pro_prompt=desktop_ipc,
             ),
         )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(events, ["activate:thread-1", "resident:thread-1"])
+        self.assertEqual(events, ["activate:thread-1", "desktop:thread-1"])
 
-    def test_pro_prompt_no_wait_uses_resident_even_when_legacy_is_enabled(self) -> None:
+    def test_pro_prompt_no_wait_uses_desktop_even_when_resident_is_enabled(self) -> None:
         calls: list[tuple[str, str | None]] = []
 
-        def resident(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+        def desktop_ipc(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
             calls.append((prompt, target_thread_id))
-            return 0, "resident app server"
+            return 0, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1"
 
-        def legacy(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
-            raise AssertionError(f"unexpected legacy transport: {prompt}:{target_thread_id}")
+        def resident(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            raise AssertionError(f"unexpected resident transport: {prompt}:{target_thread_id}")
 
         exit_code, output = prompt_transport.run_transport_prompt_no_wait(
             PRO_PROMPT,
             "thread-1",
             build_deps(
-                enabled=False,
+                enabled=True,
                 run_resident_prompt_no_wait=resident,
-                run_legacy_prompt_no_wait=legacy,
+                run_pro_prompt=desktop_ipc,
             ),
         )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(output, "resident app server")
+        self.assertEqual(output, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1")
         self.assertEqual(calls, [(PRO_PROMPT, "thread-1")])
 
-    def test_pro_stream_uses_resident_even_when_legacy_is_enabled(self) -> None:
+    def test_pro_stream_uses_desktop_even_when_resident_is_enabled(self) -> None:
         relay = FakeRelay()
         calls: list[tuple[str, str | None]] = []
 
-        def start_turn(prompt: str, target_thread_id: str | None) -> FakeDeliveryResult:
+        def desktop_ipc(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
             calls.append((prompt, target_thread_id))
-            return FakeDeliveryResult(0, "resident app server stream")
+            return 0, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1"
 
-        def legacy_stream(
-            prompt: str,
-            relay: FakeRelay,
-            *,
-            force_while_busy: bool = False,
-            wait: bool = True,
-            target_thread_id: str | None = None,
-        ) -> tuple[int, str]:
-            raise AssertionError(
-                f"unexpected legacy stream: {prompt}:{force_while_busy}:{wait}:{target_thread_id}:{relay}"
-            )
+        def resident(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
+            raise AssertionError(f"unexpected resident transport: {prompt}:{target_thread_id}")
 
         exit_code, output = prompt_transport.run_ask_stream(
             PRO_PROMPT,
@@ -114,15 +264,16 @@ class ProPromptTransportTests(unittest.TestCase):
             wait=False,
             target_thread_id="thread-1",
             deps=build_deps(
-                enabled=False,
-                start_turn_no_wait=start_turn,
-                run_legacy_stream=legacy_stream,
+                enabled=True,
+                run_resident_prompt_no_wait=resident,
+                run_pro_prompt=desktop_ipc,
             ),
         )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(output, "resident app server stream")
+        self.assertEqual(output, "[ipc_delivery] owner_client=desktop-1 turn_id=turn-1")
         self.assertTrue(relay.finished)
+        self.assertEqual(relay.lines, ["[ipc_delivery] owner_client=desktop-1 turn_id=turn-1"])
         self.assertEqual(calls, [(PRO_PROMPT, "thread-1")])
 
 

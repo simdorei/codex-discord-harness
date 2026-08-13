@@ -104,7 +104,7 @@ class PromptTransportFactoryTests(unittest.TestCase):
             "open_codex_thread_deep_link",
         ) as open_deep_link:
             deps.prepare_pro_browser_session("thread-browser")
-        open_deep_link.assert_called_once_with("thread-browser")
+        open_deep_link.assert_not_called()
         with self.assertRaisesRegex(RuntimeError, "requires a mapped Codex thread"):
             deps.prepare_pro_browser_session(None)
 
