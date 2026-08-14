@@ -111,12 +111,12 @@ chmod +x ./install.sh ./setup-discord-bot.sh ./codex-discord-bot.sh
 Installer behavior:
 
 - Requires Python 3.12.x.
-- On Windows, downloads portable Python 3.12.1 into `.python-portable/` when `PYTHON_EXE` is not already set.
+- On Windows, verifies Python and pip bootstrap downloads against `runtime-release.json`, builds them in `.python-portable.stage/`, and activates the staged runtime only after verification succeeds.
 - Pins the portable Python executable into `.env` as `PYTHON_EXE`.
 - Pins the resolved Codex data directory into `.env` as `CODEX_HOME`.
 - Ignores runtime-only Codex `bin`, `.sandbox-bin`, `.plugin-appserver`, and `app/resources` paths when resolving `CODEX_HOME`, and falls back to the real user `.codex` directory.
 - Pins `CODEX_EXE` into `.env` when the `codex` command is available or explicitly passed.
-- Installs Python dependencies from `requirements.txt`.
+- Installs exact, hash-verified Python dependencies from `requirements.txt`; direct dependency ranges remain in `requirements.in`.
 - Creates `.env` from `.env.example` if `.env` does not exist.
 - Discovers Codex Desktop and writes `CODEX_DESKTOP_EXE` to `.env`, skipping CLI resource executables such as `app/resources/codex.exe`.
 - Registers the local Codex plugin marketplace and installs the bundled
@@ -136,6 +136,18 @@ the installed skill reloads.
 Dry-run mode prints `Dry run complete` and explicitly reports that plugin
 inventory was not verified; only a non-dry-run verified install prints `Install
 complete`.
+
+### Durable state migration and recovery
+
+The Discord state database keeps its existing path and table names. When its
+schema version must change, the bot first writes an online SQLite backup beside
+the database under `.codex-discord-backups/`, applies all changes in one
+transaction, and runs `PRAGMA integrity_check` before committing. A failed
+migration is rolled back and the backup is retained.
+
+To restore a backup, stop the bot, keep the failed database for diagnosis, copy
+the selected `.sqlite` backup back to the configured mirror database path, and
+restart the bot. The bot never silently restores or discards durable state.
 
 ## Add Token And Invite Bot
 
@@ -392,7 +404,7 @@ macOS CI smoke runs on push and pull request:
 .github/workflows/macos-smoke.yml
 ```
 
-The macOS smoke workflow checks Python compilation, selected unit tests, `install.sh --dry-run`, and `setup-discord-bot.sh --dry-run`.
+The macOS smoke workflow checks Python compilation, selected unit tests, `install.sh --dry-run`, and `setup-discord-bot.sh --dry-run`. The Windows contract workflow checks the Windows installer, bridge facade, and durable-store migration contracts.
 
 ## Troubleshooting
 

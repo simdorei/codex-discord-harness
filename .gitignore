@@ -3,6 +3,9 @@ remote_mcp_server/.env
 .omo/
 .ruff_cache/
 .python-portable/
+.python-portable.stage/
+.python-portable.previous/
+.codex-discord-backups/
 .codex-remote-attachments/
 .startup-backup/
 HANDOFF.md
