@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from codex_discord_components import get_persistent_component_claim_key
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 _DiscordIdValue = int | str | bytes | bytearray
@@ -38,7 +39,7 @@ class _PersistentComponentInteractionLike(Protocol):
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -49,7 +50,7 @@ def _coerce_discord_id(value: _DiscordIdValue) -> int:
 def cleanup_expired_busy_choices(db_path: Path, now: float | None = None) -> int:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "DELETE FROM busy_choices WHERE expires_at <= ? OR claimed_at IS NOT NULL",
             (current,),
@@ -60,7 +61,7 @@ def cleanup_expired_busy_choices(db_path: Path, now: float | None = None) -> int
 def cleanup_expired_persistent_component_claims(db_path: Path, now: float | None = None) -> int:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "DELETE FROM persistent_component_claims WHERE expires_at <= ?",
             (current,),
@@ -82,7 +83,7 @@ def create_busy_choice_record(
     choice_id = hashlib.sha256(
         f"{now}:{os.urandom(16).hex()}:{message.author.id}".encode("utf-8")
     ).hexdigest()[:24]
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         _ = conn.execute(
             "INSERT INTO busy_choices ("
             + "choice_id, owner_user_id, channel_id, target_thread_id, prompt, "
@@ -108,7 +109,7 @@ def get_busy_choice_record(
 ) -> dict[str, _BusyChoiceRecordValue] | None:
     _init_mirror_db(db_path)
     now = time.time()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[int, int, str | None, str | None, int, float, float, float | None] | None,
             conn.execute(
@@ -138,7 +139,7 @@ def get_busy_choice_record(
 def claim_busy_choice_record(db_path: Path, choice_id: str) -> bool:
     _init_mirror_db(db_path)
     now = time.time()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "UPDATE busy_choices "
             + "SET claimed_at = ? "
@@ -160,7 +161,7 @@ def claim_persistent_component_interaction(
         return True
     _init_mirror_db(db_path)
     now = time.time()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         _ = conn.execute("DELETE FROM persistent_component_claims WHERE expires_at <= ?", (now,))
         result = conn.execute(
             "INSERT OR IGNORE INTO persistent_component_claims "
@@ -173,7 +174,7 @@ def claim_persistent_component_interaction(
 def get_busy_choice_counts(db_path: Path, now: float | None = None) -> tuple[int, int]:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         active = cast(
             tuple[int] | None,
             conn.execute(
@@ -199,7 +200,7 @@ def get_persistent_component_claim_counts(
 ) -> tuple[int, int]:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         active = cast(
             tuple[int] | None,
             conn.execute(

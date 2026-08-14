@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import TypeAlias, cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
@@ -72,7 +73,7 @@ class QueueJobNotFoundError(LookupError):
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    conn = connect_store(db_path)
     init_store_schema(conn)
     return conn
 

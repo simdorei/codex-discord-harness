@@ -5,11 +5,12 @@ import time
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -22,7 +23,7 @@ def claim_session_mirror_event(
 ) -> bool:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "INSERT OR IGNORE INTO codex_session_mirror_events ("
             + "event_digest, codex_thread_id, created_at"
@@ -38,7 +39,7 @@ def has_session_mirror_event(
     codex_thread_id: str,
 ) -> bool:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[int] | None,
             conn.execute(
@@ -59,7 +60,7 @@ def cleanup_session_mirror_events(
     current = time.time() if now is None else now
     cutoff = current - retention_seconds
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "DELETE FROM codex_session_mirror_events WHERE created_at < ?",
             (cutoff,),

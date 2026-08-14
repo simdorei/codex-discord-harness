@@ -3,11 +3,12 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -35,7 +36,7 @@ def get_startup_probe_targets(
         add("allowed", channel_id)
 
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         project_rows = list[tuple[int]](
             conn.execute(
                 "SELECT discord_channel_id FROM mirror_projects "

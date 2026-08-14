@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import codex_discord_button_qa_cases as discord_button_qa_cases
+from codex_discord_store_connection import connect_store
 import codex_discord_button_qa_interactions as discord_button_qa_interactions
 import codex_discord_button_qa_lifecycle_cases as discord_button_qa_lifecycle_cases
 import codex_discord_button_qa_persistent_cases as discord_button_qa_persistent_cases
@@ -182,7 +183,7 @@ class BotButtonQaRuntime:
         )
 
     def delete_busy_choice_record(self, choice_id: str) -> None:
-        with sqlite3.connect(self.deps.get_db_path()) as conn:
+        with connect_store(self.deps.get_db_path()) as conn:
             _ = conn.execute("DELETE FROM busy_choices WHERE choice_id = ?", (choice_id,))
 
     def make_steering_prompt_result(

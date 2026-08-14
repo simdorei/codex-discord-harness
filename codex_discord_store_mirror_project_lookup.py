@@ -4,12 +4,13 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_mirror_project_aliases import ProjectKeysMatchFunc
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -23,7 +24,7 @@ def find_mirror_project_row_by_key(
     if not canonical:
         return None
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[int, str | None] | None,
             conn.execute(

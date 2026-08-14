@@ -5,11 +5,12 @@ import time
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_store_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -17,7 +18,7 @@ def cleanup_processed_discord_messages(db_path: Path, *, retention_seconds: floa
     current = time.time() if now is None else now
     cutoff = current - retention_seconds
     _init_store_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "DELETE FROM discord_processed_messages WHERE seen_at < ?",
             (cutoff,),
@@ -28,7 +29,7 @@ def cleanup_processed_discord_messages(db_path: Path, *, retention_seconds: floa
 def claim_persistent_discord_message_id(db_path: Path, message_id: int, now: float | None = None) -> bool:
     current = time.time() if now is None else now
     _init_store_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         result = conn.execute(
             "INSERT OR IGNORE INTO discord_processed_messages (message_id, seen_at) "
             + "VALUES (?, ?)",
@@ -39,7 +40,7 @@ def claim_persistent_discord_message_id(db_path: Path, message_id: int, now: flo
 
 def is_processed_discord_message_id(db_path: Path, message_id: int) -> bool:
     _init_store_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[int] | None,
             conn.execute(
@@ -53,7 +54,7 @@ def is_processed_discord_message_id(db_path: Path, message_id: int) -> bool:
 def mark_processed_discord_message_id(db_path: Path, message_id: int, now: float | None = None) -> None:
     current = time.time() if now is None else now
     _init_store_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         _ = conn.execute(
             "INSERT OR REPLACE INTO discord_processed_messages (message_id, seen_at) "
             + "VALUES (?, ?)",

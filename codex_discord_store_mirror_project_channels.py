@@ -4,11 +4,12 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -16,7 +17,7 @@ def describe_mirrored_project_channel(db_path: Path, discord_channel_id: int | N
     if not discord_channel_id:
         return ""
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         project = cast(
             tuple[str] | None,
             conn.execute(
@@ -52,7 +53,7 @@ def get_mirror_project_for_channel(db_path: Path, discord_channel_id: int | None
     if not discord_channel_id:
         return None
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[str | None, str | None] | None,
             conn.execute(

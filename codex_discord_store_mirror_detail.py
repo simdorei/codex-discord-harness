@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 from codex_discord_session_mirror_detail import SessionMirrorDetailMode
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
@@ -12,7 +13,7 @@ def get_session_mirror_detail_mode(
     db_path: Path,
     codex_thread_id: str,
 ) -> SessionMirrorDetailMode:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
         row = cast(
             tuple[str] | None,
@@ -32,7 +33,7 @@ def set_session_mirror_detail_mode(
     codex_thread_id: str,
     detail_mode: SessionMirrorDetailMode,
 ) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
         mapped_row = cast(
             tuple[int] | None,

@@ -4,6 +4,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_mirror_project_aliases import (
     ProjectKeysMatchFunc,
     merge_mirror_project_key_aliases,
@@ -12,7 +13,7 @@ from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -27,7 +28,7 @@ def upsert_mirror_project(
 ) -> list[str]:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         merged_aliases = merge_mirror_project_key_aliases(
             conn,
             canonical_project_key,

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from codex_discord_store_connection import connect_store
+
 from codex_discord_store_busy import (
     claim_busy_choice_record as claim_busy_choice_record,
     claim_persistent_component_interaction as claim_persistent_component_interaction,
@@ -77,5 +79,5 @@ from codex_discord_store_startup_probe import (
 )
 
 def init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)

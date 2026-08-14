@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Callable, Protocol
 
 import codex_discord_mirror_access as mirror_access
+from codex_discord_store_connection import connect_store
 from codex_discord_mirror_check import (
     MirrorCheckExpectedThread,
     build_mirror_check_expected_threads,
@@ -139,7 +140,7 @@ def build_mirror_list(
     access_statuses: MirrorAccessStatusMap | None = None,
 ) -> str:
     init_mirror_db_func()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = load_mirror_list_rows(conn, limit, scoped_thread_ids)
     parsed_rows = [
@@ -208,7 +209,7 @@ def build_mirror_check(
         get_project_name_func=get_project_name_func,
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = load_mirror_check_rows(conn, scoped_project_keys)
 
@@ -232,7 +233,7 @@ def load_mirror_list_access_targets(
     init_mirror_db_func: Callable[[], None],
 ) -> list[MirrorListRow]:
     init_mirror_db_func()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = load_mirror_list_rows(conn, limit, scoped_thread_ids)
     return [mirror_list_row_from_db(row) for row in rows]
@@ -245,7 +246,7 @@ def load_mirror_check_access_targets(
     scoped_project_keys: set[str] | None = None,
 ) -> list[MirrorCheckRow]:
     init_mirror_db_func()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = load_mirror_check_rows(conn, scoped_project_keys)
     return [mirror_check_row_from_db(row) for row in rows]

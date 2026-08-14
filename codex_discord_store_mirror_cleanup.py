@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 _StaleMirrorThreadRow = tuple[str, int, str]
@@ -11,7 +12,7 @@ _StaleMirrorProjectRow = tuple[str, str, int]
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -26,7 +27,7 @@ def get_stale_mirror_thread_rows(
     updated_before: float,
 ) -> list[_StaleMirrorThreadRow]:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         if valid_thread_ids:
             ordered_ids = tuple(sorted(str(thread_id) for thread_id in valid_thread_ids))
             rows = cast(
@@ -58,7 +59,7 @@ def get_stale_mirror_project_rows(
     updated_before: float,
 ) -> list[_StaleMirrorProjectRow]:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         if valid_project_keys:
             ordered_keys = tuple(sorted(str(project_key) for project_key in valid_project_keys))
             rows = cast(
@@ -91,7 +92,7 @@ def delete_stale_mirror_rows(
     updated_before: float,
 ) -> None:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         if valid_thread_ids:
             ordered_ids = tuple(sorted(str(thread_id) for thread_id in valid_thread_ids))
             _ = conn.execute(
@@ -122,7 +123,7 @@ def delete_stale_mirror_rows(
 
 def delete_archived_mirror_state(db_path: Path, codex_thread_id: str) -> dict[str, int]:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         mirror_threads = conn.execute(
             "DELETE FROM mirror_threads WHERE codex_thread_id = ?",
             (str(codex_thread_id),),
@@ -139,7 +140,7 @@ def delete_archived_mirror_state(db_path: Path, codex_thread_id: str) -> dict[st
 
 def get_remaining_mirror_discord_ids(db_path: Path) -> tuple[set[int], list[int]]:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         thread_rows = cast(
             list[tuple[int | None]],
             conn.execute("SELECT discord_thread_id FROM mirror_threads").fetchall(),
@@ -158,7 +159,7 @@ def is_mirrored_channel_id(db_path: Path, discord_channel_id: int | None) -> boo
         return False
     channel_id = int(discord_channel_id)
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[int] | None,
             conn.execute(

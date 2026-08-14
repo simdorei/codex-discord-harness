@@ -5,6 +5,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeAlias, cast
 
+from codex_discord_store_connection import connect_store
+
 SqlRow: TypeAlias = tuple[object, ...]
 SqlParam: TypeAlias = str | int | float | bytes | None
 InitMirrorDb: TypeAlias = Callable[[], None]
@@ -34,7 +36,7 @@ def resolve_discord_new_thread_project_channel_id(
     if not discord_channel_id or not project_key:
         return None
     init_mirror_db_func()
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         thread_rows = _fetch_rows(
             conn,
             "SELECT discord_channel_id, project_key FROM mirror_threads WHERE discord_thread_id = ? ORDER BY updated_at DESC",

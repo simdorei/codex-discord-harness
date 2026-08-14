@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 from codex_discord_store_session_mirror_events import (
     claim_session_mirror_event as claim_session_mirror_event,
@@ -18,13 +19,13 @@ from codex_discord_store_session_mirror_offsets import (
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
 def get_session_mirror_targets(db_path: Path, *, limit: int = 100) -> list[dict[str, str | int]]:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         rows = cast(
             list[tuple[str | None, str | None, int, int]],
             conn.execute(

@@ -5,11 +5,12 @@ import time
 from pathlib import Path
 from typing import cast
 
+from codex_discord_store_connection import connect_store
 from codex_discord_store_schema import init_store_schema
 
 
 def _init_mirror_db(db_path: Path) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         init_store_schema(conn)
 
 
@@ -23,7 +24,7 @@ def get_or_init_session_mirror_cursor(
 ) -> int:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[str | None, int | None] | None,
             conn.execute(
@@ -49,7 +50,7 @@ def get_session_mirror_offset(
     codex_thread_id: str,
 ) -> tuple[str, int, float] | None:
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         row = cast(
             tuple[str | None, int | None, float | None] | None,
             conn.execute(
@@ -74,7 +75,7 @@ def update_session_mirror_cursor(
 ) -> None:
     current = time.time() if now is None else now
     _init_mirror_db(db_path)
-    with sqlite3.connect(db_path) as conn:
+    with connect_store(db_path) as conn:
         _ = conn.execute(
             "INSERT OR REPLACE INTO codex_session_mirror_offsets ("
             + "codex_thread_id, rollout_path, cursor, updated_at"
