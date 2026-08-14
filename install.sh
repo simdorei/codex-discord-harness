@@ -277,7 +277,7 @@ verify_codex_plugin_inventory() {
 if [ "$skip_dependencies" -eq 0 ]; then
   [ -f "$script_dir/requirements.txt" ] || { echo "requirements.txt was not found: $script_dir/requirements.txt" >&2; exit 1; }
   echo "Installing Python dependencies from requirements.txt"
-  run_python -m pip install -r "$script_dir/requirements.txt"
+  run_python -m pip install --require-hashes -r "$script_dir/requirements.txt"
 fi
 
 if [ "$skip_env_file" -eq 0 ]; then

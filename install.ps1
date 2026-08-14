@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RequirementsPath = Join-Path $ScriptDir 'requirements.txt'
+$RuntimeReleasePath = Join-Path $ScriptDir 'runtime-release.json'
 $EnvExamplePath = Join-Path $ScriptDir '.env.example'
 $EnvPath = Join-Path $ScriptDir '.env'
 $PluginMarketplacePath = Join-Path $ScriptDir '.agents\plugins\marketplace.json'
@@ -24,13 +25,26 @@ $PluginRef = 'codex-discord-remote@codex-discord-remote'
 $RequiredPythonMajor = 3
 $RequiredPythonMinor = 12
 $PortablePythonVersion = '3.12.1'
+$PortablePipVersion = '26.2.1'
 $PortablePythonDir = Join-Path $ScriptDir '.python-portable'
+$PortablePythonStageDir = Join-Path $ScriptDir '.python-portable.stage'
+$PortablePythonPreviousDir = Join-Path $ScriptDir '.python-portable.previous'
 $PortablePythonExe = Join-Path $PortablePythonDir 'python.exe'
-$PortablePythonZip = Join-Path $PortablePythonDir "python-${PortablePythonVersion}-embed-amd64.zip"
-$PortablePythonUrl = "https://www.python.org/ftp/python/${PortablePythonVersion}/python-${PortablePythonVersion}-embed-amd64.zip"
-$GetPipUrl = 'https://bootstrap.pypa.io/get-pip.py'
-$GetPipPath = Join-Path $PortablePythonDir 'get-pip.py'
-$GetPipLogPath = Join-Path $PortablePythonDir 'get-pip.log'
+
+if (-not (Test-Path -LiteralPath $RuntimeReleasePath)) {
+    throw "runtime-release.json was not found: $RuntimeReleasePath"
+}
+$RuntimeRelease = Get-Content -Raw -LiteralPath $RuntimeReleasePath | ConvertFrom-Json
+if ([string]$RuntimeRelease.python.version -ne $PortablePythonVersion) {
+    throw "runtime-release.json Python version does not match installer: $PortablePythonVersion"
+}
+if ([string]$RuntimeRelease.pip.version -ne $PortablePipVersion) {
+    throw "runtime-release.json pip version does not match installer: $PortablePipVersion"
+}
+$PortablePythonUrl = [string]$RuntimeRelease.python.url
+$PortablePythonSha256 = [string]$RuntimeRelease.python.sha256
+$GetPipUrl = [string]$RuntimeRelease.get_pip.url
+$GetPipSha256 = [string]$RuntimeRelease.get_pip.sha256
 
 function Test-PythonCommand {
     param([string[]]$Command)
@@ -81,9 +95,11 @@ function Find-PythonCommand {
 }
 
 function Enable-PortablePythonSite {
-    $pthFiles = @(Get-ChildItem -LiteralPath $PortablePythonDir -Filter 'python*._pth' -File)
+    param([string]$PythonDir)
+
+    $pthFiles = @(Get-ChildItem -LiteralPath $PythonDir -Filter 'python*._pth' -File)
     if ($pthFiles.Count -eq 0) {
-        throw "Portable Python _pth file was not found in $PortablePythonDir."
+        throw "Portable Python _pth file was not found in $PythonDir."
     }
     $pthPath = $pthFiles[0].FullName
     $lines = @(Get-Content -LiteralPath $pthPath)
@@ -125,27 +141,77 @@ function Enable-PortablePythonSite {
     Set-Content -LiteralPath $pthPath -Value $updatedLines -Encoding ASCII
 }
 
+function Assert-FileSha256 {
+    param(
+        [string]$Path,
+        [string]$ExpectedSha256
+    )
+
+    if ($ExpectedSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Invalid expected SHA-256 for ${Path}: $ExpectedSha256"
+    }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
+        throw "SHA-256 verification failed for ${Path}. Expected $ExpectedSha256, got $actual."
+    }
+}
+
 function Install-PortablePython312 {
     if ($DryRun) {
-        Write-Host "Would download portable Python $PortablePythonVersion to $PortablePythonDir"
+        Write-Host "Would verify and stage portable Python $PortablePythonVersion in $PortablePythonStageDir"
         return
     }
-    Write-Host "Portable Python $PortablePythonVersion was not found. Downloading to $PortablePythonDir."
-    New-Item -ItemType Directory -Force -Path $PortablePythonDir | Out-Null
-    Invoke-WebRequest -Uri $PortablePythonUrl -OutFile $PortablePythonZip
-    Expand-Archive -LiteralPath $PortablePythonZip -DestinationPath $PortablePythonDir -Force
-    Remove-Item -LiteralPath $PortablePythonZip -Force
-    Enable-PortablePythonSite
-    Invoke-WebRequest -Uri $GetPipUrl -OutFile $GetPipPath
-    if (Test-Path -LiteralPath $GetPipLogPath) {
-        Remove-Item -LiteralPath $GetPipLogPath -Force
+    Write-Host "Portable Python $PortablePythonVersion was not found. Building a verified staged runtime."
+    if (Test-Path -LiteralPath $PortablePythonStageDir) {
+        Remove-Item -LiteralPath $PortablePythonStageDir -Recurse -Force
     }
-    & $PortablePythonExe $GetPipPath --no-warn-script-location *> $GetPipLogPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "get-pip.py failed for portable Python with exit code ${LASTEXITCODE}. See $GetPipLogPath."
+    New-Item -ItemType Directory -Path $PortablePythonStageDir | Out-Null
+    $stagePythonExe = Join-Path $PortablePythonStageDir 'python.exe'
+    $stagePythonZip = Join-Path $PortablePythonStageDir "python-${PortablePythonVersion}-embed-amd64.zip"
+    $stageGetPipPath = Join-Path $PortablePythonStageDir 'get-pip.py'
+    $stageGetPipLogPath = Join-Path $PortablePythonStageDir 'get-pip.log'
+    try {
+        Invoke-WebRequest -Uri $PortablePythonUrl -OutFile $stagePythonZip
+        Assert-FileSha256 -Path $stagePythonZip -ExpectedSha256 $PortablePythonSha256
+        Expand-Archive -LiteralPath $stagePythonZip -DestinationPath $PortablePythonStageDir -Force
+        Remove-Item -LiteralPath $stagePythonZip -Force
+        Enable-PortablePythonSite -PythonDir $PortablePythonStageDir
+
+        Invoke-WebRequest -Uri $GetPipUrl -OutFile $stageGetPipPath
+        Assert-FileSha256 -Path $stageGetPipPath -ExpectedSha256 $GetPipSha256
+        & $stagePythonExe $stageGetPipPath "pip==$PortablePipVersion" --no-warn-script-location *> $stageGetPipLogPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "get-pip.py failed for staged portable Python with exit code ${LASTEXITCODE}. See $stageGetPipLogPath."
+        }
+        Remove-Item -LiteralPath $stageGetPipPath -Force
+        Remove-Item -LiteralPath $stageGetPipLogPath -Force
+        if (-not (Test-PythonCommand -Command @($stagePythonExe))) {
+            throw "Staged portable Python failed the Python 3.12 runtime check: $stagePythonExe"
+        }
+
+        if (Test-Path -LiteralPath $PortablePythonPreviousDir) {
+            Remove-Item -LiteralPath $PortablePythonPreviousDir -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $PortablePythonDir) {
+            Move-Item -LiteralPath $PortablePythonDir -Destination $PortablePythonPreviousDir
+        }
+        try {
+            Move-Item -LiteralPath $PortablePythonStageDir -Destination $PortablePythonDir
+        } catch {
+            if (Test-Path -LiteralPath $PortablePythonPreviousDir) {
+                Move-Item -LiteralPath $PortablePythonPreviousDir -Destination $PortablePythonDir
+            }
+            throw
+        }
+        if (Test-Path -LiteralPath $PortablePythonPreviousDir) {
+            Remove-Item -LiteralPath $PortablePythonPreviousDir -Recurse -Force
+        }
+    } catch {
+        if (Test-Path -LiteralPath $PortablePythonStageDir) {
+            Remove-Item -LiteralPath $PortablePythonStageDir -Recurse -Force
+        }
+        throw
     }
-    Remove-Item -LiteralPath $GetPipPath -Force
-    Remove-Item -LiteralPath $GetPipLogPath -Force
 }
 
 function Resolve-PythonCommand {
@@ -361,7 +427,7 @@ if (-not $SkipDependencies) {
         throw "requirements.txt was not found: $RequirementsPath"
     }
     Write-Output "Installing Python dependencies from requirements.txt"
-    Invoke-Python -Arguments @('-m', 'pip', 'install', '-r', $RequirementsPath)
+    Invoke-Python -Arguments @('-m', 'pip', 'install', '--require-hashes', '-r', $RequirementsPath)
 }
 
 if (-not $SkipEnvFile) {

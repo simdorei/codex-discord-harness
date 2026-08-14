@@ -26,6 +26,11 @@ def prepare_installer_repo(repo_root: Path, installer_name: str) -> Path:
         (ROOT / installer_name).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    runtime_release = ROOT / "runtime-release.json"
+    _ = (repo_root / runtime_release.name).write_text(
+        runtime_release.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     marketplace = repo_root / ".agents" / "plugins" / "marketplace.json"
     marketplace.parent.mkdir(parents=True)
     _ = marketplace.write_text("{}\n", encoding="utf-8")
