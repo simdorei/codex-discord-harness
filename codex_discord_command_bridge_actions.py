@@ -16,7 +16,7 @@ def build_list_argv(
     if raw_limit is None or str(raw_limit).strip() == "":
         return ["list", "--db-root", "--limit", "0"]
     limit = parse_bounded_int(raw_limit, default=default, minimum=1, maximum=maximum)
-    return ["list", "--limit", str(limit)]
+    return ["list", "--db-root", "--limit", str(limit)]
 
 
 def build_archived_list_argv(

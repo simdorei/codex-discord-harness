@@ -7,6 +7,11 @@ from codex_discord_settings_commands import SettingsBridgeAction
 
 
 class DiscordCommandParserTests(unittest.TestCase):
+    def test_list_limit_keeps_user_root_scope(self) -> None:
+        argv = commands.build_list_argv("10")
+
+        self.assertEqual(argv, ["list", "--db-root", "--limit", "10"])
+
     def test_prefix_bridge_action_builds_shared_argv(self) -> None:
         def fake_resolve(channel_id: int | None, ref: str | None) -> list[str]:
             return ["--thread-id", f"{channel_id}:{ref or '-'}"]
@@ -89,7 +94,7 @@ class DiscordCommandParserTests(unittest.TestCase):
         assert confirm_delete is not None
         assert archive is not None
         self.assertEqual(list_default.argv, ["list", "--db-root", "--limit", "0"])
-        self.assertEqual(list_limited.argv, ["list", "--limit", "10"])
+        self.assertEqual(list_limited.argv, ["list", "--db-root", "--limit", "10"])
         self.assertEqual(status.argv, ["status", "--thread-id", "222:abc"])
         self.assertEqual(open_abort.argv, ["open", "--abort", "taxlab:1"])
         self.assertEqual(stop.argv, ["stop", "--thread-id", "222:-"])
