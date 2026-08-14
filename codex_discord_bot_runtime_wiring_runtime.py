@@ -6,6 +6,7 @@ from types import ModuleType
 from typing import TypeAlias, cast
 
 import codex_discord_bot_command_wiring_runtime as discord_bot_command_wiring_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_history_runtime as discord_bot_history_runtime
 import codex_discord_bot_message_slash_lifecycle_wiring_runtime as discord_bot_message_lifecycle_wiring_runtime
 import codex_discord_bot_mirror_status_wiring_runtime as discord_bot_mirror_status_wiring_runtime
@@ -145,4 +146,8 @@ class BotRuntimeWiringRuntime:
         cast(Callable[[str], None], self._module_func("log_line"))(message)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

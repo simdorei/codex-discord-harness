@@ -7,6 +7,7 @@ from typing import cast
 
 import codex_discord_delivery as discord_delivery
 import codex_discord_delivery_runtime as discord_delivery_runtime
+from codex_discord_bot_module_context import update_runtime_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +34,13 @@ class BotDeliveryAdapterRuntime:
         return cast(bool, getattr(self.module, "discord_delivery_stopping"))
 
     def set_legacy_stopping(self, stopping: bool) -> None:
-        setattr(self.module, "discord_delivery_stopping", stopping)
-        setattr(self.module, "DISCORD_DELIVERY_STOPPING", stopping)
+        update_runtime_state(
+            self.module,
+            {
+                "discord_delivery_stopping": stopping,
+                "DISCORD_DELIVERY_STOPPING": stopping,
+            },
+        )
 
     def log_line(self, message: str) -> None:
         cast(Callable[[str], None], getattr(self.module, "log_line"))(message)

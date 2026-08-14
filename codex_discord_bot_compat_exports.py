@@ -15,6 +15,7 @@ from types import ModuleType, SimpleNamespace
 from typing import TypeAlias, cast, override
 
 from codex_discord_bot_compat_export_tables import EXPORTS_BY_MODULE, MODULE_ALIASES
+from codex_discord_bot_module_context import install_runtime_bindings
 
 ModuleValue: TypeAlias = object
 SendChunksFunc: TypeAlias = Callable[..., Awaitable[ModuleValue]]
@@ -247,4 +248,8 @@ class BotCompatExportsRuntime:
         cast(Callable[[str], None], getattr(self.module, "log_line"))(message)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

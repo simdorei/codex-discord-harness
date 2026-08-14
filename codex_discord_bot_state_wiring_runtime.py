@@ -11,6 +11,7 @@ from typing import TypeAlias, cast
 
 import codex_app_server_transport as app_server_transport
 import codex_discord_busy_component_runtime as discord_busy_component_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_interaction_channel_runtime as discord_interaction_channel_runtime
 import codex_discord_processed_message_runtime as discord_processed_message_runtime
 import codex_discord_project_types as discord_project_types
@@ -311,4 +312,8 @@ class BotStateWiringRuntime:
         cast(Callable[[str], None], getattr(self.module, "log_line"))(message)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

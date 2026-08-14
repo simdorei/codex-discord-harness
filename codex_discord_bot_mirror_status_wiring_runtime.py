@@ -7,6 +7,7 @@ from types import ModuleType
 from typing import cast, TypeAlias
 
 import codex_discord_bot_context_adapter_runtime as discord_bot_context_adapter_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_diagnostics_adapter_runtime as discord_bot_diagnostics_adapter_runtime
 import codex_discord_bot_mirror_adapter_runtime as discord_bot_mirror_adapter_runtime
 import codex_discord_bot_stale_busy_adapter_runtime as discord_bot_stale_busy_adapter_runtime
@@ -93,4 +94,8 @@ class BotMirrorStatusWiringRuntime:
         return cast(discord_mirror_channel_runtime.GetThreadUiNameFunc, getattr(bridge, "get_thread_ui_name"))
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

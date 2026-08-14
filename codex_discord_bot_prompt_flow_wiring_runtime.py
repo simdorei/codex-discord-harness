@@ -7,6 +7,7 @@ from types import ModuleType
 from typing import cast, TypeAlias
 
 import codex_discord_bot_busy_interaction_adapter_runtime as discord_bot_busy_interaction_adapter_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_plain_ask_adapter_runtime as discord_bot_plain_ask_adapter_runtime
 import codex_discord_bot_plain_ask_busy_view_runtime as discord_bot_plain_ask_busy_view_runtime
 import codex_discord_bot_prompt_delivery_adapter_runtime as discord_bot_prompt_delivery_adapter_runtime
@@ -100,4 +101,8 @@ class BotPromptFlowWiringRuntime:
         self._set("BusyChoiceView", runtime.make_busy_choice_view_class())
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

@@ -6,6 +6,7 @@ from typing import cast, TypeAlias
 import traceback
 
 import codex_discord_bot_component_deps_runtime as discord_bot_component_deps_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_component_view_deps_runtime as discord_bot_component_view_deps_runtime
 import codex_discord_bot_interactive_adapter_runtime as discord_bot_interactive_adapter_runtime
 import codex_discord_bot_persistent_busy_component_runtime as discord_bot_persistent_busy_component_runtime
@@ -91,4 +92,8 @@ class BotComponentWiringRuntime:
         return cast(object, getattr(module_attr, attr_name))
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

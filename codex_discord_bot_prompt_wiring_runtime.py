@@ -6,6 +6,7 @@ from types import ModuleType
 from typing import cast, TypeAlias
 
 from codex_app_server_transport_delivery import BridgeModule
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_prompt_bridge_adapter_runtime as discord_bot_prompt_bridge_adapter_runtime
 import codex_discord_bot_prompt_delivery_bridge_adapter_runtime as discord_bot_prompt_delivery_bridge_adapter_runtime
 import codex_discord_bot_prompt_relay_adapter_runtime as discord_bot_prompt_relay_adapter_runtime
@@ -99,4 +100,8 @@ class BotPromptWiringRuntime:
         _ = mark_steering_handoff(target_thread_id)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

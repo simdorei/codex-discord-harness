@@ -9,6 +9,7 @@ from typing import Protocol, TypeAlias, cast
 
 import codex_app_server_transport as app_server_transport
 import codex_discord_app_server as discord_app_server
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bridge_command_runtime as discord_bridge_command_runtime
 import codex_discord_bridge_process as bridge_process
 import codex_discord_interaction_errors as discord_interaction_errors
@@ -172,4 +173,8 @@ class BotCoreWiringRuntime:
         self._set("parse_interactive_notice", bridge_command_runtime.parse_interactive_notice)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

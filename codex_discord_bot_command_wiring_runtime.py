@@ -6,6 +6,7 @@ from types import ModuleType
 from typing import cast, TypeAlias
 
 import codex_discord_bot_button_qa_adapter_runtime as discord_bot_button_qa_adapter_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_interaction_delivery_runtime as discord_bot_interaction_delivery_runtime
 import codex_discord_bot_new_thread_adapter_runtime as discord_bot_new_thread_adapter_runtime
 import codex_discord_bot_prefix_adapter_runtime as discord_bot_prefix_adapter_runtime
@@ -110,4 +111,8 @@ class BotCommandWiringRuntime:
         return cast(object, getattr(module_attr, attr_name))
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )

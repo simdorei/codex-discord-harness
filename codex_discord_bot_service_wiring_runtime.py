@@ -16,6 +16,7 @@ import codex_discord_bot_client_adapter_runtime as discord_bot_client_adapter_ru
 import codex_discord_bot_component_wiring_runtime as discord_bot_component_wiring_runtime
 import codex_discord_bot_delivery_adapter_runtime as discord_bot_delivery_adapter_runtime
 import codex_discord_bot_misc_adapter_runtime as discord_bot_misc_adapter_runtime
+from codex_discord_bot_module_context import install_runtime_bindings
 import codex_discord_bot_ready_adapter_runtime as discord_bot_ready_adapter_runtime
 import codex_discord_bot_session_context_adapter_runtime as discord_bot_session_context_adapter_runtime
 import codex_discord_bot_socket_runtime as discord_bot_socket_runtime
@@ -247,4 +248,8 @@ class BotServiceWiringRuntime:
         cast(Callable[[str], None], self._module_func("log_line"))(message)
 
     def _set(self, name: str, value: ModuleValue) -> None:
-        setattr(self.module, name, value)
+        install_runtime_bindings(
+            self.module,
+            owner=type(self).__name__,
+            values={name: value},
+        )
