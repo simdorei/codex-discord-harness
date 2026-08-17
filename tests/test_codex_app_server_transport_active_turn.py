@@ -16,6 +16,25 @@ class ActiveTurnReadTimeout(TimeoutError):
 
 
 class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
+    def test_get_active_turn_id_waits_twenty_seconds_for_large_thread_history(self) -> None:
+        client = transport.PersistentCodexAppServer(executable_resolver=lambda: "unused")
+        with mock.patch.object(
+            client,
+            "read_thread",
+            return_value={"thread": {"turns": [{"id": "turn-1", "status": "inProgress"}]}},
+        ) as read_thread:
+            self.assertEqual(
+                client.get_active_turn_id_or_raise("thread-1", expected_generation=3),
+                "turn-1",
+            )
+
+        read_thread.assert_called_once_with(
+            "thread-1",
+            include_turns=True,
+            timeout_sec=20.0,
+            expected_generation=3,
+        )
+
     def test_has_active_turn_uses_thread_status_without_turn_history(self) -> None:
         client = transport.PersistentCodexAppServer(executable_resolver=lambda: "unused")
         with mock.patch.object(
@@ -42,9 +61,10 @@ class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
         logs: list[str] = []
         client = transport.PersistentCodexAppServer(log_func=logs.append)
 
-        def read_thread(thread_id: str, *, include_turns: bool = False) -> JsonObject:
+        def read_thread(thread_id: str, *, include_turns: bool = False, timeout_sec: float) -> JsonObject:
             self.assertEqual(thread_id, "thread-1")
             self.assertTrue(include_turns)
+            self.assertEqual(timeout_sec, 20.0)
             raise CodexAppServerTransportError("transport down")
 
         with mock.patch.object(client, "read_thread", read_thread):
@@ -59,8 +79,8 @@ class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
         logs: list[str] = []
         client = transport.PersistentCodexAppServer(log_func=logs.append)
 
-        def read_thread(thread_id: str, *, include_turns: bool = False) -> JsonObject:
-            _ = (thread_id, include_turns)
+        def read_thread(thread_id: str, *, include_turns: bool = False, timeout_sec: float) -> JsonObject:
+            _ = (thread_id, include_turns, timeout_sec)
             raise ActiveTurnReadTimeout("read timed out")
 
         with mock.patch.object(client, "read_thread", read_thread):
@@ -73,8 +93,8 @@ class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
         logs: list[str] = []
         client = transport.PersistentCodexAppServer(log_func=logs.append)
 
-        def read_thread(thread_id: str, *, include_turns: bool = False) -> JsonObject:
-            _ = (thread_id, include_turns)
+        def read_thread(thread_id: str, *, include_turns: bool = False, timeout_sec: float) -> JsonObject:
+            _ = (thread_id, include_turns, timeout_sec)
             raise CodexAppServerTransportError("transport down")
 
         with mock.patch.object(client, "read_thread", read_thread):
@@ -87,8 +107,8 @@ class PersistentCodexAppServerActiveTurnTests(unittest.TestCase):
         logs: list[str] = []
         client = transport.PersistentCodexAppServer(log_func=logs.append)
 
-        def read_thread(thread_id: str, *, include_turns: bool = False) -> JsonObject:
-            _ = (thread_id, include_turns)
+        def read_thread(thread_id: str, *, include_turns: bool = False, timeout_sec: float) -> JsonObject:
+            _ = (thread_id, include_turns, timeout_sec)
             raise UnexpectedActiveTurnReadError("boom")
 
         with mock.patch.object(client, "read_thread", read_thread):

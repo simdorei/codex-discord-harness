@@ -407,11 +407,11 @@ class PersistentCodexAppServer(ResidentCodexAppServerTransport):
             if turn_id:
                 return turn_id
         if expected_generation is None:
-            payload = self.read_thread(thread_id, include_turns=True).get("thread")
+            payload = self.read_thread(thread_id, include_turns=True, timeout_sec=20.0).get("thread")
         else:
             payload = self.read_thread(
                 thread_id,
-                include_turns=True,
+                include_turns=True, timeout_sec=20.0,
                 expected_generation=expected_generation,
             ).get("thread")
         if not isinstance(payload, dict):
