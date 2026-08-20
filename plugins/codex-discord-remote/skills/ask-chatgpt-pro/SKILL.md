@@ -27,6 +27,19 @@ questions, or as a substitute for local tests.
      this scope and close only redundant ChatGPT tabs created by this workflow.
    - Inspect and close any popup or error dialog immediately, retaining only its
      public-safe error details.
+   - Treat Chrome acquisition as an evidence-gated step. After initializing the
+     Chrome runtime, inspect `codex plugin list --json`, find the installed and
+     enabled `codex-discord-remote@codex-discord-remote` entry, and take its
+     `source.path`. Run `<source.path>/hooks/browser_evidence_hook.py print-probe-code`
+     with Python, then submit the emitted code unchanged through
+     the execution tool. Do not use the skill file's source-tree path instead.
+     The trusted probe selects the actual `chrome` runtime and records evidence
+     for this exact turn; a successful result with zero tabs still means Chrome
+     is available and a tab should be opened.
+   - Do not report Chrome as unavailable unless the trusted probe's required retry
+     produces verified `status: unavailable` evidence in the same turn. Status
+     `unverified` means continue recovery and say only `Chrome bootstrap was not
+     verified`. Report login, navigation, tab, and composer failures separately.
    - Request user action only for login, account selection, OTP, CAPTCHA, OAuth
      owner approval, or another browser prompt that requires direct user input.
      Leave the relevant Chrome tab open so work can resume after the user finishes.

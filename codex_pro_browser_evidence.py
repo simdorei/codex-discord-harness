@@ -14,9 +14,9 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 
-PROTOCOL: Final = "ask-chatgpt-pro-browser-evidence-v1"
+PROTOCOL: Final = "ask-chatgpt-pro-browser-evidence-v2"
 EXPECTED_PROBE_SHA256: Final = (
-    "ea89b1a6e27dd2a23d53c6925a4683a95f0946b43fd934690a681616fb1a40a4"
+    "346dfe09965e91f6b4339e6c1fcfb14a76c204ef3972779780847d2f7b358853"
 )
 PLUGIN_DATA_DIRECTORY: Final = "codex-discord-remote-codex-discord-remote"
 PROBE_RELATIVE_PATH: Final = Path(
@@ -24,9 +24,9 @@ PROBE_RELATIVE_PATH: Final = Path(
 )
 
 
-class ProIabUnavailableError(RuntimeError):
+class ProChromeUnavailableError(RuntimeError):
     def __init__(self, internal_detail: str) -> None:
-        super().__init__("pro_iab_unavailable")
+        super().__init__("pro_chrome_unavailable")
         self.internal_detail = internal_detail
 
 
@@ -44,7 +44,7 @@ def canonical_inner_probe_code(plugin_root: Path) -> str:
     encoded_uri = json.dumps(probe_uri, ensure_ascii=True)
     return (
         "nodeRepl.write(JSON.stringify(await (await import("
-        f"{encoded_uri})).probeInAppBrowser(globalThis)));"
+        f"{encoded_uri})).probeChrome(globalThis)));"
     )
 
 
@@ -52,7 +52,7 @@ def canonical_probe_code(plugin_root: Path) -> str:
     tool_input = json.dumps(
         {
             "code": canonical_inner_probe_code(plugin_root),
-            "title": "Verify in-app Browser",
+            "title": "Verify Chrome",
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -89,19 +89,19 @@ def require_available_evidence(
             plugin_roots or _default_plugin_roots(home),
         )
     if evidence is None:
-        raise ProIabUnavailableError(
-            "Pro turn completed without verified in-app Browser evidence "
+        raise ProChromeUnavailableError(
+            "Pro turn completed without verified Chrome evidence "
             + "for the exact Codex session and turn."
         )
     status = evidence.get("status")
     if status != "available":
-        raise ProIabUnavailableError(
-            "Pro turn did not acquire the in-app Browser for the exact turn: "
+        raise ProChromeUnavailableError(
+            "Pro turn did not acquire Chrome for the exact turn: "
             + f"status={status or 'missing'}"
         )
     if evidence.get("can_report_unavailable") is not False:
-        raise ProIabUnavailableError(
-            "Verified in-app Browser evidence had an invalid availability flag."
+        raise ProChromeUnavailableError(
+            "Verified Chrome evidence had an invalid availability flag."
         )
 
 
@@ -244,7 +244,7 @@ def _valid_evidence(value: Mapping[str, JsonValue]) -> bool:
     can_report = value.get("can_report_unavailable")
     return (
         value.get("protocol") == PROTOCOL
-        and value.get("browser_type") == "iab"
+        and value.get("browser_type") == "chrome"
         and status in {"available", "unavailable", "unverified"}
         and can_report is (status == "unavailable")
     )
@@ -270,6 +270,7 @@ def _read_receipt(
         receipt.get("protocol") != PROTOCOL
         or receipt.get("session_id") != session_id
         or receipt.get("turn_id") != turn_id
+        or receipt.get("browser_type") != "chrome"
         or receipt.get("probe_sha256") != EXPECTED_PROBE_SHA256
         or not isinstance(receipt.get("can_report_unavailable"), bool)
     ):

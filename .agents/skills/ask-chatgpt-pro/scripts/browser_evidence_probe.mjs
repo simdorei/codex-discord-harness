@@ -1,6 +1,6 @@
-const PROTOCOL = "ask-chatgpt-pro-browser-evidence-v1";
+const PROTOCOL = "ask-chatgpt-pro-browser-evidence-v2";
 
-export async function probeInAppBrowser(globals) {
+export async function probeChrome(globals) {
   const agent = globals?.agent;
   if (agent?.browsers == null || typeof agent.browsers.get !== "function") {
     return decision("unverified", false, {
@@ -8,36 +8,36 @@ export async function probeInAppBrowser(globals) {
     });
   }
 
-  if (globals.iab != null) {
-    return available(globals.iab, globals, "existing_binding");
+  if (globals.chrome != null) {
+    return available(globals.chrome, globals, "existing_binding");
   }
 
   let initialError = "";
   try {
-    const browser = await agent.browsers.get("iab");
+    const browser = await agent.browsers.get("chrome");
     return available(browser, globals, "initial_selection");
   } catch (error) {
     initialError = publicError(error);
   }
 
   try {
-    await agent.documentation.get("bootstrap-troubleshooting");
+    await agent.documentation.get("chrome-troubleshooting");
   } catch (error) {
     return decision("unverified", false, {
       reason: "Browser troubleshooting documentation could not be read.",
-      failed_stage: "bootstrap_troubleshooting",
+      failed_stage: "chrome_troubleshooting",
       public_error: publicError(error),
       initial_error: initialError,
     });
   }
 
   try {
-    const browser = await agent.browsers.get("iab");
+    const browser = await agent.browsers.get("chrome");
     return available(browser, globals, "retry_selection", initialError);
   } catch (error) {
     return decision("unavailable", true, {
-      reason: "The second explicit iab selection failed after verified recovery.",
-      failed_stage: "select_iab_retry",
+      reason: "The second explicit Chrome selection failed after verified recovery.",
+      failed_stage: "select_chrome_retry",
       public_error: publicError(error),
       initial_error: initialError,
     });
@@ -45,7 +45,7 @@ export async function probeInAppBrowser(globals) {
 }
 
 async function available(browser, globals, selectedStage, initialError = "") {
-  globals.iab = browser;
+  globals.chrome = browser;
   let tabCount = null;
   let tabStateError = "";
   try {
@@ -57,8 +57,8 @@ async function available(browser, globals, selectedStage, initialError = "") {
   return decision("available", false, {
     reason:
       tabCount === 0
-        ? "Explicit iab selection succeeded; an empty tab list requires opening a tab."
-        : "Explicit iab selection succeeded.",
+        ? "Explicit Chrome selection succeeded; an empty tab list requires opening a tab."
+        : "Explicit Chrome selection succeeded.",
     selected_stage: selectedStage,
     initial_error: initialError,
     tab_count: tabCount,
@@ -69,7 +69,7 @@ async function available(browser, globals, selectedStage, initialError = "") {
 function decision(status, canReportUnavailable, details) {
   return {
     protocol: PROTOCOL,
-    browser_type: "iab",
+    browser_type: "chrome",
     status,
     can_report_unavailable: canReportUnavailable,
     ...details,

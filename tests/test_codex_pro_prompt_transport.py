@@ -21,9 +21,9 @@ class ProPromptTransportTests(unittest.TestCase):
     def tearDown(self) -> None:
         mirror_gate.reset_for_tests()
 
-    def test_iab_failure_rejects_mirrored_turn_and_preserves_public_error(self) -> None:
+    def test_chrome_failure_rejects_mirrored_turn_and_preserves_public_error(self) -> None:
         def complete(_target: str | None, _turn: str | None) -> None:
-            raise browser_evidence.ProIabUnavailableError("pro_iab_unavailable")
+            raise browser_evidence.ProChromeUnavailableError("pro_chrome_unavailable")
 
         exit_code, output = prompt_transport.run_transport_prompt_no_wait(
             PRO_PROMPT,
@@ -39,10 +39,10 @@ class ProPromptTransportTests(unittest.TestCase):
         )
 
         self.assertEqual(exit_code, 1)
-        self.assertEqual(output, "pro_iab_unavailable")
+        self.assertEqual(output, "pro_chrome_unavailable")
         self.assertEqual(mirror_gate.mode("thread-1"), mirror_gate.GateMode.DISCARD)
 
-    def test_verified_iab_releases_buffered_mirror_output(self) -> None:
+    def test_verified_chrome_releases_buffered_mirror_output(self) -> None:
         observed_modes: list[mirror_gate.GateMode] = []
 
         def complete(target: str | None, _turn: str | None) -> None:

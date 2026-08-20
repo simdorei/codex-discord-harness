@@ -12,7 +12,7 @@ import codex_plugin_runtime_fingerprint as fingerprint
 
 
 REMOTE_PLUGIN = "codex-discord-remote@codex-discord-remote"
-BROWSER_PLUGIN = "browser@openai-bundled"
+BROWSER_PLUGIN = "chrome@openai-bundled"
 
 
 def _inventory(remote_root: Path, browser_root: Path) -> str:

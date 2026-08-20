@@ -26,7 +26,7 @@ from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
 
 
 REMOTE_PLUGIN = "codex-discord-remote@codex-discord-remote"
-BROWSER_PLUGIN = "browser@openai-bundled"
+BROWSER_PLUGIN = "chrome@openai-bundled"
 EXPECTED_VERSION = "1.2.3"
 
 
@@ -142,13 +142,13 @@ class ProRuntimePreflightTests(unittest.TestCase):
             (
                 "browser_missing",
                 _inventory(browser_installed=False),
-                "browser@openai-bundled.*not installed",
+                "chrome@openai-bundled.*not installed",
                 ProDiagnosticCode.BROWSER_PLUGIN_NOT_INSTALLED,
             ),
             (
                 "browser_disabled",
                 _inventory(browser_enabled=False),
-                "browser@openai-bundled.*not enabled",
+                "chrome@openai-bundled.*not enabled",
                 ProDiagnosticCode.BROWSER_PLUGIN_DISABLED,
             ),
         )
@@ -286,7 +286,7 @@ class ProRuntimePreflightTests(unittest.TestCase):
             ProDiagnosticCode.PLUGIN_CONTENT_UNVERIFIED,
         )
         self.assertIn(
-            "Browser availability was not tested",
+            "Chrome availability was not tested",
             content.exception.diagnostic.public_message,
         )
 
@@ -368,10 +368,10 @@ class ProPromptPreflightTests(unittest.TestCase):
                 stage=ProDiagnosticStage.PLUGIN_INVENTORY,
                 code=ProDiagnosticCode.BROWSER_PLUGIN_DISABLED,
                 public_message=(
-                    "The in-app Browser plugin is installed but disabled; "
-                    + "Browser availability was not tested."
+                    "The Chrome plugin is installed but disabled; "
+                    + "Chrome availability was not tested."
                 ),
-                recovery_action="Enable the in-app Browser plugin, then retry !pro.",
+                recovery_action="Enable the Chrome plugin, then retry !pro.",
                 internal_detail=(
                     "plugin path C:/private/browser project_scope=secret is not enabled"
                 ),
@@ -381,8 +381,8 @@ class ProPromptPreflightTests(unittest.TestCase):
 
         self.assertFalse(result.should_deliver)
         self.assertIn("installed but disabled", result.visible_line)
-        self.assertIn("Browser availability was not tested", result.visible_line)
-        self.assertIn("Enable the in-app Browser plugin", result.visible_line)
+        self.assertIn("Chrome availability was not tested", result.visible_line)
+        self.assertIn("Enable the Chrome plugin", result.visible_line)
         self.assertIn("browser_plugin_disabled", result.visible_line)
         self.assertNotIn("C:/private", result.visible_line)
         self.assertNotIn("project_scope", result.visible_line)

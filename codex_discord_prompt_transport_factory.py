@@ -23,7 +23,7 @@ DEFAULT_APP_SERVER_DELIVERY_CONFIRM_TIMEOUT_SECONDS: Final = 25.0
 
 class ProMappedThreadRequiredError(RuntimeError):
     def __init__(self) -> None:
-        super().__init__("Pro in-app Browser requires a mapped Codex thread.")
+        super().__init__("Pro Chrome requires a mapped Codex thread.")
 
 
 class ProDeliveryIdentityMissingError(RuntimeError):

@@ -10,8 +10,8 @@ from typing import Protocol, cast, override
 
 
 REMOTE_PLUGIN_ID = "codex-discord-remote@codex-discord-remote"
-BROWSER_PLUGIN_ID = "browser@openai-bundled"
-REQUIRED_PLUGIN_IDS = (REMOTE_PLUGIN_ID, BROWSER_PLUGIN_ID)
+CHROME_PLUGIN_ID = "chrome@openai-bundled"
+REQUIRED_PLUGIN_IDS = (REMOTE_PLUGIN_ID, CHROME_PLUGIN_ID)
 _IGNORED_DIRECTORY_NAMES = {"__pycache__"}
 _IGNORED_SUFFIXES = {".pyc", ".pyo"}
 

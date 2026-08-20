@@ -185,7 +185,7 @@ def run_pro_runtime_preflight(
         raise preflight_error(
             stage=ProDiagnosticStage.PLUGIN_CONTENT,
             code=ProDiagnosticCode.PLUGIN_CONTENT_UNVERIFIED,
-            public_message="The installed plugin files could not be verified; Browser availability was not tested.",
+            public_message="The installed plugin files could not be verified; Chrome availability was not tested.",
             recovery_action="Repair or reinstall the required plugins, restart the remote bot, then retry !pro.",
             internal_detail=f"current Codex plugin fingerprint failed: {exc}",
         ) from exc

@@ -11,9 +11,9 @@ from typing import cast
 from uuid import uuid4
 
 
-PROTOCOL = "ask-chatgpt-pro-browser-evidence-v1"
+PROTOCOL = "ask-chatgpt-pro-browser-evidence-v2"
 EXPECTED_PROBE_SHA256 = (
-    "ea89b1a6e27dd2a23d53c6925a4683a95f0946b43fd934690a681616fb1a40a4"
+    "346dfe09965e91f6b4339e6c1fcfb14a76c204ef3972779780847d2f7b358853"
 )
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 PROBE_RELATIVE_PATH = Path(
@@ -21,20 +21,19 @@ PROBE_RELATIVE_PATH = Path(
 )
 EXEC_TOOL_NAMES = {"exec", "functions.exec"}
 NODE_TOOL_NAMES = {"js", "mcp__node_repl__js", "node_repl.js"}
-UNVERIFIED_PHRASE = "browser bootstrap was not verified"
+UNVERIFIED_PHRASE = "chrome bootstrap was not verified"
 BLOCK_REASON = (
-    "Unsupported in-app Browser unavailability claim blocked. Run the trusted "
-    + "same-turn Browser evidence probe, or say exactly: Browser bootstrap was "
-    + "not verified. Do not substitute Chrome."
+    "Unsupported Chrome unavailability claim blocked. Run the trusted same-turn "
+    + "Chrome evidence probe, or say exactly: Chrome bootstrap was not verified."
 )
 ENGLISH_CLAIM = re.compile(
-    r"(?:\bin[- ]app\s+browser\b|\bbrowser\b).{0,24}"
+    r"(?:\bgoogle\s+chrome\b|\bchrome\b).{0,24}"
     + r"(?:\bunavailable\b|\bnot\s+available\b|\bcannot\s+be\s+used\b|"
     + r"\bcan['\u2019]?t\s+be\s+used\b)",
     re.IGNORECASE | re.DOTALL,
 )
 KOREAN_CLAIM = re.compile(
-    r"\uc778\uc571\s*\ube0c\ub77c\uc6b0\uc800.{0,30}"
+    r"(?:\uad6c\uae00\s*)?\ud06c\ub86c.{0,30}"
     + r"(?:\uc0ac\uc6a9\s*\ubd88\uac00|\uc0ac\uc6a9\ud560\s*\uc218\s*\uc5c6|"
     + r"\uc5f0\uacb0\s*\ubd88\uac00|\uc791\ub3d9\ud558\uc9c0\s*\uc54a|"
     + r"\uc548\s*(?:\ub3fc|\ub428)|\ubd88\uac00\ub2a5)",
@@ -47,7 +46,7 @@ def canonical_inner_probe_code(plugin_root: Path = PLUGIN_ROOT) -> str:
     encoded_uri = json.dumps(probe_uri, ensure_ascii=True)
     return (
         "nodeRepl.write(JSON.stringify(await (await import("
-        f"{encoded_uri})).probeInAppBrowser(globalThis)));"
+        f"{encoded_uri})).probeChrome(globalThis)));"
     )
 
 
@@ -55,7 +54,7 @@ def canonical_probe_code(plugin_root: Path = PLUGIN_ROOT) -> str:
     tool_input = json.dumps(
         {
             "code": canonical_inner_probe_code(plugin_root),
-            "title": "Verify in-app Browser",
+            "title": "Verify Chrome",
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -105,6 +104,7 @@ def process_post_tool_use(
         "session_id": session_id,
         "turn_id": turn_id,
         "tool_use_id": tool_use_id if isinstance(tool_use_id, str) else "",
+        "browser_type": evidence["browser_type"],
         "status": evidence["status"],
         "can_report_unavailable": evidence["can_report_unavailable"],
         "probe_sha256": EXPECTED_PROBE_SHA256,
@@ -201,7 +201,7 @@ def _string_values(raw: object) -> Iterable[str]:
 
 
 def _valid_evidence(value: Mapping[str, object]) -> bool:
-    if value.get("protocol") != PROTOCOL or value.get("browser_type") != "iab":
+    if value.get("protocol") != PROTOCOL or value.get("browser_type") != "chrome":
         return False
     status = value.get("status")
     can_report = value.get("can_report_unavailable")
@@ -211,7 +211,7 @@ def _valid_evidence(value: Mapping[str, object]) -> bool:
         return can_report is False
     return (
         can_report is True
-        and value.get("failed_stage") == "select_iab_retry"
+        and value.get("failed_stage") == "select_chrome_retry"
         and isinstance(value.get("public_error"), str)
         and bool(value["public_error"])
     )
@@ -278,6 +278,7 @@ def _read_receipt(
 def _receipt_authorizes_unavailable(receipt: Mapping[str, object]) -> bool:
     return (
         receipt.get("protocol") == PROTOCOL
+        and receipt.get("browser_type") == "chrome"
         and receipt.get("status") == "unavailable"
         and receipt.get("can_report_unavailable") is True
         and receipt.get("probe_sha256") == EXPECTED_PROBE_SHA256

@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import cast
 
-from codex_plugin_runtime_fingerprint import BROWSER_PLUGIN_ID, REMOTE_PLUGIN_ID
+from codex_plugin_runtime_fingerprint import CHROME_PLUGIN_ID, REMOTE_PLUGIN_ID
 from codex_pro_runtime_diagnostics import (
     ProDiagnosticCode,
     ProDiagnosticStage,
@@ -26,9 +26,9 @@ def verify_plugin_inventory(
     inventory = _inventory_object(inventory_json)
     plugins = _plugin_records(inventory.get("installed"))
     remote = _required_plugin(plugins, REMOTE_PLUGIN_ID, browser=False)
-    browser = _required_plugin(plugins, BROWSER_PLUGIN_ID, browser=True)
+    browser = _required_plugin(plugins, CHROME_PLUGIN_ID, browser=True)
     remote_version = _enabled_version(remote, REMOTE_PLUGIN_ID, browser=False)
-    browser_version = _enabled_version(browser, BROWSER_PLUGIN_ID, browser=True)
+    browser_version = _enabled_version(browser, CHROME_PLUGIN_ID, browser=True)
     if remote_version != expected_remote_version:
         raise preflight_error(
             stage=ProDiagnosticStage.PLUGIN_INVENTORY,
@@ -98,13 +98,13 @@ def _required_plugin(
                 else ProDiagnosticCode.REMOTE_PLUGIN_MISSING
             ),
             public_message=(
-                "The in-app Browser plugin entry is missing or duplicated; "
-                + "Browser availability was not tested."
+                "The Chrome plugin entry is missing or duplicated; "
+                + "Chrome availability was not tested."
                 if browser
                 else "The remote plugin entry is missing or duplicated."
             ),
             recovery_action=(
-                "Reinstall and enable the in-app Browser plugin, then retry !pro."
+                "Reinstall and enable the Chrome plugin, then retry !pro."
                 if browser
                 else "Reinstall and enable the remote plugin, then retry !pro."
             ),
@@ -129,12 +129,12 @@ def _enabled_version(
             ),
             public_message=_plugin_message(
                 browser,
-                "The in-app Browser plugin is listed but not installed; Browser availability was not tested.",
+                "The Chrome plugin is listed but not installed; Chrome availability was not tested.",
                 "The remote plugin is listed but not installed.",
             ),
             recovery_action=_plugin_message(
                 browser,
-                "Install and enable the in-app Browser plugin, then retry !pro.",
+                "Install and enable the Chrome plugin, then retry !pro.",
                 "Install and enable the remote plugin, then retry !pro.",
             ),
             internal_detail=f"plugin {plugin_id!r} is not installed",
@@ -149,12 +149,12 @@ def _enabled_version(
             ),
             public_message=_plugin_message(
                 browser,
-                "The in-app Browser plugin is installed but disabled; Browser availability was not tested.",
+                "The Chrome plugin is installed but disabled; Chrome availability was not tested.",
                 "The remote plugin is installed but disabled.",
             ),
             recovery_action=_plugin_message(
                 browser,
-                "Enable the in-app Browser plugin, then retry !pro.",
+                "Enable the Chrome plugin, then retry !pro.",
                 "Enable the remote plugin, then retry !pro.",
             ),
             internal_detail=f"plugin {plugin_id!r} is not enabled",
@@ -170,12 +170,12 @@ def _enabled_version(
             ),
             public_message=_plugin_message(
                 browser,
-                "The in-app Browser plugin has no valid version; Browser availability was not tested.",
+                "The Chrome plugin has no valid version; Chrome availability was not tested.",
                 "The remote plugin has no valid version.",
             ),
             recovery_action=_plugin_message(
                 browser,
-                "Reinstall the in-app Browser plugin, then retry !pro.",
+                "Reinstall the Chrome plugin, then retry !pro.",
                 "Reinstall the remote plugin, then retry !pro.",
             ),
             internal_detail=f"plugin {plugin_id!r} version must be a non-empty string",

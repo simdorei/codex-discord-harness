@@ -158,8 +158,8 @@ def parse_transport_delivery_turn_id(output: str) -> str | None:
 
 
 def format_mapped_transport_failure(exit_code: int, output: str) -> str:
-    if output.strip() == "pro_iab_unavailable":
-        return "pro_iab_unavailable"
+    if output.strip() == "pro_chrome_unavailable":
+        return "pro_chrome_unavailable"
     if "Prompt landed in a different thread" in output:
         return "Ask failed: Codex recorded this message in a different thread. I did not resend it here."
     return f"Ask failed (transport exit {exit_code})\n\n{output or '(no output)'}"

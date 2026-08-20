@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Final, Generic, Protocol, TypeVar
 
 import codex_pro_session_mirror_gate as pro_session_mirror_gate
-from codex_pro_browser_evidence import ProIabUnavailableError
+from codex_pro_browser_evidence import ProChromeUnavailableError
 from codex_pro_prompt_contract import is_pro_skill_prompt
 
 
@@ -90,7 +90,7 @@ class PromptTransportDeps(Generic[RelayT, DeliveryResultT, SteeringResultT]):
 
 
 def _transport_error_output(exc: Exception) -> str:
-    if isinstance(exc, ProIabUnavailableError):
+    if isinstance(exc, ProChromeUnavailableError):
         return str(exc)
     message = str(exc)
     lines = [f"ERROR: resident app-server transport failed: {message}"]
@@ -124,7 +124,7 @@ def _transport_error_output(exc: Exception) -> str:
 
 
 def _pro_transport_error_output(exc: Exception) -> str:
-    if isinstance(exc, ProIabUnavailableError):
+    if isinstance(exc, ProChromeUnavailableError):
         return str(exc)
     return f"ERROR: Desktop IPC Pro transport failed: {exc}"
 

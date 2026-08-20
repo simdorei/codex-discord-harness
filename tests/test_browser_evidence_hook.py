@@ -49,14 +49,14 @@ def _post_payload(hook: HookModule, status: str = "unavailable") -> dict[str, ob
     can_report = status == "unavailable"
     evidence: dict[str, object] = {
         "protocol": hook.PROTOCOL,
-        "browser_type": "iab",
+        "browser_type": "chrome",
         "status": status,
         "can_report_unavailable": can_report,
         "reason": "test evidence",
     }
     if status == "unavailable":
         evidence.update(
-            failed_stage="select_iab_retry",
+            failed_stage="select_chrome_retry",
             public_error="Error: browser offline",
         )
     return {
@@ -97,7 +97,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
             self.assertTrue(recorded)
             output = self.hook.process_stop(
-                _stop_payload("The in-app Browser is unavailable."), data_dir
+                _stop_payload("Chrome is unavailable."), data_dir
             )
             self.assertIsNone(output)
 
@@ -181,7 +181,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
                 )
 
                 output = self.hook.process_stop(
-                    _stop_payload("Browser unavailable."), data_dir
+                    _stop_payload("Chrome unavailable."), data_dir
                 )
 
                 self.assertIsNotNone(output)
@@ -190,8 +190,8 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
     def test_missing_or_wrong_turn_receipt_blocks_english_and_korean_claims(self) -> None:
         claims = (
-            "The in-app Browser is unavailable.",
-            "인앱 브라우저를 사용할 수 없습니다.",
+            "Chrome is unavailable.",
+            "크롬을 사용할 수 없습니다.",
         )
         for claim in claims:
             with self.subTest(claim=claim), tempfile.TemporaryDirectory() as raw_dir:
@@ -205,8 +205,8 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
     def test_unverified_phrase_and_unrelated_failures_are_allowed(self) -> None:
         messages = (
-            "Browser bootstrap was not verified.",
-            "The ChatGPT composer is unavailable, but the in-app Browser is connected.",
+            "Chrome bootstrap was not verified.",
+            "The ChatGPT composer is unavailable, but Chrome is connected.",
         )
         for message in messages:
             with self.subTest(message=message), tempfile.TemporaryDirectory() as raw_dir:
@@ -216,7 +216,7 @@ class BrowserEvidenceHookTests(unittest.TestCase):
 
     def test_unverified_phrase_cannot_mask_an_unavailable_claim(self) -> None:
         message = (
-            "Browser bootstrap was not verified, but the in-app Browser is unavailable."
+            "Chrome bootstrap was not verified, but Chrome is unavailable."
         )
         with tempfile.TemporaryDirectory() as raw_dir:
             output = self.hook.process_stop(_stop_payload(message), Path(raw_dir))

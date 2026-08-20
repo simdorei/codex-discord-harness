@@ -27,7 +27,7 @@ def _run_probe(setup: str) -> dict[str, object]:
 const calls = [];
 {setup}
 const probe = await import({json.dumps(PROBE_PATH.as_uri())});
-const evidence = await probe.probeInAppBrowser(globalThis);
+const evidence = await probe.probeChrome(globalThis);
 process.stdout.write(JSON.stringify({{ evidence, calls }}));
 """
     completed = subprocess.run(
@@ -56,8 +56,9 @@ globalThis.agent = {
 """
         )
 
-        self.assertEqual(result["calls"], ["get:iab"])
+        self.assertEqual(result["calls"], ["get:chrome"])
         evidence = _evidence(result)
+        self.assertEqual(evidence["browser_type"], "chrome")
         self.assertEqual(evidence["status"], "available")
         self.assertEqual(evidence["tab_count"], 0)
         self.assertFalse(cast(bool, evidence["can_report_unavailable"]))
@@ -74,12 +75,12 @@ globalThis.agent = {
 
         self.assertEqual(
             result["calls"],
-            ["get:iab", "docs:bootstrap-troubleshooting", "get:iab"],
+            ["get:chrome", "docs:chrome-troubleshooting", "get:chrome"],
         )
         evidence = _evidence(result)
         self.assertEqual(evidence["status"], "unavailable")
         self.assertTrue(cast(bool, evidence["can_report_unavailable"]))
-        self.assertEqual(evidence["failed_stage"], "select_iab_retry")
+        self.assertEqual(evidence["failed_stage"], "select_chrome_retry")
 
     def test_failed_troubleshooting_is_unverified(self) -> None:
         result = _run_probe(
@@ -125,7 +126,7 @@ globalThis.agent = {
   browsers: { get: async () => { throw new Error("not expected"); } },
   documentation: { get: async () => { throw new Error("not expected"); } },
 };
-globalThis.iab = { tabs: { list: async () => { throw new Error("tab failure"); } } };
+globalThis.chrome = { tabs: { list: async () => { throw new Error("tab failure"); } } };
 """
         )
 

@@ -31,7 +31,7 @@ class ProBrowserEvidenceTests(unittest.TestCase):
             tool_input = browser_evidence.canonical_probe_code(plugin_root)
             evidence = {
                 "protocol": browser_evidence.PROTOCOL,
-                "browser_type": "iab",
+                "browser_type": "chrome",
                 "status": "available",
                 "can_report_unavailable": False,
             }
@@ -73,8 +73,8 @@ class ProBrowserEvidenceTests(unittest.TestCase):
                 plugin_roots=(plugin_root,),
             )
             with self.assertRaisesRegex(
-                browser_evidence.ProIabUnavailableError,
-                "^pro_iab_unavailable$",
+                browser_evidence.ProChromeUnavailableError,
+                "^pro_chrome_unavailable$",
             ):
                 browser_evidence.require_available_evidence(
                     "session-a",
@@ -96,6 +96,7 @@ class ProBrowserEvidenceTests(unittest.TestCase):
                         "protocol": browser_evidence.PROTOCOL,
                         "session_id": "session-a",
                         "turn_id": "turn-a",
+                        "browser_type": "chrome",
                         "status": "available",
                         "can_report_unavailable": False,
                         "probe_sha256": browser_evidence.EXPECTED_PROBE_SHA256,
@@ -110,8 +111,8 @@ class ProBrowserEvidenceTests(unittest.TestCase):
                 plugin_data=data_dir,
             )
             with self.assertRaisesRegex(
-                browser_evidence.ProIabUnavailableError,
-                "^pro_iab_unavailable$",
+                browser_evidence.ProChromeUnavailableError,
+                "^pro_chrome_unavailable$",
             ):
                 browser_evidence.require_available_evidence(
                     "session-a",
@@ -132,6 +133,7 @@ class ProBrowserEvidenceTests(unittest.TestCase):
                             "protocol": browser_evidence.PROTOCOL,
                             "session_id": "session-a",
                             "turn_id": "turn-a",
+                            "browser_type": "chrome",
                             "status": status,
                             "can_report_unavailable": status == "unavailable",
                             "probe_sha256": browser_evidence.EXPECTED_PROBE_SHA256,
@@ -141,8 +143,8 @@ class ProBrowserEvidenceTests(unittest.TestCase):
                 )
 
                 with self.assertRaisesRegex(
-                    browser_evidence.ProIabUnavailableError,
-                    "^pro_iab_unavailable$",
+                    browser_evidence.ProChromeUnavailableError,
+                    "^pro_chrome_unavailable$",
                 ):
                     browser_evidence.require_available_evidence(
                         "session-a",
