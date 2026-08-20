@@ -38,7 +38,7 @@ def register_computer_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         structured_output=True,
     )
     async def list_computer_windows(ctx: ToolContext) -> ComputerWindowsOutput:
-        """List only Chrome or Notepad windows launched by this selected session."""
+        """List session-owned windows in project mode or visible windows in PC mode."""
         return await execute_operation(
             ctx,
             broker,
@@ -57,7 +57,7 @@ def register_computer_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         window_id: ComputerWindowId,
         ctx: ToolContext,
     ) -> ComputerActionOutput:
-        """Bring one listed session-owned window to the foreground."""
+        """Bring one window listed for the current project or PC selection forward."""
         from remote_mcp_server.simdorei_mcp.tools_computer_actions import run_action
 
         return await run_action(
@@ -90,7 +90,7 @@ def register_computer_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         window_id: ComputerWindowId,
         ctx: ToolContext,
     ) -> CallToolResult:
-        """Capture active session-owned Notepad and issue one observation token."""
+        """Capture a permitted active window and issue one-use observation state."""
         result = await execute_operation(
             ctx,
             broker,

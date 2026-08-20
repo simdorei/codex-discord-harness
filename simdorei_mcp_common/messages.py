@@ -126,6 +126,22 @@ class ProjectSessionCommand(ProjectCommand):
         return self
 
 
+class DeviceSessionCommand(ProjectCommand):
+    type: Literal["device_session"] = "device_session"
+    computer_session_generation: int = Field(ge=1)
+    working_directory: str = Field(min_length=1, max_length=1_000)
+    expires_at: datetime
+
+    @model_validator(mode="after")
+    def require_session_generation(self) -> Self:
+        if self.computer_session_id is None:
+            raise PydanticCustomError(
+                "computer_session_id",
+                "computer_session_id is required",
+            )
+        return self
+
+
 class ProjectInfoResult(ProtocolModel):
     type: Literal["project_info_result"] = "project_info_result"
     request_id: RequestId
@@ -191,7 +207,8 @@ GatewayCommand = Annotated[
     | ReadFileCommand
     | WriteFileCommand
     | ProjectOperationCommand
-    | ProjectSessionCommand,
+    | ProjectSessionCommand
+    | DeviceSessionCommand,
     Field(discriminator="type"),
 ]
 BridgeResult = Annotated[
@@ -224,7 +241,8 @@ GatewayInboundMessage = Annotated[
     | ReadFileCommand
     | WriteFileCommand
     | ProjectOperationCommand
-    | ProjectSessionCommand,
+    | ProjectSessionCommand
+    | DeviceSessionCommand,
     Field(discriminator="type"),
 ]
 

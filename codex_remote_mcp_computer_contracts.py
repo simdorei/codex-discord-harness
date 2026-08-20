@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from enum import StrEnum
 from typing import Protocol
 
 from simdorei_mcp_common.operation_outputs import ComputerWindowEntry
+
+
+class ComputerAccessMode(StrEnum):
+    PROJECT = "project"
+    DEVICE = "device"
 
 
 @dataclass(frozen=True, slots=True)

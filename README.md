@@ -170,7 +170,7 @@ The setup script:
 - saves `DISCORD_BOT_TOKEN` to `.env`
 - asks for the general text channel ID for `!` commands, then adds it to `DISCORD_ALLOWED_CHANNEL_IDS` and fills `DISCORD_STARTUP_CHANNEL_ID` when that value is empty
 - prints a Discord invite URL
-- on Windows, registers and starts the limited-privilege `Codex Discord Bot` scheduled task at logon and every minute
+- on Windows, registers and starts the interactive highest-privilege `Codex Discord Bot` scheduled task at logon and every minute; run setup from an Administrator PowerShell window so the bot can control ordinary and administrator app windows
 
 Open the invite URL, choose the Discord server, and authorize the bot. The invite adds the bot to a server; channel access still depends on Discord permissions and `.env` channel IDs.
 
@@ -235,7 +235,7 @@ Windows watchdog (registered automatically by `setup-discord-bot.ps1`):
 powershell -NoProfile -ExecutionPolicy Bypass -File .\codex-discord-watchdog.ps1
 ```
 
-The scheduled task runs at logon and every minute with limited user privileges. Overlapping runs are ignored, so a healthy bot remains a single process. The command above is still useful for a manual one-off check.
+The scheduled task runs in the signed-in user's interactive desktop at the highest available privilege. This lets PC mode control ordinary and administrator app windows, while Windows secure-desktop surfaces such as the sign-in screen and Ctrl+Alt+Delete remain unavailable. Overlapping runs are ignored, so a healthy bot remains a single process. The command above is still useful for a manual one-off check.
 
 The watchdog restarts the headless bot if the bot is missing. It also restarts the bot after repeated unhealthy host samples: CPU at or above `95%`, free memory at or below `768MB`, for `2` consecutive checks. Tune those checks with `-HealthCpuPercent`, `-HealthFreeMemoryMb`, and `-HealthBadSampleLimit`. Put `.codex_discord_bot.disabled` in the repo root to pause watchdog restarts.
 

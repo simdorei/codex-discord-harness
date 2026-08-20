@@ -50,3 +50,18 @@ def test_pro_skill_guidance_names_full_terminal_surface() -> None:
         guidance = skill_path.read_text(encoding="utf-8")
         missing = FULL_TERMINAL_TOOLS.difference(guidance.split("`"))
         assert missing == set(), skill_path
+
+
+def test_pro_transport_and_skill_are_chrome_only() -> None:
+    prompt_contract = (ROOT / "codex_pro_prompt_contract.py").read_text(encoding="utf-8")
+    skill_paths = (
+        ROOT / ".agents/skills/ask-chatgpt-pro/SKILL.md",
+        ROOT / "plugins/codex-discord-remote/skills/ask-chatgpt-pro/SKILL.md",
+    )
+
+    assert "plugin://chrome@openai-bundled" in prompt_contract
+    assert "plugin://browser@openai-bundled" not in prompt_contract
+    for skill_path in skill_paths:
+        guidance = skill_path.read_text(encoding="utf-8")
+        assert "Use Chrome only" in guidance, skill_path
+        assert "in-app Browser" not in guidance, skill_path

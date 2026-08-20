@@ -191,6 +191,7 @@ def register_tools(
     )
     from remote_mcp_server.simdorei_mcp.tools_computer import register_computer_tools
     from remote_mcp_server.simdorei_mcp.tools_images import register_image_tools
+    from remote_mcp_server.simdorei_mcp.tools_devices import register_device_tools
     from remote_mcp_server.simdorei_mcp.tools_project import register_project_tools
     from remote_mcp_server.simdorei_mcp.tools_terminal import register_terminal_tools
     from remote_mcp_server.simdorei_mcp.tools_terminal_windows import (
@@ -201,6 +202,7 @@ def register_tools(
     )
 
     register_project_tools(mcp, broker)
+    register_device_tools(mcp, broker, resource_url=resource_url)
     register_command_git_tools(mcp, broker)
     register_image_tools(mcp, broker)
     register_checkpoint_tools(mcp, broker)

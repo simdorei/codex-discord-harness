@@ -1,14 +1,20 @@
+# pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
 from datetime import datetime
-from typing import final
+from typing import assert_never, final
 
 from remote_mcp_server.simdorei_mcp.broker_errors import (
     ActiveBindingMissingError,
     BridgeUnavailableError,
     SessionProjectConflictError,
 )
-from remote_mcp_server.simdorei_mcp.broker_models import PendingCall, SessionRoute
+from remote_mcp_server.simdorei_mcp.broker_models import (
+    DeviceRouteTarget,
+    PendingCall,
+    ProjectRouteTarget,
+    SessionRoute,
+)
 from simdorei_mcp_common.messages import DeviceId, RequestId
 
 RouteFailure = ActiveBindingMissingError | BridgeUnavailableError
@@ -30,19 +36,24 @@ class BrokerRouteRegistry:  # MUTABLE_OK: caller serializes access with broker l
 
     def require_compatible(self, route: SessionRoute, *, now: datetime) -> None:
         current = self._sessions.get(route.session)
-        if (
-            current is not None
-            and current.expires_at > now
-            and (
-                current.device_id != route.device_id
-                or current.thread_id != route.thread_id
-                or current.subject != route.subject
-            )
-        ):
-            raise SessionProjectConflictError(
-                "This ChatGPT conversation is already connected to a different "
-                + "Codex thread. Open a new ChatGPT conversation and select there."
-            )
+        if current is None or current.expires_at <= now:
+            return
+        if current.subject == route.subject:
+            match current.target, route.target:
+                case (DeviceRouteTarget(), _) | (_, DeviceRouteTarget()):
+                    return
+                case ProjectRouteTarget(), ProjectRouteTarget():
+                    if (
+                        current.device_id == route.device_id
+                        and current.thread_id == route.thread_id
+                    ):
+                        return
+                case unreachable:
+                    assert_never(unreachable)
+        raise SessionProjectConflictError(
+            "This ChatGPT conversation is already connected to a different "
+            + "Codex thread. Open a new ChatGPT conversation and select there."
+        )
 
     def replace(self, route: SessionRoute) -> None:
         current = self._sessions.get(route.session)

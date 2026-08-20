@@ -10,8 +10,8 @@ from codex_thread_models import ThreadInfo
 
 
 class IpcStartTurnTests(unittest.TestCase):
-    def test_pro_prompt_attaches_skill_and_browser_to_desktop_turn(self) -> None:
-        prompt = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
+    def test_pro_prompt_attaches_skill_and_chrome_to_desktop_turn(self) -> None:
+        prompt = "$ask-chatgpt-pro [@Chrome](plugin://chrome@openai-bundled)"
 
         request = start_turn_requests.build_start_turn_request(
             request_id="request-1",
@@ -32,9 +32,9 @@ class IpcStartTurnTests(unittest.TestCase):
             Path(str(skill.get("path"))).resolve(),
             (Path.cwd() / ".agents/skills/ask-chatgpt-pro/SKILL.md").resolve(),
         )
-        browser = input_objects[2]
-        self.assertEqual(browser.get("name"), "Browser")
-        self.assertEqual(browser.get("path"), "plugin://browser@openai-bundled")
+        chrome = input_objects[2]
+        self.assertEqual(chrome.get("name"), "Chrome")
+        self.assertEqual(chrome.get("path"), "plugin://chrome@openai-bundled")
 
     def test_request_start_turn_builds_thread_follower_payload(self) -> None:
         written_payloads: list[ipc_start_turn.JsonObject] = []

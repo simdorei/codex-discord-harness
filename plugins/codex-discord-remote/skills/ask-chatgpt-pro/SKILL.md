@@ -7,45 +7,29 @@ description: Consult and reuse a ChatGPT Pro conversation from one Codex thread,
 
 Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex responsible for decisions, implementation, and verification.
 
+## Automatic consultation
+
+Use this skill without an explicit `!pro` only when one of these conditions is
+observed: an important architecture decision remains unresolved after local
+analysis, two materially different implementation attempts fail, or a
+high-impact change has reached final review and a second opinion would materially
+reduce risk. Do not open Chrome automatically for routine edits, deterministic
+questions, or as a substitute for local tests.
+
 ## Prepare the chat
 
-1. Load the applicable Chrome or built-in Browser control skill before browser
-   actions. Respect any user or repository rule that selects a browser. When the
-   invocation includes `[@Browser](plugin://browser@openai-bundled)`, acquire the
-   in-app Browser and open `https://chatgpt.com/` yourself when no usable tab
-   exists. Do not ask the user to pre-open it or silently substitute Chrome.
-   Request user action only for login, OTP, CAPTCHA, or when the Browser runtime
-   still explicitly reports the in-app Browser unavailable after its prescribed
-   troubleshooting.
-   - Treat in-app Browser acquisition as a required, evidence-gated protocol.
-     Select browser type `iab` explicitly. If selection fails, follow the Browser
-     control skill's bootstrap troubleshooting once, rediscover its runtime tool,
-     and repeat the explicit `iab` selection.
-   - An empty tab list, stale tab binding, compacted context, new Codex session,
-     or missing live tab is not evidence that the in-app Browser is unavailable.
-     Login, page navigation, and composer failures are separate states too.
-   - You must not report the in-app Browser as unavailable unless that second
-     explicit selection fails with an actual runtime error. Preserve the failed
-     stage and exact public-safe error in the response. If the sequence or its
-     evidence is incomplete, say `Browser bootstrap was not verified` and keep
-     troubleshooting; do not call the Browser unavailable.
-   - Never switch to browser type `extension`, Chrome, or another browser as a
-     fallback for an invocation that explicitly requests `[@Browser]`.
-   - After initializing the Browser runtime, inspect `codex plugin list --json`,
-     find the installed and enabled `codex-discord-remote@codex-discord-remote`
-     entry, and take its `source.path`. Run
-     `<source.path>/hooks/browser_evidence_hook.py print-probe-code` with Python,
-     then submit the emitted code unchanged through the execution tool. Do not
-     use the skill file's source-tree path as a substitute. That trusted probe
-     calls the actual `iab` runtime itself; it accepts no caller-supplied status.
-     The plugin's PostToolUse hook verifies the exact call, probe hash, and real
-     result, then records evidence for this turn. A successful result with zero
-     tabs is still Browser available and means you should open a tab.
-   - The Stop hook rejects an affirmative Browser-unavailable response unless
-     this same turn produced verified `status: unavailable` evidence after the
-     required retry. Status `unverified` means keep troubleshooting and say only
-     `Browser bootstrap was not verified`. Report login, navigation, tab, or
-     composer trouble separately from Browser availability.
+1. Use Chrome only. Load the Chrome control skill before browser actions and
+   use the user's existing signed-in Chrome profile. The invocation includes
+   `[@Chrome](plugin://chrome@openai-bundled)`; open `https://chatgpt.com/`
+   in Chrome when no usable ChatGPT tab exists. Never use another browser runtime
+   or silently fall back to a different browser.
+   - Keep Chrome at five open tabs or fewer. Reuse the conversation tab mapped to
+     this scope and close only redundant ChatGPT tabs created by this workflow.
+   - Inspect and close any popup or error dialog immediately, retaining only its
+     public-safe error details.
+   - Request user action only for login, account selection, OTP, CAPTCHA, OAuth
+     owner approval, or another browser prompt that requires direct user input.
+     Leave the relevant Chrome tab open so work can resume after the user finishes.
 2. Route the browser conversation before sending anything:
    - When `<local-project-mcp>` supplies `conversation_scope`, use the bundled
      `scripts/conversation_map.py` before opening or creating a chat. Run
@@ -110,37 +94,29 @@ Use a controllable ChatGPT browser tab as an external reviewer. Keep Codex respo
    `terminal_window_activate`, `terminal_window_type`, `terminal_window_keys`,
    `terminal_window_interrupt`, and `terminal_window_close` for visible terminal
    windows owned by the current ChatGPT session.
-7. When the user asks ChatGPT Pro to operate the current Windows PC, use the
-   connector's computer tools only after `select_project` succeeds:
-   - call `launch_computer_app` first, then `list_computer_windows`, and
-     `activate_computer_window`; call `screenshot_computer_window` only for
-     Notepad;
-   - use the returned `observation_id` for exactly one click, drag, scroll,
-     typing, key, or close action within 30 seconds;
-   - take a new screenshot after every UI-changing action;
-   - expect only the isolated Chrome or blank classic Notepad window launched by
-     the current selection to be listed; pre-existing user windows remain hidden,
-     and labels stay coarse instead of exposing page or document titles;
-   - use Chrome only for launch, listing, activation, and emergency stop. Never
-     request Chrome pixels: page-controlled titles cannot prove that rendered
-     content excludes sign-in, CAPTCHA, consent, or secret surfaces. Notepad
-     supports the full screenshot-bound editing action set;
-   - clipboard writes require and consume a fresh Notepad observation too;
-   - never request `Ctrl+V`; paste is intentionally blocked so pre-existing
-     clipboard secrets cannot be moved into Notepad and captured;
-   - use `stop_computer_control` as the emergency stop. A new `!pro` binding is
-     required before that thread can control the PC again. Stop or rebind also
-     closes the isolated apps launched by the old selection.
-   A fresh ChatGPT project selection invalidates screenshot IDs from the prior
-   conversation or connector, even when both selections target the same Codex
-   thread. An already-admitted old operation finishes before the new selection
-   is acknowledged; commands arriving afterward with the old generation are
-   rejected. Take a new screenshot after reconnecting.
-   Never operate password managers, ChatGPT/Codex windows, remote desktop apps,
-   Windows security/privacy surfaces, sign-in/password/OTP screens, or
-   Windows-key shortcuts. Do not use terminal or computer tools to access or
-   transmit credentials. Leave unavoidable UAC, login, CAPTCHA, password, and
-   OTP work open for direct user handoff.
+   When the request instead includes a `<local-device-mcp>` block, attach the
+   same exact connector, then call `list_devices` and `select_device` instead
+   of `select_project`. This path needs no project scope. Use the PC and absolute
+   folder stated by the user; if either is ambiguous, ask before selecting.
+7. When the user asks ChatGPT Pro to operate Windows, first determine the
+   selected connector mode:
+   - Project mode begins with `select_project`. It preserves the existing narrow
+     boundary: only isolated Chrome or blank classic Notepad launched by this
+     selected session is listed. Chrome is not capturable in project mode and
+     Notepad retains the screenshot-bound editing rules.
+   - PC mode begins with `list_devices` and `select_device`. Use the exact
+     user-named PC and absolute working folder. If the folder changes, call
+     `set_working_directory`; use `device_info` to confirm the active PC and
+     folder. PC mode may list, capture, and control existing visible application
+     windows, including ordinary administration programs and elevated windows
+     when the Windows runtime was installed at highest privilege.
+   In both modes, use the returned `observation_id` for exactly one click, drag,
+   scroll, typing, key, clipboard, or close action within 30 seconds. Take a new
+   screenshot after every UI-changing action and use `stop_computer_control` as
+   the emergency stop. A new selection invalidates prior screenshot IDs.
+   Windows secure-desktop surfaces, the sign-in screen, Ctrl+Alt+Delete, locked
+   sessions, login, CAPTCHA, password, and OTP entry require direct user handoff.
+   Never use terminal or computer tools to read or transmit credentials.
 8. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
    agent mode, deep research, or a different model to gain local tools. If the
    connector is unavailable in Pro, stop with the exact limitation instead of

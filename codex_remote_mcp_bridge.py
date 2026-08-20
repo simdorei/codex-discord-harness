@@ -36,6 +36,7 @@ from codex_remote_mcp_bridge_projects import (
 from codex_remote_mcp_dispatch import LocalProjectDispatcher
 from simdorei_mcp_common.messages import (
     BridgeHello,
+    DeviceSessionCommand,
     DeviceId,
     GatewayHello,
     ListFilesCommand,
@@ -470,6 +471,7 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
                     | WriteFileCommand()
                     | ProjectOperationCommand()
                     | ProjectSessionCommand()
+                    | DeviceSessionCommand()
                 ):
                     rejected = self._workers.submit(generation, message)
                     if rejected is not None:

@@ -7,9 +7,9 @@ from codex_app_server_transport_reply_types import JsonArray
 
 
 PRO_SKILL_NAME: Final = "ask-chatgpt-pro"
-BROWSER_MENTION_NAME: Final = "Browser"
-BROWSER_PLUGIN_URI: Final = "plugin://browser@openai-bundled"
-PRO_SKILL_CALL: Final = f"${PRO_SKILL_NAME} [@{BROWSER_MENTION_NAME}]({BROWSER_PLUGIN_URI})"
+CHROME_MENTION_NAME: Final = "Chrome"
+CHROME_PLUGIN_URI: Final = "plugin://chrome@openai-bundled"
+PRO_SKILL_CALL: Final = f"${PRO_SKILL_NAME} [@{CHROME_MENTION_NAME}]({CHROME_PLUGIN_URI})"
 PRO_SKILL_PATH: Final = str(
     (Path(__file__).resolve().parent / ".agents/skills/ask-chatgpt-pro/SKILL.md").resolve()
 )
@@ -27,7 +27,7 @@ def build_turn_input(prompt: str) -> JsonArray:
         turn_input.extend(
             (
                 {"type": "skill", "name": PRO_SKILL_NAME, "path": PRO_SKILL_PATH},
-                {"type": "mention", "name": BROWSER_MENTION_NAME, "path": BROWSER_PLUGIN_URI},
+                {"type": "mention", "name": CHROME_MENTION_NAME, "path": CHROME_PLUGIN_URI},
             )
         )
     return turn_input

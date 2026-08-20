@@ -1,8 +1,10 @@
+# pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
 from typing import assert_never
 
 from simdorei_mcp_common.messages import (
+    DeviceSessionCommand,
     GatewayCommand,
     ListFilesCommand,
     ProjectInfoCommand,
@@ -48,9 +50,10 @@ def requires_execution_lock(command: GatewayCommand) -> bool:
             if isinstance(operation, TerminalExecRequest):
                 return False
             return not isinstance(operation, READ_ONLY_OPERATIONS)
-        case WriteFileCommand() | ProjectSessionCommand():
+        case WriteFileCommand() | ProjectSessionCommand() | DeviceSessionCommand():
             return True
-    assert_never(command)
+        case unreachable:
+            assert_never(unreachable)
 
 
 __all__ = ["requires_execution_lock"]

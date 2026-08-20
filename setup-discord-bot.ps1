@@ -64,13 +64,13 @@ function Register-DiscordWatchdogTask {
     $principal = New-ScheduledTaskPrincipal `
         -UserId $identity `
         -LogonType Interactive `
-        -RunLevel Limited
+        -RunLevel Highest
     $task = New-ScheduledTask `
         -Action $action `
         -Trigger @($logonTrigger, $repeatTrigger) `
         -Settings $settings `
         -Principal $principal `
-        -Description 'Keeps Codex Discord Remote running and restarts it after exit.'
+        -Description 'Keeps Codex Discord Remote running with interactive administrator-window control.'
 
     Register-ScheduledTask -TaskName $WatchdogTaskName -InputObject $task -Force | Out-Null
     Enable-ScheduledTask -TaskName $WatchdogTaskName | Out-Null

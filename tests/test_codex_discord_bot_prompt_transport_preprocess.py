@@ -44,7 +44,7 @@ class PromptTransportPreprocessTests(unittest.TestCase):
 
         self.assertEqual(
             result.prompt,
-            ("$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled) 연결 확인"),
+            ("$ask-chatgpt-pro [@Chrome](plugin://chrome@openai-bundled) 연결 확인"),
         )
 
     def test_preprocessor_keeps_dollar_prefixed_prompt(self) -> None:
@@ -80,7 +80,7 @@ class PromptTransportPreprocessTests(unittest.TestCase):
         runtime_preflight.assert_called_once_with()
         self.assertEqual(
             result.prompt,
-            ("$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled) 연결 확인"),
+            ("$ask-chatgpt-pro [@Chrome](plugin://chrome@openai-bundled) 연결 확인"),
         )
 
 

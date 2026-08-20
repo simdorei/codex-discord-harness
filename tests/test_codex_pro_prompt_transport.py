@@ -13,7 +13,7 @@ from tests.test_codex_discord_prompt_transport import (
 )
 
 
-PRO_PROMPT = "$ask-chatgpt-pro [@Browser](plugin://browser@openai-bundled)"
+PRO_PROMPT = "$ask-chatgpt-pro [@Chrome](plugin://chrome@openai-bundled)"
 
 
 class ProPromptTransportTests(unittest.TestCase):

@@ -230,6 +230,16 @@ def new_computer_controller() -> ComputerController:
     return ComputerController(WindowsComputerPlatform())
 
 
+def new_device_computer_controller() -> ComputerController:
+    if sys.platform != "win32":
+        raise ComputerControlError(
+            "Full computer control is currently available only on Windows."
+        )
+    from codex_remote_mcp_windows_device_platform import WindowsDeviceComputerPlatform
+
+    return ComputerController(WindowsDeviceComputerPlatform())
+
+
 COMPUTER_REQUEST_TYPES = (
     ComputerListWindowsRequest,
     ComputerActivateRequest,

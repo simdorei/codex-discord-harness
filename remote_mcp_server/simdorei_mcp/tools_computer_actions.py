@@ -175,7 +175,7 @@ def register_computer_action_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         keys: ComputerKeyList,
         ctx: ToolContext,
     ) -> ComputerActionOutput:
-        """Press an allowlisted key chord after a fresh screenshot."""
+        """Press a mode-permitted key chord after a fresh screenshot."""
         return await run_action(
             ctx,
             broker,
@@ -198,7 +198,7 @@ def register_computer_action_tools(mcp: FastMCP, broker: BindingBroker) -> None:
         text: ComputerClipboardText,
         ctx: ToolContext,
     ) -> ComputerActionOutput:
-        """Replace clipboard text after observing a session-launched Notepad window."""
+        """Replace clipboard text after observing a mode-permitted active window."""
         return await run_action(
             ctx,
             broker,

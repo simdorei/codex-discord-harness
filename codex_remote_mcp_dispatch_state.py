@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Protocol, final
 
 from codex_remote_mcp_computer import ComputerController
+from codex_remote_mcp_computer_contracts import ComputerAccessMode
 from codex_remote_mcp_computer_errors import ComputerControlError
 from codex_remote_mcp_files import ProjectFileAccess
 from codex_remote_mcp_idempotency import IdempotentResultCache
@@ -21,6 +22,7 @@ from simdorei_mcp_common.leases import RenewableExpiry
 class ActiveProject:
     access: ProjectFileAccess
     lease: RenewableExpiry = field(repr=False)
+    computer_access_mode: ComputerAccessMode = ComputerAccessMode.PROJECT
     result_cache: IdempotentResultCache = field(
         default_factory=IdempotentResultCache,
         compare=False,
@@ -59,11 +61,13 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
     def __init__(
         self,
         computer_factory: Callable[[], ComputerController],
+        device_computer_factory: Callable[[], ComputerController] | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._projects: dict[str, ActiveProject] = {}
         self._computer_factory = computer_factory
+        self._device_computer_factory = device_computer_factory or computer_factory
         self._computers: dict[str, ComputerController] = {}
         self._sessions: dict[str, SessionActivation] = {}
         self._connection_generation: int | None = None
@@ -83,10 +87,18 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
         with self._lock:
             return self._projects.get(thread_id)
 
-    def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
+    def upsert(
+        self,
+        thread_id: str,
+        root: Path,
+        expires_at: datetime,
+        *,
+        computer_access_mode: ComputerAccessMode = ComputerAccessMode.PROJECT,
+    ) -> None:
         project = ActiveProject(
             access=ProjectFileAccess(root),
             lease=RenewableExpiry(expires_at),
+            computer_access_mode=computer_access_mode,
         )
         with self._lifecycle_lock:
             previous_project = self.binding(thread_id)
@@ -122,7 +134,12 @@ class ProjectDispatchState:  # MUTABLE_OK: synchronized project/session registry
             current = self._computers.get(thread_id)
             if current is not None:
                 return current
-            created = self._computer_factory()
+            factory = (
+                self._device_computer_factory
+                if expected_project.computer_access_mode is ComputerAccessMode.DEVICE
+                else self._computer_factory
+            )
+            created = factory()
             self._computers[thread_id] = created
             return created
 

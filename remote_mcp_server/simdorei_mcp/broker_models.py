@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, final
+from typing import Protocol, TypeAlias, final
 
 import anyio
 
@@ -29,10 +29,24 @@ class PendingProject:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectRouteTarget:
+    thread_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceRouteTarget:
+    thread_id: str
+    working_directory: str
+
+
+RouteTarget: TypeAlias = ProjectRouteTarget | DeviceRouteTarget
+
+
+@dataclass(frozen=True, slots=True)
 class SessionRoute:
     session: str
     device_id: DeviceId
-    thread_id: str
+    target: RouteTarget
     subject: str
     computer_session_id: str
     computer_session_generation: int
@@ -41,6 +55,10 @@ class SessionRoute:
     @property
     def expires_at(self) -> datetime:
         return self.lease.value
+
+    @property
+    def thread_id(self) -> str:
+        return self.target.thread_id
 
     def renew(self, expires_at: datetime) -> None:
         self.lease.extend(expires_at)

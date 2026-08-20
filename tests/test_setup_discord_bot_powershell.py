@@ -65,7 +65,7 @@ class WatchdogCapture(TypedDict):
     os.name == "nt" and shutil.which("powershell.exe"), "Windows PowerShell test"
 )
 class SetupDiscordBotPowerShellTests(unittest.TestCase):
-    def test_registers_limited_minute_watchdog_without_overlap(self) -> None:
+    def test_registers_elevated_minute_watchdog_without_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             setup_script = temp_path / "setup-discord-bot.ps1"
@@ -129,7 +129,7 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
         self.assertTrue(captured["Settings"]["DontStopIfGoingOnBatteries"])
         self.assertEqual(captured["Settings"]["RestartCount"], 3)
         self.assertEqual(captured["Settings"]["RestartIntervalSeconds"], 60)
-        self.assertEqual(captured["Principal"]["RunLevel"], "Limited")
+        self.assertEqual(captured["Principal"]["RunLevel"], "Highest")
         self.assertEqual(captured["Principal"]["LogonType"], "Interactive")
         self.assertEqual(captured["Task"]["TriggerCount"], 2)
         self.assertEqual(

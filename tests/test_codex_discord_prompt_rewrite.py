@@ -148,7 +148,7 @@ class PromptRewriteTests(unittest.TestCase):
             result.prompt,
             (
                 "$ask-chatgpt-pro "
-                "[@Browser](plugin://browser@openai-bundled) "
+                "[@Chrome](plugin://chrome@openai-bundled) "
                 "이 설계를 검토해줘"
             ),
         )
@@ -170,7 +170,7 @@ class PromptRewriteTests(unittest.TestCase):
             result.prompt,
             (
                 "$ask-chatgpt-pro "
-                "[@Browser](plugin://browser@openai-bundled) "
+                "[@Chrome](plugin://chrome@openai-bundled) "
                 "<pro-review>\n인증 흐름"
             ),
         )

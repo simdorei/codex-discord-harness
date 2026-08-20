@@ -8,13 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 import threading
 from time import monotonic
-from typing import final, overload
+from typing import assert_never, final, overload
 
 from codex_remote_mcp_computer import (
     ComputerController,
     is_computer_operation,
     new_computer_controller,
+    new_device_computer_controller,
 )
+from codex_remote_mcp_computer_contracts import ComputerAccessMode
 from codex_remote_mcp_command_policy import requires_execution_lock
 from codex_remote_mcp_dispatch_commands import execute_bound_project_command
 from codex_remote_mcp_dispatch_errors import project_error_code
@@ -28,6 +30,7 @@ from codex_remote_mcp_terminal_sessions import TerminalSessionRegistry
 from codex_remote_mcp_terminal_windows import TerminalWindowManager
 from simdorei_mcp_common.messages import (
     BridgeResult,
+    DeviceSessionCommand,
     GatewayCommand,
     ListFilesCommand,
     ListFilesResult,
@@ -64,14 +67,29 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         self,
         *,
         computer_factory: Callable[[], ComputerController] = new_computer_controller,
+        device_computer_factory: Callable[
+            [], ComputerController
+        ] = new_device_computer_controller,
     ) -> None:
-        self._state = ProjectDispatchState(computer_factory)
+        self._state = ProjectDispatchState(computer_factory, device_computer_factory)
         self._terminal_lifecycle_lock = threading.RLock()
         self._terminals = TerminalSessionRegistry()
 
-    def upsert(self, thread_id: str, root: Path, expires_at: datetime) -> None:
+    def upsert(
+        self,
+        thread_id: str,
+        root: Path,
+        expires_at: datetime,
+        *,
+        computer_access_mode: ComputerAccessMode = ComputerAccessMode.PROJECT,
+    ) -> None:
         with self._terminal_lifecycle_lock:
-            self._state.upsert(thread_id, root, expires_at)
+            self._state.upsert(
+                thread_id,
+                root,
+                expires_at,
+                computer_access_mode=computer_access_mode,
+            )
             self._terminals.close_thread(thread_id)
 
     def renew(self, thread_id: str, expires_at: datetime) -> None:
@@ -81,6 +99,15 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
     def execute(
         self,
         command: ProjectSessionCommand,
+        *,
+        connection_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> ProjectSessionResult | OperationErrorResult: ...
+
+    @overload
+    def execute(
+        self,
+        command: DeviceSessionCommand,
         *,
         connection_generation: int | None = None,
         cancel_event: threading.Event | None = None,
@@ -147,6 +174,32 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
         connection_generation: int | None = None,
         cancel_event: threading.Event | None = None,
     ) -> BridgeResult:
+        match command:
+            case DeviceSessionCommand():
+                try:
+                    self.upsert(
+                        command.thread_id,
+                        Path(command.working_directory),
+                        command.expires_at,
+                        computer_access_mode=ComputerAccessMode.DEVICE,
+                    )
+                except ProjectFileError as exc:
+                    return OperationErrorResult(
+                        request_id=command.request_id,
+                        error_code=project_error_code(exc),
+                        message=redact(str(exc)),
+                    )
+            case (
+                ProjectSessionCommand()
+                | ProjectInfoCommand()
+                | ListFilesCommand()
+                | ReadFileCommand()
+                | WriteFileCommand()
+                | ProjectOperationCommand()
+            ):
+                pass
+            case unreachable:
+                assert_never(unreachable)
         project = self._state.binding(command.thread_id)
         if project is None:
             return OperationErrorResult(
@@ -278,29 +331,40 @@ class LocalProjectDispatcher:  # MUTABLE_OK: owns synchronized project bindings.
                 error_code="binding_expired",
                 message="The local project binding expired. Run !pro again.",
             )
-        if isinstance(command, ProjectSessionCommand):
-            generation = command.computer_session_id
-            if generation is None:
-                return OperationErrorResult(
-                    request_id=command.request_id,
-                    error_code="computer_session_missing",
-                    message="The project session command has no generation.",
-                )
-            try:
-                self._activate_project_session(
-                    command.thread_id,
-                    project,
-                    generation,
-                    command.computer_session_generation,
-                    connection_generation,
-                )
-            except ProjectFileError as exc:
-                return OperationErrorResult(
-                    request_id=command.request_id,
-                    error_code=project_error_code(exc),
-                    message=redact(str(exc)),
-                )
-            return ProjectSessionResult(request_id=command.request_id)
+        match command:
+            case ProjectSessionCommand() | DeviceSessionCommand():
+                generation = command.computer_session_id
+                if generation is None:
+                    return OperationErrorResult(
+                        request_id=command.request_id,
+                        error_code="computer_session_missing",
+                        message="The project session command has no generation.",
+                    )
+                try:
+                    self._activate_project_session(
+                        command.thread_id,
+                        project,
+                        generation,
+                        command.computer_session_generation,
+                        connection_generation,
+                    )
+                except ProjectFileError as exc:
+                    return OperationErrorResult(
+                        request_id=command.request_id,
+                        error_code=project_error_code(exc),
+                        message=redact(str(exc)),
+                    )
+                return ProjectSessionResult(request_id=command.request_id)
+            case (
+                ProjectInfoCommand()
+                | ListFilesCommand()
+                | ReadFileCommand()
+                | WriteFileCommand()
+                | ProjectOperationCommand()
+            ):
+                pass
+            case unreachable:
+                assert_never(unreachable)
         try:
             self._require_project_session(
                 command.thread_id,

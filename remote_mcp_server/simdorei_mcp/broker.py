@@ -1,11 +1,12 @@
 """Cohesive project routing and request rendezvous. (# noqa: SIZE_OK)"""
 
+# pyright: reportUnnecessaryComparison=false
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Final, final, override
+from typing import Final, assert_never, final, override
 from uuid import uuid4
 
 import anyio
@@ -23,9 +24,11 @@ from remote_mcp_server.simdorei_mcp.broker_idempotency import (
 )
 from remote_mcp_server.simdorei_mcp.broker_models import (
     BridgeSender,
+    DeviceRouteTarget,
     DormantSessionRoute,
     PendingCall,
     PendingProject,
+    ProjectRouteTarget,
     SessionRoute,
 )
 from remote_mcp_server.simdorei_mcp.broker_registration import (
@@ -35,9 +38,15 @@ from remote_mcp_server.simdorei_mcp.broker_registration import (
 from remote_mcp_server.simdorei_mcp.broker_requests import BrokerRequestsMixin
 from remote_mcp_server.simdorei_mcp.broker_results import require_project_session_result
 from remote_mcp_server.simdorei_mcp.broker_routes import BrokerRouteRegistry
+from simdorei_mcp_common.device_messages import (
+    DeviceListOutput,
+    DeviceSelectionOutput,
+    DeviceSummary,
+)
 from simdorei_mcp_common.leases import RenewableExpiry
 from simdorei_mcp_common.messages import (
     BridgeResult,
+    DeviceSessionCommand,
     DeviceId,
     GatewayCommand,
     ProjectSelectionOutput,
@@ -52,6 +61,8 @@ from simdorei_mcp_common.request_deadlines import (
 logger = logging.getLogger(__name__)
 NowFactory = Callable[[], datetime]
 RESTART_ROUTE_GRACE_SECONDS: Final = 120
+DEVICE_ROUTE_TTL_SECONDS: Final = 1_800
+DEVICE_CONTROL_THREAD_ID: Final = "codex-device-control"
 
 
 @final
@@ -110,6 +121,194 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
     async def connected_device_count(self) -> int:
         async with self._lock:
             return len(self._devices)
+
+    async def list_devices(self) -> DeviceListOutput:
+        async with self._lock:
+            return DeviceListOutput(
+                devices=tuple(
+                    DeviceSummary(device_id=device_id, online=True)
+                    for device_id in sorted(self._devices, key=str.casefold)
+                )
+            )
+
+    async def select_device(
+        self,
+        session: str,
+        subject: str,
+        device_id: DeviceId,
+        *,
+        working_directory: str,
+    ) -> DeviceSelectionOutput:
+        async with self._selection_lock:
+            async with self._lock:
+                sender = self._devices.get(device_id)
+                if sender is None:
+                    raise BridgeUnavailableError("selected local bridge is disconnected")
+                now = self._now()
+                generation_key = (device_id, DEVICE_CONTROL_THREAD_ID)
+                computer_session_generation = (
+                    self._computer_session_generations.get(generation_key, 0) + 1
+                )
+                self._computer_session_generations[generation_key] = (
+                    computer_session_generation
+                )
+                route = SessionRoute(
+                    session=session,
+                    device_id=device_id,
+                    target=DeviceRouteTarget(
+                        thread_id=DEVICE_CONTROL_THREAD_ID,
+                        working_directory=working_directory,
+                    ),
+                    subject=subject,
+                    computer_session_id=uuid4().hex,
+                    computer_session_generation=computer_session_generation,
+                    lease=RenewableExpiry(
+                        now + timedelta(seconds=DEVICE_ROUTE_TTL_SECONDS)
+                    ),
+                )
+                self._routes.require_compatible(route, now=now)
+                self._routes.replace(route)
+            activated = False
+            try:
+                result = await self._dispatch(
+                    route,
+                    sender,
+                    DeviceSessionCommand(
+                        request_id=RequestId(uuid4().hex),
+                        thread_id=route.thread_id,
+                        computer_session_id=route.computer_session_id,
+                        computer_session_generation=computer_session_generation,
+                        working_directory=working_directory,
+                        expires_at=route.expires_at,
+                    ),
+                )
+                require_project_session_result(result)
+                activated = True
+            finally:
+                if not activated:
+                    with anyio.CancelScope(shield=True):
+                        async with self._lock:
+                            if self._sessions.get(session) is route:
+                                self._routes.remove(route)
+            return DeviceSelectionOutput(
+                device_id=device_id,
+                working_directory=working_directory,
+                expires_at=route.expires_at,
+            )
+
+    async def set_working_directory(
+        self,
+        session: str,
+        subject: str,
+        working_directory: str,
+    ) -> DeviceSelectionOutput:
+        async with self._selection_lock:
+            async with self._lock:
+                now = self._now()
+                self._prune_expired_locked(now)
+                current = self._sessions.get(session)
+                if (
+                    current is None
+                    or current.subject != subject
+                    or current.expires_at <= now
+                ):
+                    raise ActiveBindingMissingError(
+                        "ChatGPT session has no active device selection"
+                    )
+                match current.target:
+                    case DeviceRouteTarget():
+                        pass
+                    case ProjectRouteTarget():
+                        raise ActiveBindingMissingError(
+                            "ChatGPT session is using project mode"
+                        )
+                    case unreachable:
+                        assert_never(unreachable)
+                sender = self._devices.get(current.device_id)
+                if sender is None:
+                    raise BridgeUnavailableError(
+                        "selected local bridge is disconnected"
+                    )
+                generation_key = (current.device_id, DEVICE_CONTROL_THREAD_ID)
+                computer_session_generation = (
+                    self._computer_session_generations.get(generation_key, 0) + 1
+                )
+                self._computer_session_generations[generation_key] = (
+                    computer_session_generation
+                )
+                route = SessionRoute(
+                    session=session,
+                    device_id=current.device_id,
+                    target=DeviceRouteTarget(
+                        thread_id=DEVICE_CONTROL_THREAD_ID,
+                        working_directory=working_directory,
+                    ),
+                    subject=subject,
+                    computer_session_id=uuid4().hex,
+                    computer_session_generation=computer_session_generation,
+                    lease=RenewableExpiry(
+                        now + timedelta(seconds=DEVICE_ROUTE_TTL_SECONDS)
+                    ),
+                )
+                self._routes.replace(route)
+            activated = False
+            try:
+                result = await self._dispatch(
+                    route,
+                    sender,
+                    DeviceSessionCommand(
+                        request_id=RequestId(uuid4().hex),
+                        thread_id=route.thread_id,
+                        computer_session_id=route.computer_session_id,
+                        computer_session_generation=computer_session_generation,
+                        working_directory=working_directory,
+                        expires_at=route.expires_at,
+                    ),
+                )
+                require_project_session_result(result)
+                activated = True
+            finally:
+                if not activated:
+                    with anyio.CancelScope(shield=True):
+                        async with self._lock:
+                            if self._sessions.get(session) is route:
+                                self._routes.remove(route)
+            return DeviceSelectionOutput(
+                device_id=route.device_id,
+                working_directory=working_directory,
+                expires_at=route.expires_at,
+            )
+
+    async def device_info(
+        self,
+        session: str,
+        subject: str,
+    ) -> DeviceSelectionOutput:
+        async with self._lock:
+            now = self._now()
+            self._prune_expired_locked(now)
+            route = self._sessions.get(session)
+            if (
+                route is None
+                or route.subject != subject
+                or route.expires_at <= now
+            ):
+                raise ActiveBindingMissingError(
+                    "ChatGPT session has no active device selection"
+                )
+            match route.target:
+                case DeviceRouteTarget(working_directory=working_directory):
+                    return DeviceSelectionOutput(
+                        device_id=route.device_id,
+                        working_directory=working_directory,
+                        expires_at=route.expires_at,
+                    )
+                case ProjectRouteTarget():
+                    raise ActiveBindingMissingError(
+                        "ChatGPT session is using project mode"
+                    )
+                case unreachable:
+                    assert_never(unreachable)
 
     async def attach(
         self,
@@ -230,7 +429,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 route = SessionRoute(
                     session=session,
                     device_id=pending.device_id,
-                    thread_id=pending.value.thread_id,
+                    target=ProjectRouteTarget(thread_id=pending.value.thread_id),
                     subject=subject,
                     computer_session_id=uuid4().hex,
                     computer_session_generation=computer_session_generation,
@@ -301,7 +500,7 @@ class BindingBroker(BrokerRequestsMixin):  # MUTABLE_OK: synchronized routing st
                 route = SessionRoute(
                     session=dormant.route.session,
                     device_id=device_id,
-                    thread_id=project.thread_id,
+                    target=ProjectRouteTarget(thread_id=project.thread_id),
                     subject=dormant.route.subject,
                     computer_session_id=uuid4().hex,
                     computer_session_generation=computer_session_generation,

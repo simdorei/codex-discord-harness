@@ -5,7 +5,7 @@ from pathlib import Path
 
 import codex_desktop_bridge_prompt_delivery as prompt_delivery
 from codex_bridge_state import JsonObject
-from codex_pro_prompt_contract import BROWSER_PLUGIN_URI, PRO_SKILL_NAME
+from codex_pro_prompt_contract import CHROME_PLUGIN_URI, PRO_SKILL_NAME
 from codex_thread_models import ThreadInfo
 
 
@@ -21,8 +21,8 @@ class PromptDeliveryTests(unittest.TestCase):
             reasoning_effort="high",
             tokens_used=1,
         )
-        expected = f"${PRO_SKILL_NAME} [@Browser]({BROWSER_PLUGIN_URI}) review"
-        recorded = f"${PRO_SKILL_NAME} [@브라우저]({BROWSER_PLUGIN_URI}) review"
+        expected = f"${PRO_SKILL_NAME} [@Chrome]({CHROME_PLUGIN_URI}) review"
+        recorded = f"${PRO_SKILL_NAME} [@크롬]({CHROME_PLUGIN_URI}) review"
         event: JsonObject = {
             "type": "response_item",
             "payload": {
