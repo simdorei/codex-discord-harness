@@ -171,6 +171,11 @@ login, CAPTCHA, password, and OTP surfaces are never returned to ChatGPT.
 
 ## Hosted deployment
 
+For adding another Windows PC to an existing VPS deployment, follow the
+[AI operator device-registration runbook](vps-device-registration.md). It
+separates VPS registration from a live bridge connection and defines the secret
+handling, rollback, and end-to-end checks an automated operator must follow.
+
 The gateway container lives in `remote_mcp_server/`. Its private `.env` requires:
 
 ```dotenv
