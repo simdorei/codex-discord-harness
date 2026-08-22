@@ -4,26 +4,55 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", "")).expanduser() if os.environ.get("CODEX_HOME") else Path.home() / ".codex"
 CODEX_APP_SERVER_EXE_ENV = "CODEX_EXE"
 CODEX_APP_SERVER_EXE = os.environ.get(CODEX_APP_SERVER_EXE_ENV, "").strip()
+LogFunc = Callable[[str], None]
 
 
-def normalize_executable_candidate(raw: str) -> Path | None:
+def clean_executable_candidate(raw: str) -> str:
     cleaned = str(raw or "").strip().strip('"').strip("'")
     if not cleaned:
-        return None
+        return ""
     if cleaned.lower().endswith(".exe,0"):
         cleaned = cleaned[:-2]
     if "," in cleaned and cleaned.lower().endswith(".exe"):
         cleaned = cleaned.split(",", 1)[0].strip()
-    path = Path(cleaned).expanduser()
+    return os.path.expandvars(os.path.expanduser(cleaned))
+
+
+def normalize_executable_candidate(raw: str) -> Path | None:
+    cleaned = clean_executable_candidate(raw)
+    if not cleaned:
+        return None
+    path = Path(cleaned)
     if path.exists() and path.is_file():
         return path
     return None
+
+
+def resolve_configured_executable(raw: str) -> Path | None:
+    cleaned = clean_executable_candidate(raw)
+    candidate = normalize_executable_candidate(cleaned)
+    if candidate is not None:
+        return candidate
+    resolved = shutil.which(cleaned) if cleaned else None
+    return normalize_executable_candidate(resolved or "")
+
+
+def selected_executable(
+    executable: Path | str,
+    *,
+    source: str,
+    log_func: LogFunc | None,
+) -> str:
+    selected = str(executable)
+    if log_func is not None:
+        log_func(f"codex_executable_selected source={source} executable={selected}")
+    return selected
 
 
 def is_windowsapps_path(path: Path | str) -> bool:
@@ -131,21 +160,29 @@ def iter_codex_app_server_bin_candidates() -> Iterator[tuple[str, Path]]:
         yield (f"local-app-bin:{candidate.parent}", candidate)
 
 
-def resolve_codex_app_server_executable() -> str:
+def resolve_codex_app_server_executable(*, log_func: LogFunc | None = None) -> str:
     if CODEX_APP_SERVER_EXE:
-        return CODEX_APP_SERVER_EXE
+        configured = resolve_configured_executable(CODEX_APP_SERVER_EXE)
+        if configured is not None:
+            return selected_executable(configured, source="env", log_func=log_func)
+        if log_func is not None:
+            log_func(
+                "codex_executable_config_skipped "
+                + f"source=env configured={CODEX_APP_SERVER_EXE!r} "
+                + "reason=not_found_or_not_executable"
+            )
 
     bundled_name = "codex.exe" if os.name == "nt" else "codex"
     bundled_path = CODEX_HOME / ".sandbox-bin" / bundled_name
     if bundled_path.exists():
-        return str(bundled_path)
+        return selected_executable(bundled_path, source="sandbox-bin", log_func=log_func)
 
     running_path, _running_source = detect_running_codex_app_server_executable()
     if running_path is not None:
-        return str(running_path)
+        return selected_executable(running_path, source="running-process", log_func=log_func)
 
     for _source, candidate in iter_codex_app_server_bin_candidates():
-        return str(candidate)
+        return selected_executable(candidate, source="local-app-bin", log_func=log_func)
 
     windowsapps_candidate = ""
     for candidate in ("codex", "codex.exe"):
@@ -154,7 +191,7 @@ def resolve_codex_app_server_executable() -> str:
             if is_windowsapps_path(resolved):
                 windowsapps_candidate = resolved
                 continue
-            return resolved
+            return selected_executable(resolved, source="PATH", log_func=log_func)
 
     if windowsapps_candidate:
         raise RuntimeError(
@@ -162,4 +199,4 @@ def resolve_codex_app_server_executable() -> str:
             f"Set {CODEX_APP_SERVER_EXE_ENV} in .env to the real Codex CLI executable."
         )
 
-    return bundled_name
+    return selected_executable(bundled_name, source="default-name", log_func=log_func)

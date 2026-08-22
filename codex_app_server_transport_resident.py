@@ -79,7 +79,7 @@ class ResidentCodexAppServerTransport:
     def __init__(
         self,
         *,
-        executable_resolver: Callable[[], str] = bridge_resolver.resolve_codex_app_server_executable,
+        executable_resolver: Callable[[], str] | None = None,
         log_func: LogFunc | None = None,
         monotonic_func: MonotonicFunc = time.monotonic,
         wall_time_func: WallTimeFunc = time.time,
@@ -89,8 +89,12 @@ class ResidentCodexAppServerTransport:
         ),
         stderr_log_path: Path | None = None,
     ) -> None:
-        self.executable_resolver: Callable[[], str] = executable_resolver
         self.log_func: LogFunc | None = log_func
+        self.executable_resolver: Callable[[], str] = (
+            executable_resolver
+            if executable_resolver is not None
+            else lambda: bridge_resolver.resolve_codex_app_server_executable(log_func=self._log)
+        )
         self.monotonic_func: MonotonicFunc = monotonic_func
         self.wall_time_func: WallTimeFunc = wall_time_func
         self.plugin_runtime_fingerprint_reader: PluginRuntimeFingerprintReader = (
