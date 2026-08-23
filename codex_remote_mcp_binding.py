@@ -6,6 +6,7 @@ from typing import Protocol
 
 from codex_remote_mcp_bridge import LogFunc, RemoteMcpBridge
 from codex_remote_mcp_bridge_config import (
+    DeviceTicket,
     ProjectTicket,
     RemoteMcpBridgeConfig,
     load_remote_mcp_config,
@@ -21,6 +22,8 @@ _BRIDGE_LOCK = threading.Lock()
 
 
 class ManagedRemoteMcpBridge(Protocol):
+    def connect_device(self) -> None: ...
+
     def register_project(
         self,
         thread_id: str,
@@ -43,6 +46,21 @@ class ManagedRemoteMcpBridge(Protocol):
 
 _bridge: ManagedRemoteMcpBridge | None = None
 _bridge_config: RemoteMcpBridgeConfig | None = None
+
+
+def connect_remote_mcp_device(
+    root: Path,
+    log: LogFunc,
+) -> DeviceTicket | None:
+    config = load_remote_mcp_config()
+    if config is None:
+        return None
+    bridge = _get_bridge(config, log)
+    bridge.connect_device()
+    return DeviceTicket(
+        device_id=config.device_id,
+        working_directory=root.resolve(),
+    )
 
 
 def register_remote_mcp_project(

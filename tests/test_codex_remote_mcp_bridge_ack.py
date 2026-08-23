@@ -75,6 +75,21 @@ class ManualAckConnector:
         return self.socket
 
 
+def test_connect_device_starts_bridge_without_registering_a_project() -> None:
+    socket = ManualAckSocket()
+    bridge = RemoteMcpBridge(
+        _config(),
+        connector=ManualAckConnector(socket),
+        log=lambda _: None,
+    )
+
+    bridge.connect_device()
+    bridge.close()
+
+    assert any('"type":"hello"' in message for message in socket.sent)
+    assert not any('"type":"project_upsert"' in message for message in socket.sent)
+
+
 def test_delayed_ack_cannot_confirm_a_refreshed_binding(tmp_path: Path) -> None:
     socket = ManualAckSocket()
     bridge = RemoteMcpBridge(

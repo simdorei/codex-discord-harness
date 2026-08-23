@@ -4,7 +4,6 @@ import json
 import tempfile
 import unittest
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +20,7 @@ from codex_plugin_runtime_fingerprint import (
     PluginInventoryFingerprintError,
     PluginRuntimeFingerprintError,
 )
-from codex_remote_mcp_bridge_config import ProjectTicket
+from codex_remote_mcp_bridge_config import DeviceTicket
 from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
 
 
@@ -73,36 +72,30 @@ def _healthy_resident() -> AppServerLifecycleSnapshot:
 
 
 def _missing_bridge(
-    thread_id: str,
-    project_scope: str,
     root: Path,
     log: prompt_rewrite.LogFunc,
 ) -> None:
-    _ = thread_id, project_scope, root, log
+    _ = root, log
 
 
-def _expired_ticket(
-    thread_id: str,
-    project_scope: str,
+def _connected_device(
     root: Path,
     log: prompt_rewrite.LogFunc,
-) -> ProjectTicket:
-    _ = thread_id, project_scope, root, log
-    return ProjectTicket(
-        project_scope="expired",
-        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+) -> DeviceTicket:
+    _ = log
+    return DeviceTicket(
+        device_id="device-1",
+        working_directory=root.resolve(),
     )
 
 
 def _stale_bridge(
-    thread_id: str,
-    project_scope: str,
     root: Path,
     log: prompt_rewrite.LogFunc,
-) -> ProjectTicket:
-    _ = thread_id, project_scope, root, log
+) -> DeviceTicket:
+    _ = root, log
     raise RemoteMcpBridgeError(
-        "The local project bridge did not acknowledge the binding in time."
+        "The remote MCP device did not connect in time."
     )
 
 
@@ -351,7 +344,7 @@ class ProPromptPreflightTests(unittest.TestCase):
         self,
         *,
         checker: Callable[[], pro_preflight.ProRuntimeStatus],
-        registrar: prompt_rewrite.ProjectRegistrar,
+        connector: prompt_rewrite.DeviceConnector,
     ) -> mapped_delivery.PromptPreprocessResult:
         return prompt_rewrite.rewrite_prompt(
             "!pro inspect",
@@ -359,7 +352,7 @@ class ProPromptPreflightTests(unittest.TestCase):
             cwd=Path.cwd(),
             log=lambda _: None,
             runtime_preflight=checker,
-            project_registrar=registrar,
+            device_connector=connector,
         )
 
     def test_preflight_failure_exposes_only_public_diagnostic(self) -> None:
@@ -377,7 +370,7 @@ class ProPromptPreflightTests(unittest.TestCase):
                 ),
             )
 
-        result = self._rewrite(checker=fail, registrar=_missing_bridge)
+        result = self._rewrite(checker=fail, connector=_missing_bridge)
 
         self.assertFalse(result.should_deliver)
         self.assertIn("installed but disabled", result.visible_line)
@@ -397,28 +390,27 @@ class ProPromptPreflightTests(unittest.TestCase):
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
             ),
-            registrar=_missing_bridge,
+            connector=_missing_bridge,
         )
 
         self.assertFalse(result.should_deliver)
         self.assertIn("remote MCP is not configured", result.error_message)
-        self.assertIn("local project connection is not configured", result.visible_line)
+        self.assertIn("local PC connection is not configured", result.visible_line)
         self.assertEqual(result.diagnostic_code, "remote_mcp_not_configured")
 
-    def test_expired_project_ticket_blocks_transport(self) -> None:
+    def test_connected_device_allows_transport_without_project_ticket(self) -> None:
         result = self._rewrite(
             checker=lambda: pro_preflight.ProRuntimeStatus(
                 remote_plugin_version=EXPECTED_VERSION,
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
             ),
-            registrar=_expired_ticket,
+            connector=_connected_device,
         )
 
-        self.assertFalse(result.should_deliver)
-        self.assertIn("already expired", result.error_message)
-        self.assertIn("expired before delivery", result.visible_line)
-        self.assertEqual(result.diagnostic_code, "project_ticket_expired")
+        self.assertTrue(result.should_deliver)
+        self.assertIn("<local-device-mcp", result.prompt)
+        self.assertNotIn("project_scope", result.prompt)
 
     def test_stale_bridge_blocks_transport_with_bridge_reason(self) -> None:
         result = self._rewrite(
@@ -427,12 +419,12 @@ class ProPromptPreflightTests(unittest.TestCase):
                 browser_plugin_version="9.8.7",
                 resident_generation=7,
             ),
-            registrar=_stale_bridge,
+            connector=_stale_bridge,
         )
 
         self.assertFalse(result.should_deliver)
-        self.assertIn("did not acknowledge", result.error_message)
-        self.assertNotIn("did not acknowledge", result.visible_line)
+        self.assertIn("did not connect", result.error_message)
+        self.assertNotIn("did not connect", result.visible_line)
         self.assertEqual(result.diagnostic_code, "remote_mcp_connection_failed")
 
 

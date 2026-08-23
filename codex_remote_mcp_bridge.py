@@ -93,6 +93,33 @@ class RemoteMcpBridge:  # MUTABLE_OK: owns synchronized connection state.
         self._socket_lock = threading.Lock()
         self._active_socket: BridgeSocket | None = None
 
+    def connect_device(self) -> None:
+        self._reset_terminal_for_retry()
+        connection_error: RemoteMcpBridgeError | None = None
+        with self._condition:
+            self._ensure_started()
+            connected = self._condition.wait_for(
+                lambda: (
+                    self._connected
+                    or self._terminal_error is not None
+                    or self._stop.is_set()
+                ),
+                timeout=self._config.binding_ack_timeout_seconds,
+            )
+            if self._terminal_error is not None:
+                connection_error = self._terminal_error
+            elif not connected or not self._connected:
+                detail = (
+                    f" Last connection error: {self._last_error}"
+                    if self._last_error
+                    else ""
+                )
+                connection_error = RemoteMcpBridgeError(
+                    "The remote MCP device did not connect in time." + detail
+                )
+        if connection_error is not None:
+            raise connection_error
+
     def register_project(
         self,
         thread_id: str,

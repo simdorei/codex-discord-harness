@@ -1,6 +1,6 @@
 ---
 name: ask-chatgpt-pro
-description: Consult and reuse a ChatGPT Pro conversation from one Codex thread, optionally select that thread's local project through an OAuth-protected MCP, evaluate the response independently, and ask focused follow-ups. Use when the user invokes $ask-chatgpt-pro or asks Codex to ask Pro, get a Pro second opinion, collaborate with ChatGPT Pro, ping-pong with an open ChatGPT chat, or let that chat inspect or edit the originating project.
+description: Consult and reuse a ChatGPT Pro conversation from one Codex thread, select its originating PC and project folder through an OAuth-protected MCP, evaluate the response independently, and ask focused follow-ups. Use when the user invokes $ask-chatgpt-pro or asks Codex to ask Pro, get a Pro second opinion, collaborate with ChatGPT Pro, ping-pong with an open ChatGPT chat, or let that chat inspect or edit the originating project.
 ---
 
 # Ask ChatGPT Pro
@@ -44,7 +44,7 @@ questions, or as a substitute for local tests.
      owner approval, or another browser prompt that requires direct user input.
      Leave the relevant Chrome tab open so work can resume after the user finishes.
 2. Route the browser conversation before sending anything:
-   - When `<local-project-mcp>` supplies `conversation_scope`, use the bundled
+   - When `<local-device-mcp>` supplies `conversation_scope`, use the bundled
      `scripts/conversation_map.py` before opening or creating a chat. Run
      `acquire --scope <conversation_scope>` with Python. This local SQLite map is
      authoritative across Codex and Browser restarts; keep only the live tab
@@ -76,7 +76,7 @@ questions, or as a substitute for local tests.
    observation or control.
 4. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
 5. Do not silently fall back to a non-Pro model.
-6. When the request includes a `<local-project-mcp>` block, send that block with
+6. When the request includes a `<local-device-mcp>` block, send that block with
    the consultation request. Before sending, open ChatGPT's plugin picker and
    attach the plugin whose visible name exactly matches the block's `connector`
    attribute. Require exactly one match. Never let ChatGPT choose a connector
@@ -84,18 +84,18 @@ questions, or as a substitute for local tests.
    Project` or `Simdorei Local Project v12 QA`. If the exact plugin is unavailable,
    duplicated, or cannot be attached, stop without sending the request and report
    the connector-selection failure.
-   Call `select_project` with both the supplied short-lived `project_scope` and
-   `connector_resource` set to the block's `resource` attribute before asking
-   ChatGPT to inspect or edit project files. Call it once for every newly supplied
-   scope instruction, including when reusing a conversation, so access is renewed
-   for the originating Codex thread. If `select_project` reports an OAuth connector
-   mismatch, stop; do not retry through another connector. Treat the scope as a
-   temporary access capability: never quote, repeat, log, or share it.
+   Call `list_devices`, require the block's `device_id` to be present and online,
+   then call `select_device` exactly once with that `device_id`, the block's absolute
+   `working_directory`, and `connector_resource` set to the block's `resource`
+   attribute. The block is the ticket that identifies which PC and project folder
+   to use; it intentionally has no project scope. If selection reports an OAuth
+   connector mismatch, an offline device, or a missing folder, stop and report that
+   exact failure. Do not retry through another connector or select a different PC.
    For a contenteditable ChatGPT composer, use `type()` instead of `fill()` when
    entering this request because `fill()` may parse the angle-bracket block as
    markup and remove it. Before sending, verify that both literal MCP block tags remain.
    If either tag is missing, do not send; clear and re-enter the request with `type()`.
-   After selection, prefer the dedicated project tools: search/read before
+   After selection, prefer the dedicated file tools: search/read before
    editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
    for visual inspection, commands returned by `command_list` for verification,
    and `repo_status` plus `show_changes` before `git_commit` or `git_push`.
@@ -107,23 +107,13 @@ questions, or as a substitute for local tests.
    `terminal_window_activate`, `terminal_window_type`, `terminal_window_keys`,
    `terminal_window_interrupt`, and `terminal_window_close` for visible terminal
    windows owned by the current ChatGPT session.
-   When the request instead includes a `<local-device-mcp>` block, attach the
-   same exact connector, then call `list_devices` and `select_device` instead
-   of `select_project`. This path needs no project scope. Use the PC and absolute
-   folder stated by the user; if either is ambiguous, ask before selecting.
-7. When the user asks ChatGPT Pro to operate Windows, first determine the
-   selected connector mode:
-   - Project mode begins with `select_project`. It preserves the existing narrow
-     boundary: only isolated Chrome or blank classic Notepad launched by this
-     selected session is listed. Chrome is not capturable in project mode and
-     Notepad retains the screenshot-bound editing rules.
-   - PC mode begins with `list_devices` and `select_device`. Use the exact
-     user-named PC and absolute working folder. If the folder changes, call
-     `set_working_directory`; use `device_info` to confirm the active PC and
-     folder. PC mode may list, capture, and control existing visible application
-     windows, including ordinary administration programs and elevated windows
-     when the Windows runtime was installed at highest privilege.
-   In both modes, use the returned `observation_id` for exactly one click, drag,
+7. PC mode is the default for these tickets. After `select_device`, use
+   `device_info` to confirm the active PC and project folder. If the task later
+   requires another folder, call `set_working_directory` only when the user or
+   ticket explicitly names it. PC mode may list, capture, and control existing
+   visible application windows, including ordinary administration programs and
+   elevated windows when the Windows runtime was installed at highest privilege.
+   Use the returned `observation_id` for exactly one click, drag,
    scroll, typing, key, clipboard, or close action within 30 seconds. Take a new
    screenshot after every UI-changing action and use `stop_computer_control` as
    the emergency stop. A new selection invalidates prior screenshot IDs.

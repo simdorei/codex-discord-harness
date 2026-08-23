@@ -1,4 +1,4 @@
-# ChatGPT Pro local-project MCP
+# ChatGPT Pro local-PC MCP
 
 This optional path lets a ChatGPT conversation inspect or update the project
 belonging to the Codex thread that issued `!pro`.
@@ -19,18 +19,18 @@ running because a hosted server cannot directly read files that remain on a PC.
 
 - ChatGPT connects to the VPS through OAuth 2.1. The owner token is entered only
   on the VPS approval page and is never copied into a model-visible chat.
-- Each `!pro` call registers a fresh, unguessable project scope for 30 minutes
-  by default. A newer registration for the same Codex thread revokes the older
-  scope and its selected ChatGPT session.
-- Treat that project scope as a temporary access capability: do not copy, quote,
-  log, or share it outside the connector's `select_project` call.
+- Each `!pro` call includes a ticket containing the local bridge's configured
+  device ID and the originating Codex thread's absolute project folder. It does
+  not create or transmit a project scope.
+- ChatGPT verifies the device with `list_devices`, then selects exactly that PC
+  and folder with `select_device`. PC mode is the default `!pro` mode.
 - Each Codex thread gets a stable, opaque conversation scope.
 - The same scope reuses its ChatGPT conversation when that conversation can still
   be found.
 - A missing, deleted, or unusable saved conversation is replaced with one new
   conversation.
-- A ChatGPT conversation already connected to another Codex thread cannot switch
-  projects. A new ChatGPT conversation can select the other active project scope.
+- Each Codex thread's mapped ChatGPT conversation reselects the PC and project
+  folder supplied by its newest ticket.
 - Disconnecting the local bridge revokes the server-side conversation route.
 - OAuth route ownership includes both the approved connector and account owner,
   so another connector cannot impersonate a saved ChatGPT session name.
@@ -57,15 +57,14 @@ running because a hosted server cannot directly read files that remain on a PC.
   explicit absolute working directory outside the selected project. Terminal
   execution remains bound to the selected ChatGPT session and returns a
   public-safe receipt without prompting for per-command approval.
-- During an active project binding, ChatGPT can launch, list, and activate an
-  isolated Chrome or blank Notepad window owned by that selection. Notepad can
-  return native screenshots, click, drag, scroll, type Unicode text, press
-  allowlisted keys, set clipboard text, request a normal window close, and
-  trigger an emergency stop.
+- During an active PC selection, ChatGPT can list, capture, and control existing
+  visible application windows using the permissions of the local bridge process.
+  This includes elevated applications only when the bridge itself runs at the
+  highest Windows privilege.
 - Every pointer, typing, key, clipboard, and close action requires a fresh screenshot token.
   The token expires after 30 seconds, belongs to one window, and is consumed by
   one action, so stale coordinates cannot be replayed.
-- Selecting the project from a new ChatGPT conversation or OAuth connector
+- Selecting the device from a new ChatGPT conversation or OAuth connector
   revokes screenshot tokens issued to the previous selection for that thread.
 - The selected ChatGPT session can use `terminal_window_open`,
   `terminal_window_list`, `terminal_window_capture`, `terminal_window_activate`,
@@ -75,27 +74,16 @@ running because a hosted server cannot directly read files that remain on a PC.
   Password managers, ChatGPT/Codex, remote-desktop apps, Windows security
   surfaces, sign-in/password/OTP windows, and credential extraction remain
   outside the supported surface. Clipboard contents cannot be read.
-- `stop_computer_control` disables computer tools for that Codex thread until a
-  new `!pro` binding renews it. Binding expiry or bridge disconnection also
-  revokes computer control. Rebinding or stopping also closes every app process
-  launched by the old selection; isolated Chrome profile removal retries while
-  Windows releases short-lived file locks. Cleanup remains owned by the session
-  and is retried on the next stop instead of being abandoned in the background.
-- Only genuine Chrome and classic single-document Notepad executables launched
-  by the current ChatGPT selection from their standard Windows installation
-  paths are controllable. Pre-existing user windows are invisible to the connector.
-  Window names returned to ChatGPT are coarse app labels rather than document
-  or page titles.
-- Chrome can be launched, listed, activated, and removed by emergency stop, but
-  its pixels are never returned to ChatGPT. A web page controls its own title,
-  so titles cannot prove that rendered pixels exclude authentication, CAPTCHA,
-  consent, or secret surfaces. Notepad supports the screenshot-bound editing
-  action set.
+- `stop_computer_control` disables computer tools for that selected session until
+  a new device selection. Bridge disconnection also revokes computer control.
+- Window names returned to ChatGPT are coarse app labels rather than document or
+  page titles. Windows secure-desktop, sign-in, locked-session, password, OTP,
+  CAPTCHA, and credential surfaces remain unavailable and require user handoff.
 - Computer observation and computer control use dedicated OAuth scopes. A
   connector authorized before these scopes were added must be reconnected and
   approved again; an old file-only token cannot acquire desktop authority.
 - Terminal execution and terminal-window interaction reuse the existing
-  `files:read` plus `files:write` authority. An already authorized project
+  `files:read` plus `files:write` authority. An already authorized PC
   connector therefore receives the full session-owned terminal surface without
   a second OAuth approval.
 - Window screenshots are captured from the selected window handle, not from the
@@ -142,16 +130,16 @@ the bot.
 ## ChatGPT configuration
 
 Add the MCP server URL once in ChatGPT developer/connectors settings. The same
-connector reaches whichever registered PC owns the short-lived project selected
-by that ChatGPT conversation:
+connector reaches any currently online PC registered in the gateway:
 
 ```text
 https://simdorei.duckdns.org/mcp
 ```
 
 After that, send `!pro <question>` or `!pro review <review request>` from a
-mapped Discord thread. Codex opens ChatGPT Pro and includes the short-lived
-project scope. ChatGPT calls `select_project` before using the project tools. It
+mapped Discord thread. Codex opens ChatGPT Pro and includes a device-and-folder
+ticket. ChatGPT calls `list_devices` and `select_device` before using the file,
+terminal, or computer tools. It
 can then search and edit files, inspect images, run fixed project checks or
 unrestricted terminal commands, operate visible session-owned terminal windows,
 review Git changes, create commits, and push an already configured remote. On
@@ -163,11 +151,10 @@ local-project connector is not offered to normal Pro for the account, the
 workflow reports that limitation instead of pretending that files were read or
 changed.
 
-For computer control, ChatGPT first launches Chrome or Notepad, then lists and
-activates that session-owned window. It takes screenshots only from Notepad.
-One returned observation ID authorizes one matching Notepad UI action for 30
-seconds. After each action it takes another screenshot. Chrome pixels, UAC,
-login, CAPTCHA, password, and OTP surfaces are never returned to ChatGPT.
+For computer control, ChatGPT lists the selected PC's visible windows, captures
+the target, and uses one returned observation ID for one matching UI action
+within 30 seconds. After each action it takes another screenshot. UAC secure
+desktop, login, CAPTCHA, password, and OTP surfaces are never controlled.
 
 ## Hosted deployment
 
@@ -215,8 +202,8 @@ For a no-downtime upgrade from the old single-PC variables:
    only that pair in the new PC's local `.env`.
 
 The public MCP URL and ChatGPT OAuth connection do not change during this
-migration. A same-scope registration from another PC is rejected atomically, so
-it cannot steal an active or restart-resumable project route.
+migration. Duplicate live connections for one device ID follow the gateway's
+single-owner device policy.
 
 The container binds only to VPS loopback port `8030`; Nginx publishes HTTPS
 `/mcp`, the OAuth endpoints, and WebSocket `/bridge`. OAuth clients and hashed
@@ -241,8 +228,8 @@ maintenance window:
 1. Stop the local bridge.
 2. Deploy the gateway that reports bridge protocol 10.
 3. Restart the updated local bridge immediately.
-4. Confirm `/healthz`, one authenticated `select_project`, and one read-only
-   `project_status` round trip before allowing write tools.
+4. Confirm `/healthz`, one authenticated `list_devices` plus `select_device`, and
+   one read-only `device_info` round trip before allowing write tools.
 
 The bridge reconnects automatically. During the short gap, project tools fail
 closed rather than being routed to an incompatible local process.
@@ -255,8 +242,8 @@ same maintenance window:
    project again. Keep the private `.env` and the named `/data` OAuth volume.
 3. Restore the local repository to the matching previous commit.
 4. Restart the local bridge.
-5. Confirm `/healthz`, one authenticated `select_project`, and one read-only
-   `project_status` round trip before enabling writes again.
+5. Confirm `/healthz`, one authenticated `list_devices` plus `select_device`, and
+   one read-only `device_info` round trip before enabling writes again.
 
 Do not leave only one side rolled back: protocol mismatches are deliberately
 rejected, and the persistent OAuth database must not be deleted during rollback.

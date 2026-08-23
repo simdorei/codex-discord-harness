@@ -17,6 +17,10 @@ class _FakeBridge:  # MUTABLE_OK: deterministic retry-state fake.
     def __init__(self, *, close_fails: bool = False) -> None:
         self.close_fails = close_fails
         self.close_calls = 0
+        self.connect_device_calls = 0
+
+    def connect_device(self) -> None:
+        self.connect_device_calls += 1
 
     def close(self) -> None:
         self.close_calls += 1
@@ -58,6 +62,23 @@ def _config(device_id: str) -> RemoteMcpBridgeConfig:
 
 def _bridge(fake: _FakeBridge) -> binding.ManagedRemoteMcpBridge:
     return fake
+
+
+def test_connect_remote_mcp_device_returns_configured_pc_and_folder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake = _FakeBridge()
+    config = _config("device-a")
+    monkeypatch.setattr(binding, "load_remote_mcp_config", lambda: config)
+    monkeypatch.setattr(binding, "_get_bridge", lambda actual, log: _bridge(fake))
+
+    ticket = binding.connect_remote_mcp_device(tmp_path, lambda _: None)
+
+    assert ticket is not None
+    assert ticket.device_id == "device-a"
+    assert ticket.working_directory == tmp_path.resolve()
+    assert fake.connect_device_calls == 1
 
 
 def test_close_retains_bridge_until_cleanup_retry_succeeds(

@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import unittest
 import xml.etree.ElementTree as element_tree
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
 
 import codex_discord_prompt_rewrite as prompt_rewrite
 from codex_pro_runtime_preflight import ProRuntimeStatus
-from codex_remote_mcp_bridge_config import ProjectTicket
 
 
-def _skip_binding(
-    thread_id: str,
-    project_scope: str,
+@dataclass(frozen=True, slots=True)
+class _DeviceTicket:
+    device_id: str
+    working_directory: Path
+
+
+def _skip_device_connection(
     root: Path,
     log: prompt_rewrite.LogFunc,
 ) -> None:
-    _ = thread_id, project_scope, root, log
+    _ = root, log
 
 
 def _pass_preflight() -> ProRuntimeStatus:
@@ -42,20 +45,18 @@ class PromptRewriteTests(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertNotEqual(first, second)
 
-    def test_rewrite_prompt_adds_non_secret_project_selection(self) -> None:
-        issued: list[tuple[str, Path]] = []
+    def test_rewrite_prompt_adds_non_secret_device_selection(self) -> None:
+        issued: list[Path] = []
 
-        def register(
-            thread_id: str,
-            project_scope: str,
+        def connect(
             root: Path,
             log: prompt_rewrite.LogFunc,
-        ) -> ProjectTicket:
+        ) -> _DeviceTicket:
             _ = log
-            issued.append((thread_id, root))
-            return ProjectTicket(
-                project_scope=project_scope,
-                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            issued.append(root)
+            return _DeviceTicket(
+                device_id="device-1",
+                working_directory=root.resolve(),
             )
 
         result = prompt_rewrite.rewrite_prompt(
@@ -63,18 +64,28 @@ class PromptRewriteTests(unittest.TestCase):
             target_thread_id="thread-1",
             cwd=Path.cwd(),
             log=lambda _: None,
-            project_registrar=register,
+            device_connector=connect,
             runtime_preflight=_pass_preflight,
         )
 
-        self.assertEqual(issued, [("thread-1", Path.cwd())])
-        self.assertIn("select_project", result.prompt)
+        self.assertEqual(issued, [Path.cwd()])
+        start = result.prompt.index("<local-device-mcp")
+        end = result.prompt.index("</local-device-mcp>") + len("</local-device-mcp>")
+        instruction = element_tree.fromstring(result.prompt[start:end])
+        self.assertEqual(
+            instruction.attrib,
+            {
+                "connector": "Simdorei Local Project Oauth",
+                "resource": "https://simdorei.duckdns.org/mcp",
+                "device_id": "device-1",
+                "working_directory": str(Path.cwd().resolve()),
+                "conversation_scope": prompt_rewrite.pro_conversation_scope("thread-1"),
+            },
+        )
+        self.assertNotIn("project_scope", result.prompt)
+        self.assertNotIn("select_project", result.prompt)
         self.assertNotIn("binding_code", result.prompt)
         self.assertNotIn("binding-code-12345678901234567890", result.prompt)
-        self.assertIn(
-            f"conversation_scope: {prompt_rewrite.pro_conversation_scope('thread-1')}",
-            result.prompt,
-        )
 
     def test_rewrite_prompt_requires_the_production_oauth_connector(self) -> None:
         # Given
@@ -83,41 +94,40 @@ class PromptRewriteTests(unittest.TestCase):
             target_thread_id="thread-1",
             cwd=Path.cwd(),
             log=lambda _: None,
-            project_registrar=lambda *_: ProjectTicket(
-                project_scope="codex-project-test",
-                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+            device_connector=lambda root, _: _DeviceTicket(
+                device_id="device-1",
+                working_directory=root.resolve(),
             ),
             runtime_preflight=_pass_preflight,
         )
 
         # When
-        start = result.prompt.index("<local-project-mcp")
-        end = result.prompt.index("</local-project-mcp>") + len("</local-project-mcp>")
+        start = result.prompt.index("<local-device-mcp")
+        end = result.prompt.index("</local-device-mcp>") + len("</local-device-mcp>")
         instruction = element_tree.fromstring(result.prompt[start:end])
 
         # Then
         self.assertEqual(
-            instruction.attrib,
-            {
-                "connector": "Simdorei Local Project Oauth",
-                "resource": "https://simdorei.duckdns.org/mcp",
-            },
+            instruction.attrib["connector"],
+            "Simdorei Local Project Oauth",
+        )
+        self.assertEqual(
+            instruction.attrib["resource"],
+            "https://simdorei.duckdns.org/mcp",
         )
 
-    def test_each_pro_registration_uses_a_fresh_project_scope(self) -> None:
-        issued: list[str] = []
+    def test_each_pro_request_connects_the_configured_device(self) -> None:
+        issued: list[Path] = []
 
-        def register(
-            thread_id: str,
-            project_scope: str,
+        def connect(
             root: Path,
             log: prompt_rewrite.LogFunc,
-        ) -> ProjectTicket:
-            _ = thread_id, root, log
-            issued.append(project_scope)
-            return ProjectTicket(
-                project_scope=project_scope,
-                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        ) -> _DeviceTicket:
+            _ = log
+            issued.append(root)
+            return _DeviceTicket(
+                device_id="device-1",
+                working_directory=root.resolve(),
             )
 
         for _ in range(2):
@@ -126,12 +136,11 @@ class PromptRewriteTests(unittest.TestCase):
                 target_thread_id="thread-1",
                 cwd=Path.cwd(),
                 log=lambda _: None,
-                project_registrar=register,
+                device_connector=connect,
                 runtime_preflight=_pass_preflight,
             )
 
-        self.assertEqual(len(issued), 2)
-        self.assertNotEqual(issued[0], issued[1])
+        self.assertEqual(issued, [Path.cwd(), Path.cwd()])
 
     def test_rewrite_prompt_expands_pro_command(self) -> None:
         logs: list[str] = []
@@ -140,7 +149,7 @@ class PromptRewriteTests(unittest.TestCase):
             "!pro 이 설계를 검토해줘",
             cwd=Path.cwd(),
             log=logs.append,
-            project_registrar=_skip_binding,
+            device_connector=_skip_device_connection,
             runtime_preflight=_pass_preflight,
         )
 
@@ -162,7 +171,7 @@ class PromptRewriteTests(unittest.TestCase):
             "!pro review 인증 흐름",
             cwd=Path.cwd(),
             log=logs.append,
-            project_registrar=_skip_binding,
+            device_connector=_skip_device_connection,
             runtime_preflight=_pass_preflight,
         )
 

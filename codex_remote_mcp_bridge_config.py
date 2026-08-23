@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import override
 from urllib.parse import urlsplit
 
@@ -31,6 +32,12 @@ class RemoteMcpBridgeConfig:
 class ProjectTicket:
     project_scope: str
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceTicket:
+    device_id: str
+    working_directory: Path
 
 
 def load_remote_mcp_config(
