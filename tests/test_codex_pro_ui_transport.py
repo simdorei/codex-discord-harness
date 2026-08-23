@@ -4,6 +4,7 @@ from collections.abc import Callable
 from threading import Lock
 import unittest
 
+import codex_app_server_transport as app_server_transport
 import codex_desktop_bridge as bridge
 import codex_discord_prompt_transport as prompt_transport
 import codex_discord_prompt_transport_factory as prompt_transport_factory
@@ -15,15 +16,25 @@ from tests.test_codex_discord_prompt_transport_factory import (
 )
 
 
-class ProDesktopIpcFactoryTests(unittest.TestCase):
-    def test_pro_no_wait_uses_desktop_ipc_with_ui_recovery(self) -> None:
+class ProAppServerFactoryTests(unittest.TestCase):
+    def test_pro_no_wait_uses_resident_app_server_without_ipc(self) -> None:
         bridge_stream_calls: list[list[str]] = []
-        resident_calls: list[tuple[str, str | None]] = []
+        app_server_calls: list[tuple[str, str | None]] = []
         completion_calls: list[tuple[str | None, str | None]] = []
 
-        def resident_prompt(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
-            resident_calls.append((prompt, target_thread_id))
-            return 0, "resident app server\n[app_server_delivery] turn_id=turn-1"
+        def start_turn(
+            prompt: str,
+            target_thread_id: str | None,
+        ) -> app_server_transport.AppServerDeliveryResult:
+            app_server_calls.append((prompt, target_thread_id))
+            return app_server_transport.AppServerDeliveryResult(
+                0,
+                "[app_server_delivery] turn_id=turn-1",
+                thread_id=target_thread_id,
+                turn_id="turn-1",
+                session_path="session.jsonl",
+                start_offset=4,
+            )
 
         def legacy_prompt(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
             raise AssertionError(f"unexpected legacy prompt: {prompt}:{target_thread_id}")
@@ -37,9 +48,9 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
             return 0, "watched"
 
         def bridge_stream(argv: list[str], on_line: Callable[[str], None]) -> tuple[int, str]:
+            _ = on_line
             bridge_stream_calls.append(argv)
-            on_line("[ipc_delivery] owner_client=client-1 turn_id=turn-1")
-            return 0, "[ipc_delivery] owner_client=client-1 turn_id=turn-1"
+            return 1, "unexpected legacy bridge call"
 
         deps = prompt_transport_factory.make_prompt_transport_deps(
             bridge_module=bridge,
@@ -50,7 +61,7 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
             run_bridge_command_stream=bridge_stream,
             ui_fallback_lock=Lock(),
             log=lambda message: None,
-            run_resident_prompt_no_wait=resident_prompt,
+            start_turn_no_wait=start_turn,
             complete_pro_browser_session=lambda target, turn: completion_calls.append(
                 (target, turn)
             ),
@@ -64,18 +75,28 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            (0, "[ipc_delivery] owner_client=client-1 turn_id=turn-1"),
+            (0, "[app_server_delivery] turn_id=turn-1"),
         )
-        self.assertEqual(resident_calls, [])
+        self.assertEqual(app_server_calls, [(PRO_SKILL_CALL, "thread-1")])
         self.assertEqual(completion_calls, [("thread-1", "turn-1")])
-        self.assertEqual(len(bridge_stream_calls), 1)
-        self.assertEqual(bridge_stream_calls[0][0:3], ["ask", "--ipc", "--ipc-recover-ui"])
-        self.assertIn("--no-fallback", bridge_stream_calls[0])
-        self.assertNotIn("--no-wait", bridge_stream_calls[0])
+        self.assertEqual(bridge_stream_calls, [])
 
-    def test_pro_stream_uses_desktop_ipc_with_ui_recovery(self) -> None:
+    def test_pro_stream_uses_resident_app_server_without_ipc(self) -> None:
         bridge_stream_calls: list[list[str]] = []
         completion_calls: list[tuple[str | None, str | None]] = []
+
+        def start_turn(
+            _prompt: str,
+            target_thread_id: str | None,
+        ) -> app_server_transport.AppServerDeliveryResult:
+            return app_server_transport.AppServerDeliveryResult(
+                0,
+                "[app_server_delivery] turn_id=turn-1",
+                thread_id=target_thread_id,
+                turn_id="turn-1",
+                session_path="session.jsonl",
+                start_offset=4,
+            )
 
         def legacy_prompt(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
             raise AssertionError(f"unexpected legacy prompt: {prompt}:{target_thread_id}")
@@ -89,9 +110,9 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
             return 0, "watched"
 
         def bridge_stream(argv: list[str], on_line: Callable[[str], None]) -> tuple[int, str]:
+            _ = on_line
             bridge_stream_calls.append(argv)
-            on_line("[ipc_delivery] owner_client=client-1 turn_id=turn-1")
-            return 0, "[ipc_delivery] owner_client=client-1 turn_id=turn-1"
+            return 1, "unexpected legacy bridge call"
 
         deps = prompt_transport_factory.make_prompt_transport_deps(
             bridge_module=bridge,
@@ -102,6 +123,7 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
             run_bridge_command_stream=bridge_stream,
             ui_fallback_lock=Lock(),
             log=lambda message: None,
+            start_turn_no_wait=start_turn,
             complete_pro_browser_session=lambda target, turn: completion_calls.append(
                 (target, turn)
             ),
@@ -115,12 +137,11 @@ class ProDesktopIpcFactoryTests(unittest.TestCase):
             deps=deps,
         )
 
-        self.assertEqual(result, (0, "[ipc_delivery] owner_client=client-1 turn_id=turn-1"))
+        self.assertEqual(result, (0, "watched"))
         self.assertTrue(relay.finished)
-        self.assertEqual(relay.lines, ["[ipc_delivery] owner_client=client-1 turn_id=turn-1"])
+        self.assertEqual(relay.lines, [])
         self.assertEqual(completion_calls, [("thread-1", "turn-1")])
-        self.assertEqual(len(bridge_stream_calls), 1)
-        self.assertEqual(bridge_stream_calls[0][0:3], ["ask", "--ipc", "--ipc-recover-ui"])
+        self.assertEqual(bridge_stream_calls, [])
 
 
 if __name__ == "__main__":

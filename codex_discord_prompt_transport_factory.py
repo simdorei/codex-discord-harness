@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from typing import Final, TypeAlias, TypeVar
+from typing import assert_never, Final, TypeAlias, TypeVar
 
 import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
+from codex_app_server_transport_turn_outcomes import (
+    TurnCompletionFound,
+    TurnCompletionPending,
+    TurnCompletionTransportError,
+    TurnStatus,
+)
 import codex_discord_app_server as discord_app_server
 import codex_discord_app_server_admission as discord_app_server_admission
 import codex_discord_prompt_transport as prompt_transport
@@ -19,6 +25,7 @@ SteeringResultT = TypeVar("SteeringResultT")
 AppServerDeliveryResult: TypeAlias = app_server_transport.AppServerDeliveryResult
 AppServerStartTurnNoWait: TypeAlias = prompt_transport.StartTurnNoWait[AppServerDeliveryResult]
 DEFAULT_APP_SERVER_DELIVERY_CONFIRM_TIMEOUT_SECONDS: Final = 25.0
+PRO_TURN_COMPLETION_TIMEOUT_SECONDS: Final = 7200.0
 
 
 class ProMappedThreadRequiredError(RuntimeError):
@@ -29,8 +36,36 @@ class ProMappedThreadRequiredError(RuntimeError):
 class ProDeliveryIdentityMissingError(RuntimeError):
     def __init__(self) -> None:
         super().__init__(
-            "Pro Desktop IPC delivery returned no exact thread and turn identity."
+            "Pro app-server delivery returned no exact thread and turn identity."
         )
+
+
+class ProTurnCompletionError(RuntimeError):
+    def __init__(self, detail: str) -> None:
+        self.detail: str = detail
+        super().__init__(f"Pro app-server turn did not complete successfully: {detail}")
+
+
+def _wait_for_pro_turn_completion(target_thread_id: str, turn_id: str) -> None:
+    observation = app_server_transport.DEFAULT_CLIENT.wait_for_turn_completion(
+        target_thread_id,
+        turn_id,
+        timeout_sec=PRO_TURN_COMPLETION_TIMEOUT_SECONDS,
+    )
+    match observation:  # noqa: MATCH_OK - exhaustive cases end in assert_never below.
+        case TurnCompletionFound(completion=completion):
+            match completion.status:  # noqa: MATCH_OK - exhaustive cases end in assert_never below.
+                case TurnStatus.COMPLETED:
+                    return
+                case TurnStatus.FAILED | TurnStatus.INTERRUPTED | TurnStatus.IN_PROGRESS:
+                    detail = completion.error_message or completion.status.value
+                    raise ProTurnCompletionError(detail)
+            assert_never(completion.status)
+        case TurnCompletionPending():
+            raise TimeoutError("Timed out waiting for the Pro app-server turn to complete.")
+        case TurnCompletionTransportError(message=message):
+            raise ProTurnCompletionError(message)
+    assert_never(observation)
 
 
 def get_app_server_delivery_confirm_timeout() -> float:
@@ -70,19 +105,9 @@ def make_prompt_transport_deps(
             return
         if not target_thread_id or not turn_id:
             raise ProDeliveryIdentityMissingError
+        _wait_for_pro_turn_completion(target_thread_id, turn_id)
         pro_browser_evidence.require_available_evidence(target_thread_id, turn_id)
         log(f"pro_browser_session_verified target={target_thread_id} turn={turn_id}")
-
-    def run_pro_prompt_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
-        argv = discord_stream.build_stream_ask_argv(
-            prompt,
-            wait=True,
-            target_thread_id=target_thread_id,
-            use_sidecar=False,
-            ipc_recover_ui=True,
-            no_fallback=True,
-        )
-        return run_bridge_command_stream(argv, lambda _line: None)
 
     def run_resident_prompt_no_wait_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:
         if run_resident_prompt_no_wait is not None:
@@ -144,7 +169,6 @@ def make_prompt_transport_deps(
         app_server_transport_enabled=app_server_transport_enabled,
         prepare_pro_browser_session=prepare_pro_browser_session,
         complete_pro_browser_session=complete_pro_browser_session_impl,
-        run_pro_prompt=run_pro_prompt_impl,
         run_resident_prompt_no_wait=run_resident_prompt_no_wait_impl,
         run_legacy_prompt_no_wait=run_legacy_prompt_no_wait,
         start_turn_no_wait=start_turn_no_wait_impl,

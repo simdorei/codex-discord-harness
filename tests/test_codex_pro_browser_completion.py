@@ -5,7 +5,13 @@ from typing import cast, Protocol
 import unittest
 from unittest import mock
 
+import codex_app_server_transport as app_server_transport
 import codex_app_server_transport_delivery as app_server_delivery
+from codex_app_server_transport_turn_outcomes import (
+    TurnCompletion,
+    TurnCompletionFound,
+    TurnStatus,
+)
 import codex_discord_prompt_transport_factory as prompt_transport_factory
 import codex_pro_browser_evidence as pro_browser_evidence
 
@@ -43,12 +49,25 @@ class ProBrowserCompletionTests(unittest.TestCase):
 
     def test_completion_requires_exact_available_receipt(self) -> None:
         deps = self._deps()
-        with mock.patch.object(
-            pro_browser_evidence,
-            "require_available_evidence",
-        ) as require_evidence:
+        completion = TurnCompletion("thread-1", "turn-1", TurnStatus.COMPLETED)
+        with (
+            mock.patch.object(
+                app_server_transport.DEFAULT_CLIENT,
+                "wait_for_turn_completion",
+                return_value=TurnCompletionFound(completion),
+            ) as wait_for_turn,
+            mock.patch.object(
+                pro_browser_evidence,
+                "require_available_evidence",
+            ) as require_evidence,
+        ):
             deps.complete_pro_browser_session("thread-1", "turn-1")
 
+        wait_for_turn.assert_called_once_with(
+            "thread-1",
+            "turn-1",
+            timeout_sec=mock.ANY,
+        )
         require_evidence.assert_called_once_with("thread-1", "turn-1")
 
     def test_missing_turn_identity_fails_before_reading_evidence(self) -> None:
