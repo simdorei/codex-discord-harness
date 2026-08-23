@@ -14,8 +14,10 @@ import codex_discord_runtime_config as discord_runtime_config
 from codex_discord_logging import log_line
 from codex_remote_mcp_binding import (
     close_remote_mcp_bridge,
+    connect_remote_mcp_device,
     restore_remote_mcp_restart_handoff,
 )
+from codex_remote_mcp_bridge_config import RemoteMcpConfigurationError
 from codex_remote_mcp_bridge_connection import RemoteMcpBridgeError
 from codex_remote_mcp_restart_models import RestartHandoffError
 
@@ -75,6 +77,13 @@ def main(deps: BotMainDeps) -> int:
         except (OSError, RestartHandoffError, RemoteMcpBridgeError) as exc:
             log_line(
                 "remote_mcp_restart_handoff_restore_failed "
+                + f"error_type={type(exc).__name__} error={str(exc)[:300]}"
+            )
+        try:
+            _ = connect_remote_mcp_device(deps.env_path.parent, log_line)
+        except (RemoteMcpConfigurationError, RemoteMcpBridgeError) as exc:
+            log_line(
+                "remote_mcp_device_startup_connect_failed "
                 + f"error_type={type(exc).__name__} error={str(exc)[:300]}"
             )
         bot = deps.bot_factory(

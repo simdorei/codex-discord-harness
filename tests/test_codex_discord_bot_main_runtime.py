@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from builtins import BaseExceptionGroup
 from collections.abc import Callable
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Protocol, cast, final
 
 import pytest
 
+import codex_discord_cli
 import codex_discord_bot_main_runtime
 from codex_discord_bot_main_runtime import BotRunner, RuntimeCloser
 
@@ -47,6 +50,44 @@ class _RecordingRunner:
             raise self._error
 
 
+@final
+class _RecordingBotFactory:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def __call__(
+        self,
+        *,
+        allowed_channel_ids: set[int],
+        allowed_user_ids: set[int],
+        startup_channel_id: int | None,
+        guild_id: int | None,
+        enable_prefix_commands: bool,
+        plain_ask_mention_user_ids: set[int],
+    ) -> _RecordingRunner:
+        _ = (
+            allowed_channel_ids,
+            allowed_user_ids,
+            startup_channel_id,
+            guild_id,
+            enable_prefix_commands,
+            plain_ask_mention_user_ids,
+        )
+        return _RecordingRunner(self._events)
+
+
+@final
+class _ParsedArgs:
+    no_message_content = False
+
+
+@final
+class _Parser:
+    @staticmethod
+    def parse_args() -> _ParsedArgs:
+        return _ParsedArgs()
+
+
 def _closer(
     events: list[str],
     name: str,
@@ -58,6 +99,48 @@ def _closer(
             raise error
 
     return close
+
+
+def test_main_connects_remote_device_before_bot_run_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Given
+    events: list[str] = []
+    logs: list[str] = []
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "token")
+    monkeypatch.setenv("DISCORD_ALLOWED_CHANNEL_IDS", "1")
+    monkeypatch.delenv("DISCORD_ALLOW_ALL_CHANNELS", raising=False)
+    monkeypatch.delenv("CODEX_REMOTE_MCP_ENABLED", raising=False)
+    monkeypatch.setattr(
+        codex_discord_cli,
+        "build_parser",
+        _Parser,
+    )
+    monkeypatch.setattr(codex_discord_bot_main_runtime, "log_line", logs.append)
+
+    def connect_device(root: Path, log: Callable[[str], None]) -> None:
+        _ = log
+        assert root == tmp_path
+        events.append("connect")
+
+    monkeypatch.setattr(
+        codex_discord_bot_main_runtime,
+        "connect_remote_mcp_device",
+        connect_device,
+    )
+    deps = codex_discord_bot_main_runtime.BotMainDeps(
+        env_path=tmp_path / ".env",
+        bot_factory=_RecordingBotFactory(events),
+        acquire_runtime_instance_lock=lambda: nullcontext(True),
+    )
+
+    # When
+    exit_code = codex_discord_bot_main_runtime.main(deps)
+
+    # Then
+    assert exit_code == 0
+    assert events == ["connect", "run"]
 
 
 def test_bot_failure_and_bridge_cleanup_failure_still_close_app_server() -> None:
