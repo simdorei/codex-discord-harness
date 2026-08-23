@@ -18,6 +18,7 @@ import codex_discord_runtime_config as runtime_config
 import codex_discord_stream as discord_stream
 import codex_discord_ui_ask as discord_ui_ask
 import codex_pro_browser_evidence as pro_browser_evidence
+import codex_pro_connector_evidence as pro_connector_evidence
 
 
 RelayT = TypeVar("RelayT", bound=discord_stream.AskStreamRelay)
@@ -107,6 +108,8 @@ def make_prompt_transport_deps(
             raise ProDeliveryIdentityMissingError
         _wait_for_pro_turn_completion(target_thread_id, turn_id)
         pro_browser_evidence.require_available_evidence(target_thread_id, turn_id)
+        pro_connector_evidence.require_verified_evidence(target_thread_id, turn_id)
+        log(f"pro_connector_verified target={target_thread_id} turn={turn_id}")
         log(f"pro_browser_session_verified target={target_thread_id} turn={turn_id}")
 
     def run_resident_prompt_no_wait_impl(prompt: str, target_thread_id: str | None) -> tuple[int, str]:

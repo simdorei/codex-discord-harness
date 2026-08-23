@@ -66,7 +66,20 @@ questions, or as a substitute for local tests.
      the first message.
    - Without `conversation_scope`, reuse an open `chatgpt.com` tab only when it is
      clearly the user's intended consultation chat; otherwise open a new chat.
-3. Confirm that the user is signed in and that Pro is selected. If login, OAuth
+3. Bind the exact mapped ChatGPT tab to `globalThis.proConversationTab` in the
+   persistent Chrome Node runtime. Inspect `codex plugin list --json` again and
+   use the installed plugin's `source.path` to run
+   `<source.path>/hooks/pro_connector_evidence_hook.py print-probe-code`. Submit
+   the emitted code unchanged through the execution tool. This trusted helper,
+   rather than model-written click steps, must attach exactly `Simdorei Local
+   Project Oauth`, return the composer from Work to normal Chat mode, and verify
+   that Pro remains selected. Continue only when it returns `status: verified`.
+   If a saved legacy conversation cannot present that connector, preserve the old
+   ChatGPT conversation, delete only its local conversation-map record, acquire
+   one fresh chat, bind that tab, and run the same helper once more. Do not send
+   the consultation or use another connector when the second result is not
+   verified.
+4. Confirm that the user is signed in and that Pro is selected. If login, OAuth
    owner approval, OTP, CAPTCHA, account access, or manual model selection is
    required, leave the tab open for handoff and ask the user to complete only
    that step. An OAuth owner token belongs only in the MCP approval page, never
@@ -74,14 +87,13 @@ questions, or as a substitute for local tests.
    A connector approved before computer scopes existed must be reconnected and
    approved once more. Do not try to reuse a file-only OAuth grant for desktop
    observation or control.
-4. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
-5. Do not silently fall back to a non-Pro model.
-6. When the request includes a `<local-device-mcp>` block, send that block with
-   the consultation request. Before sending, open ChatGPT's plugin picker and
-   attach the plugin whose visible name exactly matches the block's `connector`
-   attribute. Require exactly one match. Never let ChatGPT choose a connector
-   from the shared `select_project` tool name, and never attach `Simdorei Local
-   Project` or `Simdorei Local Project v12 QA`. If the exact plugin is unavailable,
+5. Do not request, inspect, or copy passwords, cookies, session tokens, or OTP codes.
+6. Do not silently fall back to a non-Pro model.
+7. When the request includes a `<local-device-mcp>` block, send that block with
+   the consultation request. The trusted connector helper above is the only
+   allowed selection path. Never let ChatGPT choose a connector from the shared
+   `select_project` tool name, and never attach `Simdorei Local Project` or
+   `Simdorei Local Project v12 QA`. If the exact plugin is unavailable,
    duplicated, or cannot be attached, stop without sending the request and report
    the connector-selection failure.
    Call `list_devices`, require the block's `device_id` to be present and online,
@@ -107,7 +119,7 @@ questions, or as a substitute for local tests.
    `terminal_window_activate`, `terminal_window_type`, `terminal_window_keys`,
    `terminal_window_interrupt`, and `terminal_window_close` for visible terminal
    windows owned by the current ChatGPT session.
-7. PC mode is the default for these tickets. After `select_device`, use
+8. PC mode is the default for these tickets. After `select_device`, use
    `device_info` to confirm the active PC and project folder. If the task later
    requires another folder, call `set_working_directory` only when the user or
    ticket explicitly names it. PC mode may list, capture, and control existing
@@ -120,7 +132,7 @@ questions, or as a substitute for local tests.
    Windows secure-desktop surfaces, the sign-in screen, Ctrl+Alt+Delete, locked
    sessions, login, CAPTCHA, password, and OTP entry require direct user handoff.
    Never use terminal or computer tools to read or transmit credentials.
-8. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
+9. Keep the chat in normal Chat mode with Pro reasoning. Do not switch to Work,
    agent mode, deep research, or a different model to gain local tools. If the
    connector is unavailable in Pro, stop with the exact limitation instead of
    claiming that local work happened.

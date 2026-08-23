@@ -14,6 +14,7 @@ from codex_app_server_transport_turn_outcomes import (
 )
 import codex_discord_prompt_transport_factory as prompt_transport_factory
 import codex_pro_browser_evidence as pro_browser_evidence
+import codex_pro_connector_evidence as pro_connector_evidence
 
 
 class ProCompletionDeps(Protocol):
@@ -60,6 +61,10 @@ class ProBrowserCompletionTests(unittest.TestCase):
                 pro_browser_evidence,
                 "require_available_evidence",
             ) as require_evidence,
+            mock.patch.object(
+                pro_connector_evidence,
+                "require_verified_evidence",
+            ) as require_connector,
         ):
             deps.complete_pro_browser_session("thread-1", "turn-1")
 
@@ -69,6 +74,7 @@ class ProBrowserCompletionTests(unittest.TestCase):
             timeout_sec=mock.ANY,
         )
         require_evidence.assert_called_once_with("thread-1", "turn-1")
+        require_connector.assert_called_once_with("thread-1", "turn-1")
 
     def test_missing_turn_identity_fails_before_reading_evidence(self) -> None:
         deps = self._deps()

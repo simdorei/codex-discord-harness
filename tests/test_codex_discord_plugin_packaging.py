@@ -53,8 +53,17 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         source_browser_evidence = Path(
             ".agents/skills/ask-chatgpt-pro/scripts/browser_evidence_probe.mjs"
         )
+        connector_control = (
+            plugin_root
+            / "skills/ask-chatgpt-pro/scripts/pro_connector_control.mjs"
+        )
+        source_connector_control = Path(
+            ".agents/skills/ask-chatgpt-pro/scripts/pro_connector_control.mjs"
+        )
         browser_hook = plugin_root / "hooks/browser_evidence_hook.py"
         browser_hook_manifest = plugin_root / "hooks/browser-evidence.json"
+        connector_hook = plugin_root / "hooks/pro_connector_evidence_hook.py"
+        connector_hook_manifest = plugin_root / "hooks/pro-connector-evidence.json"
         ask_metadata = plugin_root / "skills/ask-chatgpt-pro/agents/openai.yaml"
         source_metadata = Path(
             ".agents/skills/ask-chatgpt-pro/agents/openai.yaml"
@@ -69,6 +78,7 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertIn("conversation_map.py", ask_skill)
         self.assertIn("[@Chrome](plugin://chrome@openai-bundled)", ask_skill)
         self.assertIn("browser_evidence_hook.py print-probe-code", ask_skill)
+        self.assertIn("pro_connector_evidence_hook.py print-probe-code", ask_skill)
         self.assertIn("use `type()` instead of `fill()`", ask_skill)
         self.assertIn("both literal MCP block tags remain", ask_skill)
         self.assertTrue(conversation_map.is_file())
@@ -77,9 +87,18 @@ class DiscordPluginPackagingTests(unittest.TestCase):
             browser_evidence.read_text(encoding="utf-8"),
             source_browser_evidence.read_text(encoding="utf-8"),
         )
-        self.assertEqual(manifest.hooks, ["./hooks/browser-evidence.json"])
+        self.assertEqual(
+            connector_control.read_text(encoding="utf-8"),
+            source_connector_control.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(
+            manifest.hooks,
+            ["./hooks/browser-evidence.json", "./hooks/pro-connector-evidence.json"],
+        )
         self.assertTrue(browser_hook.is_file())
         self.assertTrue(browser_hook_manifest.is_file())
+        self.assertTrue(connector_hook.is_file())
+        self.assertTrue(connector_hook_manifest.is_file())
         self.assertTrue(ask_metadata.is_file())
         self.assertEqual(
             ask_metadata.read_text(encoding="utf-8"),
