@@ -3,17 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, cast
 
+import codex_pro_connector_transcript as connector_transcript
 
-PROTOCOL: Final = "ask-chatgpt-pro-connector-control-v1"
-CONNECTOR_NAME: Final = "Simdorei Local Project Oauth"
-CONNECTOR_PATH: Final = "/plugins/plugin_asdk_app_6a6ae90be0a08191b877eddba93b631c"
-EXPECTED_PROBE_SHA256: Final = (
-    "e5de2ef92ac6fca49442e60f237888bea47b5d6090c3347c180d103114ced8dc"
-)
+PROTOCOL: Final = connector_transcript.PROTOCOL
+CONNECTOR_NAME: Final = connector_transcript.CONNECTOR_NAME
+CONNECTOR_PATH: Final = connector_transcript.CONNECTOR_PATH
+EXPECTED_PROBE_SHA256: Final = connector_transcript.EXPECTED_PROBE_SHA256
 PLUGIN_DATA_DIRECTORY: Final = "codex-discord-remote-codex-discord-remote"
 
 
@@ -35,11 +33,20 @@ def require_verified_evidence(
     *,
     plugin_data: Path | None = None,
 ) -> None:
-    evidence = _read_receipt(
-        session_id,
-        turn_id,
-        plugin_data or default_plugin_data_path(),
-    )
+    data_path = plugin_data or default_plugin_data_path()
+    receipt_path = _receipt_path(session_id, turn_id, data_path)
+    if receipt_path.exists():
+        evidence = _read_receipt(session_id, turn_id, receipt_path)
+        if evidence is None:
+            raise ProConnectorUnavailableError(
+                "Exact-turn connector receipt exists but is invalid or unreadable."
+            )
+    else:
+        evidence = connector_transcript.read_transcript_evidence(
+            session_id,
+            turn_id,
+            connector_transcript.default_evidence_source(),
+        )
     if evidence is None:
         raise ProConnectorUnavailableError(
             "Pro turn completed without exact-turn connector control evidence."
@@ -59,19 +66,32 @@ def require_verified_evidence(
         raise ProConnectorUnavailableError(
             "Connector, Chat mode, or Pro mode evidence did not match the contract."
         )
+    if (
+        evidence.get("action") not in {"attached", "already_attached"}
+        or "failed_stage" in evidence
+    ):
+        raise ProConnectorUnavailableError(
+            "Verified connector evidence had an invalid action or failure stage."
+        )
+
+
+def _receipt_path(session_id: str, turn_id: str, plugin_data: Path) -> Path:
+    key = hashlib.sha256(f"{session_id}\0{turn_id}".encode()).hexdigest()
+    return plugin_data / "pro-connector-evidence" / f"{key}.json"
 
 
 def _read_receipt(
     session_id: str,
     turn_id: str,
-    plugin_data: Path,
-) -> dict[str, object] | None:
+    path: Path,
+) -> connector_transcript.JsonObject | None:
     if not session_id or not turn_id:
         return None
-    key = hashlib.sha256(f"{session_id}\0{turn_id}".encode()).hexdigest()
-    path = plugin_data / "pro-connector-evidence" / f"{key}.json"
     try:
-        raw = cast(object, json.loads(path.read_text(encoding="utf-8")))
+        raw = cast(
+            connector_transcript.JsonValue,
+            json.loads(path.read_text(encoding="utf-8")),
+        )
     except (OSError, json.JSONDecodeError):
         return None
     evidence = _object_map(raw)
@@ -88,10 +108,7 @@ def _read_receipt(
     return evidence
 
 
-def _object_map(raw: object) -> dict[str, object] | None:
-    if not isinstance(raw, dict):
-        return None
-    values = cast(Mapping[object, object], raw)
-    if not all(isinstance(key, str) for key in values):
-        return None
-    return {cast(str, key): value for key, value in values.items()}
+def _object_map(
+    raw: connector_transcript.JsonValue,
+) -> connector_transcript.JsonObject | None:
+    return raw if isinstance(raw, dict) else None

@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Literal, TypeAlias, cast
 from uuid import uuid4
 
 
@@ -23,6 +23,12 @@ PROBE_RELATIVE_PATH = Path(
 )
 EXEC_TOOL_NAMES = {"exec", "functions.exec"}
 NODE_TOOL_NAMES = {"js", "mcp__node_repl__js", "node_repl.js"}
+FailureStage: TypeAlias = Literal[
+    "plugin_data_missing",
+    "session_id_missing",
+    "turn_id_missing",
+    "write_failed",
+]
 
 
 def canonical_inner_probe_code(plugin_root: Path | None = None) -> str:
@@ -76,8 +82,10 @@ def process_post_tool_use(
     session_id = payload.get("session_id")
     turn_id = payload.get("turn_id")
     if not isinstance(session_id, str) or not session_id:
+        _report_failure("session_id_missing")
         return False
     if not isinstance(turn_id, str) or not turn_id:
+        _report_failure("turn_id_missing")
         return False
     receipt = {
         **evidence,
@@ -173,6 +181,7 @@ def _object_map(raw: object) -> dict[str, object] | None:
 def _write_receipt(receipt: Mapping[str, object], plugin_data: Path | None) -> bool:
     data_path = plugin_data or _environment_data_path()
     if data_path is None:
+        _report_failure("plugin_data_missing")
         return False
     session_id = receipt.get("session_id")
     turn_id = receipt.get("turn_id")
@@ -186,8 +195,13 @@ def _write_receipt(receipt: Mapping[str, object], plugin_data: Path | None) -> b
         _ = temporary.write_text(json.dumps(dict(receipt)), encoding="utf-8")
         _ = temporary.replace(path)
     except OSError:
+        _report_failure("write_failed")
         return False
     return True
+
+
+def _report_failure(stage: FailureStage) -> None:
+    _ = sys.stderr.write(f"pro_connector_evidence_hook_failed stage={stage}\n")
 
 
 def _environment_data_path() -> Path | None:
