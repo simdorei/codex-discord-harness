@@ -13,6 +13,7 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 
 $SetupScript = Join-Path $RepoRoot 'setup_discord_bot.py'
 $WatchdogScript = Join-Path $RepoRoot 'codex-discord-watchdog.ps1'
+$WatchdogLauncher = Join-Path $RepoRoot 'codex-discord-watchdog-hidden.vbs'
 $WatchdogTaskName = 'Codex Discord Bot'
 
 function Resolve-PythonCommand {
@@ -32,6 +33,9 @@ function Register-DiscordWatchdogTask {
     if (-not (Test-Path -LiteralPath $WatchdogScript)) {
         throw "Discord watchdog was not found: $WatchdogScript"
     }
+    if (-not (Test-Path -LiteralPath $WatchdogLauncher)) {
+        throw "Hidden Discord watchdog launcher was not found: $WatchdogLauncher"
+    }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     if ($DryRun) {
@@ -39,12 +43,9 @@ function Register-DiscordWatchdogTask {
         return
     }
 
-    $watchdogArguments = (
-        "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden " +
-        "-File `"$WatchdogScript`""
-    )
+    $watchdogArguments = "//B //Nologo `"$WatchdogLauncher`""
     $action = New-ScheduledTaskAction `
-        -Execute 'powershell.exe' `
+        -Execute 'wscript.exe' `
         -Argument $watchdogArguments `
         -WorkingDirectory $RepoRoot
     $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $identity

@@ -65,7 +65,10 @@ class WatchdogCapture(TypedDict):
     os.name == "nt" and shutil.which("powershell.exe"), "Windows PowerShell test"
 )
 class SetupDiscordBotPowerShellTests(unittest.TestCase):
-    def test_registers_elevated_minute_watchdog_without_overlap(self) -> None:
+    def test_registers_elevated_minute_watchdog_without_console_focus_or_overlap(
+        self,
+    ) -> None:
+        # Given
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             setup_script = temp_path / "setup-discord-bot.ps1"
@@ -75,6 +78,9 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
             )
             _ = (temp_path / "setup_discord_bot.py").write_text("", encoding="utf-8")
             _ = (temp_path / "codex-discord-watchdog.ps1").write_text(
+                "", encoding="utf-8"
+            )
+            _ = (temp_path / "codex-discord-watchdog-hidden.vbs").write_text(
                 "", encoding="utf-8"
             )
             fake_python = temp_path / "fake-python.cmd"
@@ -87,6 +93,7 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
             env["PYTHON_EXE"] = str(fake_python)
             env["HARNESS_SETUP"] = str(setup_script)
             env["HARNESS_CAPTURE"] = str(capture_path)
+            # When
             completed = subprocess.run(
                 [
                     "powershell.exe",
@@ -112,11 +119,12 @@ class SetupDiscordBotPowerShellTests(unittest.TestCase):
                 json.loads(capture_path.read_text(encoding="utf-8-sig")),
             )
 
-        self.assertEqual(captured["Action"]["Execute"], "powershell.exe")
+        # Then
+        self.assertEqual(captured["Action"]["Execute"], "wscript.exe")
         self.assertEqual(captured["Action"]["WorkingDirectory"], str(temp_path))
-        self.assertIn("-WindowStyle Hidden", captured["Action"]["Argument"])
+        self.assertIn("//B //Nologo", captured["Action"]["Argument"])
         self.assertIn(
-            str(temp_path / "codex-discord-watchdog.ps1"),
+            str(temp_path / "codex-discord-watchdog-hidden.vbs"),
             captured["Action"]["Argument"],
         )
         self.assertEqual(
