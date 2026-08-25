@@ -2590,7 +2590,14 @@ class DiscordBotHelperTests(unittest.IsolatedAsyncioTestCase):
             async def runner_idle(target_thread_id):
                 return False
 
-            async def fake_handle_plain_ask(message, prompt, *, target_thread_id=None):
+            async def fake_handle_plain_ask(
+                message,
+                prompt,
+                *,
+                target_thread_id=None,
+                replay_eligible=False,
+            ):
+                self.assertTrue(replay_eligible)
                 calls.append((message, prompt, target_thread_id))
 
             bot.is_thread_runner_busy = runner_idle

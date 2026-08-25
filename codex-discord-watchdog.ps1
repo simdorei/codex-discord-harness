@@ -6,7 +6,7 @@ param(
     [int]$RestartQuietSeconds = 90,
     [int]$RestartWaitTimeoutSeconds = 900,
     [int]$HealthCpuPercent = 95,
-    [int]$HealthFreeMemoryMb = 768,
+    [int]$HealthFreeMemoryMb = 0,
     [int]$HealthHeartbeatMaxAgeSeconds = 45,
     [int]$HealthHeartbeatStartupGraceSeconds = 120,
     [int]$HealthBadSampleLimit = 2

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Final, Generic, Protocol, TypeVar, cast
 
+import codex_discord_message_processing as message_processing
+
 from codex_discord_message_gate_context import (
     DEFAULT_PLAIN_ASK_CONTEXT_KEYWORDS as DEFAULT_PLAIN_ASK_CONTEXT_KEYWORDS,
     get_plain_ask_context_keywords as get_plain_ask_context_keywords,
@@ -48,6 +50,7 @@ class GatewayMessageDeps(Generic[MessageT]):
     claim_message: Callable[[MessageT], bool]
     get_message_id: Callable[[MessageT], DiscordIdValue]
     process_message: GatewayMessageProcessor[MessageT]
+    release_message: Callable[[MessageT], None]
     mark_processed: Callable[[MessageT], None]
     log: Callable[[str], None]
 
@@ -132,8 +135,19 @@ async def process_gateway_message(message: MessageT, *, deps: GatewayMessageDeps
             + f"message={deps.get_message_id(message) or '-'}"
         )
         return
-    await deps.process_message(message, source="gateway")
-    deps.mark_processed(message)
+    completed = False
+    no_replay_failure = False
+    try:
+        await deps.process_message(message, source="gateway")
+        completed = True
+    except BaseException as exc:
+        no_replay_failure = message_processing.failure_is_no_replay(exc)
+        raise
+    finally:
+        if completed or no_replay_failure:
+            deps.mark_processed(message)
+        else:
+            deps.release_message(message)
 
 
 def prepare_plain_ask_content(

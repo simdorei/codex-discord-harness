@@ -82,7 +82,9 @@ async def restore_queue_jobs(bot: QueueRestoreBot, deps: QueueRestoreDeps) -> li
         deps.log(
             "queue_restore_adopted "
             + f"attempt={attempt} generation={accepted_generation} "
-            + f"jobs={len(records)} rebound={adoption.adopted_count}"
+            + f"jobs={len(records)} rebound={adoption.adopted_count} "
+            + f"needs_review={len(adoption.needs_review_job_ids)} "
+            + f"review_ids={','.join(adoption.needs_review_job_ids[:5]) or '-'}"
         )
         jobs: list[QueueJob] = []
         for record in records:

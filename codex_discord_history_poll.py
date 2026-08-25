@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Generic, Protocol, TypeVar, cast
 
 import codex_discord_diagnostics_history as discord_diagnostics_history
+import codex_discord_message_processing as discord_message_processing
 
 
 MessageT = TypeVar("MessageT")
@@ -112,12 +113,9 @@ async def poll_history_channel(
     history_channel = cast(HistorySource[MessageT], channel)
     is_primed = deps.is_primed_channel(int(channel_id))
     history_messages: list[MessageT] = []
-    claimed_messages: list[MessageT] = []
     try:
         async for message in history_channel.history(limit=deps.history_limit):
             history_messages.append(message)
-            if deps.claim_message(message):
-                claimed_messages.append(message)
     except deps.delivery_exceptions as exc:
         deps.log(
             f"history_poll_channel_failed label={label} channel={channel_id} "
@@ -127,20 +125,21 @@ async def poll_history_channel(
     latest_watermark = _latest_message_watermark(history_messages)
     if not is_primed:
         deps.mark_primed_channel(int(channel_id))
-        eligible_messages = _messages_after_watermark(claimed_messages, poll_started_watermark)
+        eligible_messages = _messages_after_watermark(history_messages, poll_started_watermark)
         prime_watermark = poll_started_watermark
-        if latest_watermark is not None:
-            prime_watermark = max(prime_watermark, latest_watermark)
         deps.set_channel_watermark(int(channel_id), prime_watermark)
+        claimed_count = await _process_eligible_messages(
+            eligible_messages,
+            channel_id,
+            deps=deps,
+        )
         deps.log(
             f"history_poll_primed label={label} channel={channel_id} "
             + f"source={source} fetched_messages={len(history_messages)} "
-            + f"claimed_messages={len(claimed_messages)} "
+            + f"claimed_messages={claimed_count} "
             + f"eligible_messages={len(eligible_messages)} "
-            + f"discarded_messages={len(claimed_messages) - len(eligible_messages)}"
+            + f"discarded_messages={len(history_messages) - len(eligible_messages)}"
         )
-        for message in eligible_messages:
-            await deps.process_history_poll_message(message, channel_id)
         return
 
     watermark = deps.get_channel_watermark(int(channel_id))
@@ -153,15 +152,34 @@ async def poll_history_channel(
             f"history_poll_reprimed label={label} channel={channel_id} "
             + f"source={source} reason=missing_watermark "
             + f"fetched_messages={len(history_messages)} "
-            + f"claimed_messages={len(claimed_messages)} "
-            + f"discarded_messages={len(claimed_messages)}"
+            + "claimed_messages=0 "
+            + f"discarded_messages={len(history_messages)}"
         )
         return
-    if latest_watermark is not None and latest_watermark > watermark:
-        deps.set_channel_watermark(int(channel_id), latest_watermark)
-    eligible_messages = _messages_after_watermark(claimed_messages, watermark)
-    for message in eligible_messages:
+    eligible_messages = _messages_after_watermark(history_messages, watermark)
+    _ = await _process_eligible_messages(
+        eligible_messages,
+        channel_id,
+        deps=deps,
+    )
+
+
+async def _process_eligible_messages(
+    messages: list[MessageT],
+    channel_id: int,
+    *,
+    deps: PollHistoryChannelDeps[MessageT],
+) -> int:
+    claimed_count = 0
+    for message in messages:
+        if not deps.claim_message(message):
+            continue
+        claimed_count += 1
         await deps.process_history_poll_message(message, channel_id)
+        watermark = message_watermark(message)
+        if watermark is not None:
+            deps.set_channel_watermark(int(channel_id), watermark)
+    return claimed_count
 
 
 def _latest_message_watermark(messages: list[MessageT]) -> HistoryMessageWatermark | None:
@@ -230,6 +248,10 @@ async def history_poll_loop(deps: HistoryPollLoopDeps) -> None:
             raise
         except deps.delivery_exceptions:
             deps.log("history_poll_cycle_failed\n" + deps.format_traceback())
+        except Exception as exc:
+            if not discord_message_processing.failure_is_no_replay(exc):
+                raise
+            deps.log("history_poll_no_replay_message_failed\n" + deps.format_traceback())
         await deps.sleep(deps.poll_seconds)
 
 

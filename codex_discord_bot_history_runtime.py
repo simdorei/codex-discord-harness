@@ -9,6 +9,7 @@ from typing import Protocol, cast, TypeAlias
 
 import codex_discord_diagnostics_history as discord_diagnostics_history
 import codex_discord_history_poll as discord_history_poll
+import codex_discord_message_processing as discord_message_processing
 ModuleValue: TypeAlias = object
 
 
@@ -42,6 +43,7 @@ class BotHistoryRuntimeDeps:
     delivery_exceptions: tuple[type[BaseException], ...]
     get_targets: discord_history_poll.HistoryPollTargetsGetter
     claim_message: Callable[[HistoryPollOwner, discord_diagnostics_history.DiscordHistoryMessage], bool]
+    release_message: Callable[[HistoryPollOwner, discord_diagnostics_history.DiscordHistoryMessage], None]
     mark_processed: Callable[[HistoryPollOwner, discord_diagnostics_history.DiscordHistoryMessage], None]
     process_history_poll_message: Callable[
         [HistoryPollOwner, discord_diagnostics_history.DiscordHistoryMessage, int],
@@ -127,6 +129,7 @@ class BotHistoryRuntime:
         channel_id: int,
     ) -> None:
         if not discord_history_poll.should_process_history_poll_message(message):
+            self.deps.release_message(owner, message)
             return
         self.deps.log(
             discord_history_poll.format_history_poll_message_log(
@@ -135,8 +138,19 @@ class BotHistoryRuntime:
                 format_log_text_len=self.deps.format_log_text_len,
             )
         )
-        await owner.process_discord_message(message, source="history_poll")
-        self.deps.mark_processed(owner, message)
+        completed = False
+        no_replay_failure = False
+        try:
+            await owner.process_discord_message(message, source="history_poll")
+            completed = True
+        except BaseException as exc:
+            no_replay_failure = discord_message_processing.failure_is_no_replay(exc)
+            raise
+        finally:
+            if completed or no_replay_failure:
+                self.deps.mark_processed(owner, message)
+            else:
+                self.deps.release_message(owner, message)
 
 
 def _history_poll_task(owner: HistoryPollOwner) -> asyncio.Task[ModuleValue] | None:

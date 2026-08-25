@@ -8,10 +8,136 @@ import sqlite3
 from threading import Event
 
 import codex_discord_store as store
+from codex_discord_store_inbox import DeferredInboxState
 from codex_discord_store_queue import QueueJobState, StoredQueueJob
 
 
 class QueueStoreTests(unittest.TestCase):
+    def test_review_held_job_does_not_count_as_executable_external_work(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            _ = store.claim_deferred_discord_message(
+                db_path,
+                message_id=901,
+                target_thread_id="thread-1",
+                channel_id=222,
+                owner_user_id=7,
+                prompt="review me",
+                source="gateway",
+                normalization_version=1,
+            )
+            promotion = store.promote_deferred_discord_messages(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+                lease_owner="test",
+            )
+            attempt = store.begin_queue_execution_attempt(
+                db_path,
+                promotion.jobs[0].job_id,
+                app_server_generation=4,
+                baseline_turn_ids=(),
+            )
+            before_review = store.list_executable_queue_jobs(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+            )
+            _ = store.mark_queue_attempt_needs_review(
+                db_path,
+                attempt.attempt_id,
+                last_error="operator review required",
+            )
+            inbox = store.list_deferred_discord_messages(db_path)
+            after_review = store.list_executable_queue_jobs(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+            )
+
+            executable = store.has_executable_queue_work(db_path)
+            target_executable = store.has_executable_queue_jobs_for_target_channel(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+            )
+
+        self.assertFalse(executable)
+        self.assertFalse(target_executable)
+        self.assertEqual([job.job_id for job in before_review], [promotion.jobs[0].job_id])
+        self.assertEqual(after_review, [])
+        self.assertIs(inbox[0].state, DeferredInboxState.NEEDS_REVIEW)
+
+    def test_flush_cancels_promoted_inbox_rows_in_the_same_transaction(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            for message_id in (901, 902):
+                _ = store.claim_deferred_discord_message(
+                    db_path,
+                    message_id=message_id,
+                    target_thread_id="thread-1",
+                    channel_id=222,
+                    owner_user_id=7,
+                    prompt=f"request {message_id}",
+                    source="gateway",
+                    normalization_version=1,
+                )
+            promoted = store.promote_deferred_discord_messages(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+                lease_owner="test",
+            )
+
+            deleted = store.flush_queue_jobs(
+                db_path,
+                "thread-1",
+                app_server_generation=4,
+            )
+            inbox = store.list_deferred_discord_messages(db_path)
+
+        self.assertEqual(len(promoted.jobs), 2)
+        self.assertEqual(len(deleted), 2)
+        self.assertTrue(all(row.state is DeferredInboxState.FAILED for row in inbox))
+
+    def test_retract_cancels_its_promoted_inbox_row(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            _ = store.claim_deferred_discord_message(
+                db_path,
+                message_id=901,
+                target_thread_id="thread-1",
+                channel_id=222,
+                owner_user_id=7,
+                prompt="retract me",
+                source="gateway",
+                normalization_version=1,
+            )
+            promoted = store.promote_deferred_discord_messages(
+                db_path,
+                target_thread_id="thread-1",
+                channel_id=222,
+                app_server_generation=4,
+                lease_owner="test",
+            )
+
+            retracted = store.retract_queue_job(
+                db_path,
+                "thread-1",
+                channel_id=222,
+                owner_user_id=7,
+            )
+            inbox = store.list_deferred_discord_messages(db_path)
+
+        self.assertEqual(len(promoted.jobs), 1)
+        self.assertIsNotNone(retracted)
+        self.assertIs(inbox[0].state, DeferredInboxState.CANCELLED)
+
     def test_queue_job_survives_reopen_and_duplicate_discord_message_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"

@@ -14,6 +14,7 @@ class QueueAttempt:
     thread_id: str
     turn_id: str
     app_server_generation: int
+    attempt_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,10 @@ class QueueProcessResult(StrEnum):
 
 
 class QueueTurnOwnershipAmbiguousError(RuntimeError):
+    pass
+
+
+class QueueAttemptNeedsReviewError(RuntimeError):
     pass
 
 
@@ -50,6 +55,12 @@ class QueueGenerationExpiredError(RuntimeError):
         self.expected_generation = expected_generation
         self.current_generation = current_generation
         self.healthy = healthy
+
+
+@dataclass(frozen=True, slots=True)
+class QueueGenerationRecovery:
+    jobs: tuple[QueueJob, ...]
+    needs_review_job_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +147,15 @@ async def process_queue_job(
             continue
 
         deleted_jobs = await deps.flush_jobs(job, target_thread_id)
-        await deps.report_batch_failure(job, reason, deleted_jobs)
+        job["terminal"] = True
+        try:
+            await deps.report_batch_failure(job, reason, deleted_jobs)
+        except Exception as exc:  # noqa: BLE001 - execution is terminal; log notification failure separately.
+            deps.log(
+                "queue_batch_failure_notice_failed "
+                + f"job={job.get('job_id') or '-'} error_type={type(exc).__name__} "
+                + f"error={str(exc)[:300]}"
+            )
         deps.log(
             "queue_batch_flushed "
             + f"job={job.get('job_id') or '-'} target={attempt.thread_id} "

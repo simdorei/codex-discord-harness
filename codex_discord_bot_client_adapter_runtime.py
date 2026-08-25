@@ -209,7 +209,7 @@ class BotClientAdapterRuntime(BotClientAdapterBase):
 
             async def on_message(self, message: ModuleValue) -> None:
                 def claim_message(message: ModuleValue) -> bool:
-                    return bool(runtime._module_func("claim_discord_message")(self, message))
+                    return bool(runtime._module_func("claim_gateway_discord_message")(self, message))
 
                 def get_message_id(message: ModuleValue) -> discord_message_gate.DiscordIdValue:
                     return cast(discord_message_gate.DiscordIdValue, runtime._module_func("get_discord_message_id")(message))
@@ -220,6 +220,9 @@ class BotClientAdapterRuntime(BotClientAdapterBase):
                 def mark_processed(message: ModuleValue) -> None:
                     _ = runtime._module_func("mark_discord_message_processed")(self, message)
 
+                def release_message(message: ModuleValue) -> None:
+                    _ = runtime._module_func("release_gateway_discord_message")(self, message)
+
                 await discord_message_gate.process_gateway_message(
                     message,
                     deps=discord_message_gate.GatewayMessageDeps(
@@ -227,6 +230,7 @@ class BotClientAdapterRuntime(BotClientAdapterBase):
                         claim_message=claim_message,
                         get_message_id=get_message_id,
                         process_message=process_message,
+                        release_message=release_message,
                         mark_processed=mark_processed,
                         log=runtime._log,
                     ),

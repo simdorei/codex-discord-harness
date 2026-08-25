@@ -15,7 +15,9 @@ import codex_discord_bot_prompt_wiring_runtime as discord_bot_prompt_wiring_runt
 import codex_discord_bot_service_wiring_runtime as discord_bot_service_wiring_runtime
 import codex_discord_bot_session_runner_wiring_runtime as discord_bot_session_runner_wiring_runtime
 import codex_discord_diagnostics_history as discord_diagnostics_history
+import codex_discord_stop_marker as discord_stop_marker
 import codex_discord_steering as discord_steering
+from codex_discord_store_schema import StoreSchemaVersionError
 
 ModuleValue: TypeAlias = object
 
@@ -46,6 +48,7 @@ class BotRuntimeWiringRuntime:
                 ),
                 get_targets=self._get_startup_probe_targets,
                 claim_message=self._claim_discord_message,
+                release_message=self._release_discord_message,
                 mark_processed=self._mark_discord_message_processed,
                 process_history_poll_message=self._process_history_poll_message,
                 format_log_text_len=cast(Callable[[str | None], int | str], self._module_func("format_log_text_len")),
@@ -53,6 +56,13 @@ class BotRuntimeWiringRuntime:
             )
         )
         self._set("HISTORY_RUNTIME", runtime)
+
+    def _handle_history_fatal_error(self, _error: BaseException) -> None:
+        exit_bot_process = cast(
+            discord_stop_marker.ExitBotProcess,
+            self._module_func("exit_bot_process"),
+        )
+        exit_bot_process(1, reason="store_schema_runtime_stale")
 
     def _install_prompt_wiring_runtime(self) -> None:
         runtime = discord_bot_prompt_wiring_runtime.BotPromptWiringRuntime(module=self.module)
@@ -98,17 +108,38 @@ class BotRuntimeWiringRuntime:
         *,
         limit: int = 50,
     ) -> list[tuple[str, int]]:
-        return cast(
-            Callable[..., list[tuple[str, int]]],
-            self._module_func("get_startup_probe_targets"),
-        )(allowed_channel_ids, startup_channel_id, limit=limit)
+        try:
+            return cast(
+                Callable[..., list[tuple[str, int]]],
+                self._module_func("get_startup_probe_targets"),
+            )(allowed_channel_ids, startup_channel_id, limit=limit)
+        except StoreSchemaVersionError as exc:
+            self._log(
+                "history_poll_fatal_error "
+                + f"error_type={type(exc).__name__} error={str(exc)[:300]}"
+            )
+            self._handle_history_fatal_error(exc)
+            return []
 
     def _claim_discord_message(
         self,
         owner: discord_bot_history_runtime.HistoryPollOwner,
         message: discord_diagnostics_history.DiscordHistoryMessage,
     ) -> bool:
-        return cast(Callable[..., bool], self._module_func("claim_discord_message"))(owner, message)
+        return cast(Callable[..., bool], self._module_func("claim_gateway_discord_message"))(
+            owner,
+            message,
+        )
+
+    def _release_discord_message(
+        self,
+        owner: discord_bot_history_runtime.HistoryPollOwner,
+        message: discord_diagnostics_history.DiscordHistoryMessage,
+    ) -> None:
+        _ = cast(Callable[..., ModuleValue], self._module_func("release_gateway_discord_message"))(
+            owner,
+            message,
+        )
 
     def _mark_discord_message_processed(
         self,

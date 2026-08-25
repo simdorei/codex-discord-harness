@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 import codex_app_server_transport as app_server_transport
+from codex_app_server_transport_attempt_context import get_turn_start_attempt_callbacks
 from codex_app_server_transport_lifecycle import AppServerLifecycleSnapshot
 from codex_app_server_transport_turn_outcomes import (
     TurnCompletion,
@@ -26,6 +27,19 @@ import codex_discord_runtime as discord_runtime
 import codex_discord_store as store
 
 from tests.test_codex_discord_bot import FakeTarget
+
+
+def record_fake_turn_start_boundary(
+    expected_generation: int | None,
+    request_id: str,
+) -> None:
+    if expected_generation is None:
+        raise AssertionError("queue test did not receive an app-server generation")
+    callbacks = get_turn_start_attempt_callbacks()
+    if callbacks is None:
+        raise AssertionError("queue test did not bind turn/start attempt callbacks")
+    callbacks.before_write(request_id, 4242, expected_generation)
+    callbacks.after_write(request_id, 4242, expected_generation)
 
 
 async def cleanup_runner(target_thread_id: str) -> None:
@@ -64,6 +78,7 @@ class DiscordRunnerQueueTurnIntegrationTests(unittest.IsolatedAsyncioTestCase):
         ) -> prompt_delivery_prepare.PromptDeliveryPreparationResult:
             _ = (queued, source_message, expected_app_server_generation)
             calls.append((channel, prompt, target_thread_id, ack_sent))
+            record_fake_turn_start_boundary(expected_app_server_generation, "test-request-1")
             return prompt_delivery_prepare.PromptDeliveryPreparationResult(
                 handled=True,
                 target_thread_id=target_thread_id,
@@ -170,6 +185,10 @@ class DiscordRunnerQueueTurnIntegrationTests(unittest.IsolatedAsyncioTestCase):
             _ = channel, queued, ack_sent, source_message, expected_app_server_generation
             calls.append(prompt)
             turn_id = f"turn-{len(calls)}"
+            record_fake_turn_start_boundary(
+                expected_app_server_generation,
+                f"test-request-{len(calls)}",
+            )
             return prompt_delivery_prepare.PromptDeliveryPreparationResult(
                 handled=True,
                 target_thread_id=target_thread_id,

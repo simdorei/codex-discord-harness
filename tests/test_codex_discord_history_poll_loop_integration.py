@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 import codex_discord_bot as bot
+from codex_discord_store_schema import StoreSchemaVersionError
 
 
 class HistoryPollTargetsUnavailableError(RuntimeError):
@@ -48,6 +49,45 @@ def _raise_type_error(message: str) -> Never:
 
 
 class DiscordHistoryPollLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_history_poll_loop_restarts_process_for_newer_store_schema(self) -> None:
+        exit_calls: list[tuple[int, str]] = []
+
+        def fail_with_newer_schema(
+            allowed_channel_ids: set[int],
+            startup_channel_id: int | None,
+            *,
+            limit: int = 50,
+        ) -> list[tuple[str, int]]:
+            _ = (allowed_channel_ids, startup_channel_id, limit)
+            raise StoreSchemaVersionError(
+                "Store schema version 5 is newer than supported version 4."
+            )
+
+        def capture_exit(exit_code: int, *, reason: str) -> None:
+            exit_calls.append((exit_code, reason))
+
+        async def fake_sleep(seconds: float) -> None:
+            _ = seconds
+
+        async def fake_poll(label: str, channel_id: int) -> None:
+            _ = (label, channel_id)
+
+        client = HistoryPollClient(fake_poll, close_after_checks=1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "discord-smoke.log"
+            with (
+                mock.patch.object(bot, "get_startup_probe_targets", fail_with_newer_schema),
+                mock.patch.object(bot, "exit_bot_process", capture_exit),
+                mock.patch("codex_discord_bot.asyncio.sleep", fake_sleep),
+                mock.patch.dict(os.environ, {"CODEX_DISCORD_LOG_PATH": str(log_path)}),
+            ):
+                await _history_poll_loop()(client)
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(exit_calls, [(1, "store_schema_runtime_stale")])
+        self.assertIn("history_poll_fatal_error", log_text)
+
     async def test_history_poll_loop_continues_after_cycle_error(self) -> None:
         calls: list[str] = []
         sleeps = 0

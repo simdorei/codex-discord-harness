@@ -52,6 +52,7 @@ class BotSessionRunnerWiringRuntime:
         self._set("get_thread_runner", runner_runtime.get_thread_runner)
         self._set("wait_for_codex_thread_idle", runner_runtime.wait_for_codex_thread_idle)
         self._set("enqueue_thread_ask", runner_runtime.enqueue_thread_ask)
+        self._set("defer_plain_ask", runner_runtime.defer_plain_ask)
         self._set("retract_thread_ask", runner_runtime.retract_thread_ask)
         self._set("report_thread_runner_job_failed", runner_runtime.report_thread_runner_job_failed)
         self._set("thread_runner_loop", runner_runtime.thread_runner_loop)

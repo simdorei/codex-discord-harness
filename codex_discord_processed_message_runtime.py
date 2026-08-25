@@ -71,6 +71,47 @@ class ProcessedMessageRuntime:
         )
         return True
 
+    def claim_gateway_discord_message(
+        self,
+        owner: SeenCacheOwner,
+        message: DiscordMessageIdInput,
+    ) -> bool:
+        message_id = self.get_message_id_func(message)
+        if message_id is None:
+            return True
+        processed = discord_seen_cache.get_or_create_seen_map(owner, "_processed_message_ids")
+        if processed is None:
+            return True
+        if message_id in processed:
+            return False
+        try:
+            if discord_store.is_processed_discord_message_id(self.get_db_path(), message_id):
+                return False
+        except (OSError, sqlite3.Error) as exc:
+            self.log(
+                f"processed_message_lookup_failed message={message_id} "
+                + f"error_type={type(exc).__name__}"
+            )
+            return False
+        discord_seen_cache.remember_limited_seen_key(
+            processed,
+            message_id,
+            limit=self.processed_message_id_limit,
+        )
+        return True
+
+    def release_gateway_discord_message(
+        self,
+        owner: SeenCacheOwner,
+        message: DiscordMessageIdInput,
+    ) -> None:
+        message_id = self.get_message_id_func(message)
+        if message_id is None:
+            return
+        processed = getattr(owner, "_processed_message_ids", None)
+        if isinstance(processed, dict):
+            _ = processed.pop(message_id, None)
+
     def mark_discord_message_processed(self, owner: SeenCacheOwner, message: DiscordMessageIdInput) -> None:
         message_id = self.get_message_id_func(message)
         if message_id is None:

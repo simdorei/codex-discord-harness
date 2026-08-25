@@ -10,6 +10,8 @@ from typing import TypeAlias
 
 from codex_discord_queue_processor import (
     QueueGenerationExpiredError,
+    QueueGenerationRecovery,
+    QueueAttemptNeedsReviewError,
     QueueProcessResult,
     QueueTurnCoordinatorDeps,
     QueueTurnOwnershipAmbiguousError,
@@ -41,6 +43,10 @@ SendTextFunc: TypeAlias = Callable[..., Awaitable[int]]
 LogFunc: TypeAlias = Callable[[str], None]
 WaitForIdleFunc: TypeAlias = Callable[[str | None], Awaitable[BusyState]]
 ReportJobFailedFunc: TypeAlias = Callable[[QueueJob, str | None], Awaitable[None]]
+RecoverGenerationExpiredFunc: TypeAlias = Callable[
+    [tuple[QueueJob, ...]],
+    Awaitable[QueueGenerationRecovery],
+]
 
 __all__ = (
     "THREAD_RUNNERS",
@@ -118,6 +124,7 @@ async def thread_runner_loop(
     get_busy_state_func: GetBusyStateFunc,
     wait_for_idle_func: WaitForIdleFunc,
     queue_coordinator_deps: QueueTurnCoordinatorDeps,
+    recover_generation_expired_func: RecoverGenerationExpiredFunc,
     report_job_failed_func: ReportJobFailedFunc,
     send_text_func: SendTextFunc,
     log_func: LogFunc,
@@ -186,21 +193,44 @@ async def thread_runner_loop(
                 if result is QueueProcessResult.FLUSHED:
                     _drain_pending_queue(queue, runner)
         except QueueGenerationExpiredError as exc:
-            current_generation = exc.current_generation if exc.healthy else None
-            discarded = _drain_generation_expired_queue(
-                queue,
-                runner,
-                current_generation=current_generation,
-            )
+            drained = _drain_durable_queue_for_generation_recovery(queue, runner)
+            recovery = await recover_generation_expired_func((job_for_failure, *drained))
+            for recovered_job in recovery.jobs:
+                queue.put_nowait(recovered_job)
+                recovered_job_id = str(recovered_job.get("job_id") or "")
+                if recovered_job_id:
+                    runner.setdefault("queued_job_ids", set()).add(recovered_job_id)
             log_func(
-                f"queue_generation_discarded target={target_thread_id or '-'} "
+                f"queue_generation_recovered target={target_thread_id or '-'} "
                 f"expected={exc.expected_generation} "
-                f"current={current_generation if current_generation is not None else 'unhealthy'} "
-                f"memory_discarded={discarded}"
+                f"observed={exc.current_generation if exc.healthy else 'unhealthy'} "
+                f"memory_drained={len(drained) + 1} requeued={len(recovery.jobs)} "
+                f"needs_review={len(recovery.needs_review_job_ids)}"
             )
+            if recovery.needs_review_job_ids:
+                await report_job_failed_func(job_for_failure, target_thread_id)
+        except QueueAttemptNeedsReviewError as exc:
+            log_func(
+                f"queue_attempt_needs_review target={target_thread_id or '-'} "
+                + f"job={job_for_failure.get('job_id') or '-'} error={str(exc)[:300]}"
+            )
+            await report_job_failed_func(job_for_failure, target_thread_id)
         except QueueTurnOwnershipAmbiguousError as exc:
             deleted_jobs = await queue_coordinator_deps.flush_jobs(job_for_failure, target_thread_id)
-            await queue_coordinator_deps.report_batch_failure(job_for_failure, str(exc), deleted_jobs)
+            job_for_failure["terminal"] = True
+            try:
+                await queue_coordinator_deps.report_batch_failure(
+                    job_for_failure,
+                    str(exc),
+                    deleted_jobs,
+                )
+            except Exception as report_exc:  # noqa: BLE001 - never restart terminal execution for notice failure.
+                log_func(
+                    "queue_batch_failure_notice_failed "
+                    + f"job={job_for_failure.get('job_id') or '-'} "
+                    + f"error_type={type(report_exc).__name__} "
+                    + f"error={str(report_exc)[:300]}"
+                )
             _drain_pending_queue(queue, runner)
             log_func(
                 f"queue_batch_flushed_ambiguous target={target_thread_id or '-'} "
@@ -209,7 +239,7 @@ async def thread_runner_loop(
         except Exception:  # noqa: BROAD_EXCEPT_OK
             log_func("thread_runner_job_failed\n" + traceback.format_exc())
             await report_job_failed_func(job_for_failure, target_thread_id)
-            if job_for_failure.get("job_id"):
+            if job_for_failure.get("job_id") and not job_for_failure.get("terminal"):
                 await asyncio.sleep(2.0)
                 await queue.put(job_for_failure)
                 runner.setdefault("queued_job_ids", set()).add(str(job_for_failure.get("job_id") or ""))
@@ -235,15 +265,13 @@ def _drain_pending_queue(
         queue.task_done()
 
 
-def _drain_generation_expired_queue(
+def _drain_durable_queue_for_generation_recovery(
     queue: asyncio.Queue[QueueItem],
     runner: ThreadRunner,
-    *,
-    current_generation: int | None,
-) -> int:
+) -> list[QueueJob]:
     queued_job_ids = runner.setdefault("queued_job_ids", set())
     retained: list[QueueItem] = []
-    discarded = 0
+    drained: list[QueueJob] = []
     while True:
         try:
             pending = queue.get_nowait()
@@ -253,14 +281,12 @@ def _drain_generation_expired_queue(
         job_id = str(pending.get("job_id") or "")
         if job_id:
             queued_job_ids.discard(job_id)
-        generation = int(pending.get("app_server_generation") or 0)
-        if current_generation is not None and generation == current_generation:
-            retained.append(pending)
+            drained.append(pending)
         else:
-            discarded += 1
+            retained.append(pending)
     for pending in retained:
         queue.put_nowait(pending)
         job_id = str(pending.get("job_id") or "")
         if job_id:
             queued_job_ids.add(job_id)
-    return discarded
+    return drained

@@ -64,6 +64,7 @@ class QueueEnqueueResult:
 class QueueGenerationAdoption:
     jobs: tuple[StoredQueueJob, ...]
     adopted_count: int
+    needs_review_job_ids: tuple[str, ...]
 
 
 class QueueJobNotFoundError(LookupError):
@@ -203,28 +204,110 @@ def list_queue_jobs(
     return [_record(row) for row in rows]
 
 
+def list_executable_queue_jobs(
+    db_path: Path,
+    *,
+    target_thread_id: str,
+    channel_id: int,
+    app_server_generation: int,
+) -> list[StoredQueueJob]:
+    with _connect(db_path) as conn:
+        rows = cast(
+            list[SQLiteRow],
+            conn.execute(
+                f"SELECT {', '.join(f'q.{column.strip()}' for column in QUEUE_JOB_COLUMNS.split(','))} "
+                "FROM codex_turn_queue q LEFT JOIN codex_turn_attempts a ON a.attempt_id = ("
+                "SELECT latest.attempt_id FROM codex_turn_attempts latest "
+                "WHERE latest.job_id = q.job_id ORDER BY latest.attempt_number DESC LIMIT 1) "
+                "WHERE q.target_thread_id = ? AND q.channel_id = ? "
+                "AND q.app_server_generation = ? "
+                "AND (a.attempt_id IS NULL OR a.state IN ('exec_pending', 'running')) "
+                "ORDER BY q.created_at, q.job_id",
+                (target_thread_id, channel_id, app_server_generation),
+            ).fetchall(),
+        )
+    return [_record(row) for row in rows]
+
+
+def has_queue_jobs_for_target_channel(
+    db_path: Path,
+    *,
+    target_thread_id: str,
+    channel_id: int,
+    app_server_generation: int | None = None,
+) -> bool:
+    clauses = ["target_thread_id = ?", "channel_id = ?"]
+    params: list[SQLiteCell] = [target_thread_id, channel_id]
+    if app_server_generation is not None:
+        clauses.append("app_server_generation = ?")
+        params.append(app_server_generation)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            f"SELECT 1 FROM codex_turn_queue WHERE {' AND '.join(clauses)} LIMIT 1",
+            params,
+        ).fetchone()
+    return row is not None
+
+
+def has_executable_queue_jobs_for_target_channel(
+    db_path: Path,
+    *,
+    target_thread_id: str,
+    channel_id: int,
+    app_server_generation: int | None = None,
+) -> bool:
+    clauses = ["q.target_thread_id = ?", "q.channel_id = ?"]
+    params: list[SQLiteCell] = [target_thread_id, channel_id]
+    if app_server_generation is not None:
+        clauses.append("q.app_server_generation = ?")
+        params.append(app_server_generation)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM codex_turn_queue q LEFT JOIN codex_turn_attempts a "
+            "ON a.attempt_id = (SELECT latest.attempt_id FROM codex_turn_attempts latest "
+            "WHERE latest.job_id = q.job_id ORDER BY latest.attempt_number DESC LIMIT 1) "
+            f"WHERE {' AND '.join(clauses)} "
+            "AND (a.attempt_id IS NULL OR a.state IN ('exec_pending', 'running')) LIMIT 1",
+            params,
+        ).fetchone()
+    return row is not None
+
+
+def has_executable_queue_work(db_path: Path) -> bool:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM codex_turn_queue q LEFT JOIN codex_turn_attempts a "
+            "ON a.attempt_id = (SELECT latest.attempt_id FROM codex_turn_attempts latest "
+            "WHERE latest.job_id = q.job_id ORDER BY latest.attempt_number DESC LIMIT 1) "
+            "WHERE a.attempt_id IS NULL OR a.state != 'needs_review' LIMIT 1"
+        ).fetchone()
+    return row is not None
+
+
 def adopt_queue_jobs_generation(
     db_path: Path,
     app_server_generation: int,
 ) -> QueueGenerationAdoption:
-    """Atomically bind persisted jobs to the current bot-owned app-server."""
+    from codex_discord_store_attempts import reconcile_queue_jobs_for_generation
+
+    reconciliation = reconcile_queue_jobs_for_generation(
+        db_path,
+        app_server_generation,
+    )
     with _connect(db_path) as conn:
-        _ = conn.execute("BEGIN IMMEDIATE")
-        adopted = conn.execute(
-            "UPDATE codex_turn_queue SET app_server_generation = ? "
-            "WHERE app_server_generation != ?",
-            (app_server_generation, app_server_generation),
-        ).rowcount
         rows = cast(
             list[SQLiteRow],
             conn.execute(
                 f"SELECT {QUEUE_JOB_COLUMNS} FROM codex_turn_queue "
-                "ORDER BY created_at, job_id"
+                "WHERE app_server_generation = ? "
+                "ORDER BY created_at, job_id",
+                (app_server_generation,),
             ).fetchall(),
         )
     return QueueGenerationAdoption(
         jobs=tuple(_record(row) for row in rows),
-        adopted_count=max(0, adopted),
+        adopted_count=len(reconciliation.adopted_job_ids),
+        needs_review_job_ids=reconciliation.needs_review_job_ids,
     )
 
 
@@ -347,6 +430,12 @@ def mark_queue_job_running(
 
 def complete_queue_job(db_path: Path, job_id: str) -> bool:
     with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
+        _ = conn.execute(
+            "UPDATE deferred_discord_inbox SET state = 'completed', updated_at = ? "
+            "WHERE queue_job_id = ? AND state = 'promoted'",
+            (time.time(), job_id),
+        )
         result = conn.execute("DELETE FROM codex_turn_queue WHERE job_id = ?", (job_id,))
         return result.rowcount == 1
 
@@ -358,6 +447,7 @@ def flush_queue_jobs(
     app_server_generation: int,
 ) -> list[StoredQueueJob]:
     with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
         rows = cast(
             list[SQLiteRow],
             conn.execute(
@@ -366,6 +456,13 @@ def flush_queue_jobs(
                 "ORDER BY created_at, job_id",
                 (target_thread_id, app_server_generation),
             ).fetchall(),
+        )
+        _ = conn.execute(
+            "UPDATE deferred_discord_inbox SET state = 'failed', updated_at = ? "
+            "WHERE state = 'promoted' AND queue_job_id IN ("
+            "SELECT job_id FROM codex_turn_queue "
+            "WHERE target_thread_id = ? AND app_server_generation = ?)",
+            (time.time(), target_thread_id, app_server_generation),
         )
         _ = conn.execute(
             "DELETE FROM codex_turn_queue "
@@ -392,6 +489,7 @@ def retract_queue_job(
         params.append(owner_user_id)
     where = " AND ".join(clauses)
     with _connect(db_path) as conn:
+        _ = conn.execute("BEGIN IMMEDIATE")
         row = cast(
             SQLiteRow | None,
             conn.execute(
@@ -403,5 +501,10 @@ def retract_queue_job(
         if row is None:
             return None
         job = _record(row)
+        _ = conn.execute(
+            "UPDATE deferred_discord_inbox SET state = 'cancelled', updated_at = ? "
+            "WHERE queue_job_id = ? AND state = 'promoted'",
+            (time.time(), job.job_id),
+        )
         _ = conn.execute("DELETE FROM codex_turn_queue WHERE job_id = ?", (job.job_id,))
         return job

@@ -69,6 +69,7 @@ class BotPlainAskAdapterRuntime(BotPlainAskAdapterStateMixin):
                     self._module_func("format_log_text_len_as_text"),
                 ),
                 log=cast(Callable[[str], None], self._module_func("log_line")),
+                defer_plain_ask=self.defer_plain_ask,
             )
         )
 
@@ -139,6 +140,29 @@ class BotPlainAskAdapterRuntime(BotPlainAskAdapterStateMixin):
             queued=queued,
             ack_sent=ack_sent,
             source_message=source_message,
+        )
+
+    async def defer_plain_ask(
+        self,
+        channel: MessageableChannel,
+        prompt: str,
+        target_thread_id: str,
+        *,
+        source_message: BusyChoiceMessage,
+    ) -> bool:
+        return bool(
+            await cast(
+                discord_bot_plain_ask_types.DeferredPlainAskEnqueuer[
+                    MessageableChannel,
+                    BusyChoiceMessage,
+                ],
+                self._module_func("defer_plain_ask"),
+            )(
+                channel,
+                prompt,
+                target_thread_id,
+                source_message=source_message,
+            )
         )
 
     async def run_prompt_and_send(

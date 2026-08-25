@@ -125,8 +125,21 @@ class BotMessageAdapterRuntime:
         content: str,
         *,
         target_thread_id: str | None = None,
+        replay_eligible: bool = False,
     ) -> None:
-        await cast(discord_message_dispatch.PlainAskHandler, self._module_func("handle_plain_ask"))(
+        handler = cast(
+            discord_message_dispatch.PlainAskHandler,
+            self._module_func("handle_plain_ask"),
+        )
+        if replay_eligible:
+            await handler(
+                message,
+                content,
+                target_thread_id=target_thread_id,
+                replay_eligible=True,
+            )
+            return
+        await handler(
             message,
             content,
             target_thread_id=target_thread_id,

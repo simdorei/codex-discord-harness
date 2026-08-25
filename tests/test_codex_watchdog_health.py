@@ -13,6 +13,11 @@ WATCHDOG = ROOT / "codex-discord-watchdog.ps1"
 @unittest.skipUnless(os.name == "nt", "PowerShell watchdog tests run on Windows")
 @unittest.skipUnless(shutil.which("powershell.exe"), "powershell.exe is required")
 class WatchdogHealthTests(unittest.TestCase):
+    def test_global_low_memory_restart_is_disabled_by_default(self) -> None:
+        source = WATCHDOG.read_text(encoding="utf-8")
+
+        self.assertRegex(source, r"\[int\]\$HealthFreeMemoryMb\s*=\s*0(?:\D|$)")
+
     def run_health_probe(
         self,
         wmi_cpu: float,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from typing import Final, final
 
@@ -14,6 +15,7 @@ from codex_app_server_transport_replies import CodexAppServerTransportError
 
 RetryFunc = Callable[[int], ChildCleanupRecycleOutcome]
 RestartRetryFunc = Callable[[int], bool]
+RestartDeadlineFunc = Callable[[int], float | None]
 LogFunc = Callable[[str], None]
 _INITIAL_RETRY_SECONDS: Final = 0.25
 _MAX_RETRY_SECONDS: Final = 5.0
@@ -23,6 +25,17 @@ _SETTLED_STATUSES: Final = frozenset(
         ChildCleanupRecycleStatus.NO_CLEANUP_DEBT,
     )
 )
+
+
+def restart_retry_wait_seconds(
+    backoff_seconds: float,
+    *,
+    deadline: float | None,
+    now: float,
+) -> float:
+    if deadline is None:
+        return backoff_seconds
+    return min(backoff_seconds, max(0.0, deadline - now))
 
 
 @final
@@ -104,9 +117,18 @@ class ChildCleanupRetryCoordinator:
 class RestartPendingRetryCoordinator:
     """Retry a quarantined generation restart until it succeeds or is replaced."""
 
-    def __init__(self, *, retry: RestartRetryFunc, log: LogFunc) -> None:
+    def __init__(
+        self,
+        *,
+        retry: RestartRetryFunc,
+        deadline: RestartDeadlineFunc,
+        log: LogFunc,
+        monotonic_func: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._retry = retry
+        self._deadline = deadline
         self._log = log
+        self._monotonic_func = monotonic_func
         self._lock = threading.Lock()
         self._wakeup = threading.Event()
         self._requested_generation: int | None = None
@@ -164,7 +186,13 @@ class RestartPendingRetryCoordinator:
                 self._settle(generation)
                 delay = _INITIAL_RETRY_SECONDS
                 continue
-            _ = self._wakeup.wait(timeout=delay)
+            deadline = self._deadline(generation)
+            wait_seconds = restart_retry_wait_seconds(
+                delay,
+                deadline=deadline,
+                now=self._monotonic_func(),
+            )
+            _ = self._wakeup.wait(timeout=wait_seconds)
             self._wakeup.clear()
             delay = min(delay * 2.0, _MAX_RETRY_SECONDS)
 

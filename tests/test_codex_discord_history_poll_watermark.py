@@ -19,12 +19,15 @@ class Message:
 class HistoryChannel:
     messages: list[Message]
     events: list[str]
+    failure: RuntimeError | None = None
 
     def history(self, *, limit: int) -> AsyncIterator[Message]:
         async def iterator() -> AsyncIterator[Message]:
             self.events.append("history")
             for message in self.messages[:limit]:
                 yield message
+                if self.failure is not None:
+                    raise self.failure
 
         return iterator()
 
@@ -35,8 +38,10 @@ class PollState:
     now: datetime
     primed: bool = False
     watermark: tuple[datetime, int] | None = None
+    claimed: list[int] = field(default_factory=list)
     processed: list[int] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
+    process_error: RuntimeError | None = None
 
 
 class IntLikeMessageId:
@@ -49,7 +54,13 @@ def _deps(state: PollState) -> PollHistoryChannelDeps[Message]:
         raise AssertionError("fetch not expected")
 
     async def process_message(message: Message, _channel_id: int) -> None:
+        if state.process_error is not None:
+            raise state.process_error
         state.processed.append(message.id)
+
+    def claim_message(message: Message) -> bool:
+        state.claimed.append(message.id)
+        return True
 
     def mark_primed(_channel_id: int) -> None:
         state.primed = True
@@ -71,13 +82,48 @@ def _deps(state: PollState) -> PollHistoryChannelDeps[Message]:
         get_channel_watermark=lambda _channel_id: state.watermark,
         set_channel_watermark=set_watermark,
         now=now,
-        claim_message=lambda _message: True,
+        claim_message=claim_message,
         process_history_poll_message=process_message,
         log=state.logs.append,
     )
 
 
 class HistoryPollWatermarkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_history_fetch_failure_does_not_claim_a_message(self) -> None:
+        boundary = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
+        message = Message(101, boundary + timedelta(seconds=1))
+        channel = HistoryChannel(
+            [message],
+            [],
+            failure=RuntimeError("history interrupted"),
+        )
+        state = PollState(channel, boundary, primed=True, watermark=(boundary, 0))
+
+        await poll_history_channel("allowed", 333, deps=_deps(state))
+
+        self.assertEqual(state.claimed, [])
+        self.assertEqual(state.processed, [])
+        self.assertEqual(state.watermark, (boundary, 0))
+        self.assertIn("history_poll_channel_failed", state.logs[0])
+
+    async def test_processing_failure_does_not_advance_the_watermark(self) -> None:
+        boundary = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
+        message = Message(101, boundary + timedelta(seconds=1))
+        state = PollState(
+            HistoryChannel([message], []),
+            boundary,
+            primed=True,
+            watermark=(boundary, 0),
+            process_error=RuntimeError("dispatch interrupted"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "dispatch interrupted"):
+            await poll_history_channel("allowed", 333, deps=_deps(state))
+
+        self.assertEqual(state.claimed, [101])
+        self.assertEqual(state.processed, [])
+        self.assertEqual(state.watermark, (boundary, 0))
+
     async def test_message_watermark_preserves_supported_id_conversions(self) -> None:
         created_at = datetime(2026, 7, 22, 5, 0, tzinfo=timezone.utc)
 
@@ -113,7 +159,7 @@ class HistoryPollWatermarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.processed, [101])
         self.assertEqual(state.watermark, (new_message.created_at, new_message.id))
         self.assertIn("fetched_messages=2", state.logs[0])
-        self.assertIn("claimed_messages=2", state.logs[0])
+        self.assertIn("claimed_messages=1", state.logs[0])
         self.assertIn("eligible_messages=1", state.logs[0])
         self.assertIn("discarded_messages=1", state.logs[0])
 

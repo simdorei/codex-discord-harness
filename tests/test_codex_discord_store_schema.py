@@ -11,6 +11,43 @@ import codex_discord_store as store
 import codex_discord_store_schema as store_schema
 
 
+def _create_v4_deferred_inbox(conn: sqlite3.Connection) -> None:
+    _ = conn.execute(
+        "CREATE TABLE deferred_discord_inbox ("
+        "message_id INTEGER PRIMARY KEY, "
+        "target_thread_id TEXT NOT NULL, "
+        "channel_id INTEGER NOT NULL, "
+        "owner_user_id INTEGER, "
+        "prompt TEXT NOT NULL, "
+        "source TEXT NOT NULL, "
+        "normalization_version INTEGER NOT NULL, "
+        "state TEXT NOT NULL CHECK(state IN ("
+        "'received', 'promoted', 'completed', 'needs_review')), "
+        "queue_job_id TEXT UNIQUE, "
+        "promotion_epoch INTEGER, "
+        "created_at REAL NOT NULL, "
+        "updated_at REAL NOT NULL)"
+    )
+
+
+def _create_six_state_deferred_inbox(conn: sqlite3.Connection) -> None:
+    _ = conn.execute(
+        "CREATE TABLE deferred_discord_inbox ("
+        "message_id INTEGER PRIMARY KEY, target_thread_id TEXT NOT NULL, "
+        "channel_id INTEGER NOT NULL, owner_user_id INTEGER, prompt TEXT NOT NULL, "
+        "source TEXT NOT NULL, normalization_version INTEGER NOT NULL, "
+        "state TEXT NOT NULL CHECK(state IN ("
+        "'received', 'promoted', 'completed', 'failed', 'cancelled', 'needs_review')), "
+        "queue_job_id TEXT UNIQUE, promotion_epoch INTEGER, "
+        "created_at REAL NOT NULL, updated_at REAL NOT NULL)"
+    )
+    _ = conn.execute(
+        "CREATE INDEX deferred_discord_inbox_target_order "
+        "ON deferred_discord_inbox("
+        "target_thread_id, channel_id, state, created_at, message_id)"
+    )
+
+
 class StoreSchemaTests(unittest.TestCase):
     def test_store_schema_helper_creates_expected_tables(self) -> None:
         with sqlite3.connect(":memory:") as conn:
@@ -121,6 +158,147 @@ class StoreSchemaTests(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual(backup_value, "preserved")
         self.assertEqual(backup_version, 0)
+
+    def test_v3_target_lease_migrates_to_per_channel_scope(self) -> None:
+        with sqlite3.connect(":memory:") as conn:
+            _create_v4_deferred_inbox(conn)
+            _ = conn.execute(
+                "CREATE TABLE deferred_discord_inbox_leases ("
+                "target_thread_id TEXT PRIMARY KEY, "
+                "lease_owner TEXT NOT NULL, "
+                "lease_epoch INTEGER NOT NULL, "
+                "lease_expires_at REAL NOT NULL, "
+                "updated_at REAL NOT NULL)"
+            )
+            _ = conn.execute(
+                "INSERT INTO deferred_discord_inbox_leases VALUES "
+                "('thread-1', 'stale-owner', 7, 10.0, 1.0)"
+            )
+            _ = conn.execute("PRAGMA user_version = 3")
+            conn.commit()
+
+            store_schema.init_store_schema(conn)
+
+            table_info = list(
+                conn.execute("PRAGMA table_info(deferred_discord_inbox_leases)")
+            )
+            lease_rows = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM deferred_discord_inbox_leases"
+                ).fetchone()[0]
+            )
+
+        self.assertEqual(
+            {str(row[1]) for row in table_info},
+            {
+                "target_thread_id",
+                "channel_id",
+                "lease_owner",
+                "lease_epoch",
+                "lease_expires_at",
+                "updated_at",
+            },
+        )
+        self.assertEqual(
+            [str(row[1]) for row in table_info if int(row[5]) > 0],
+            ["target_thread_id", "channel_id"],
+        )
+        self.assertEqual(lease_rows, 0)
+
+    def test_v4_inbox_state_constraint_migrates_without_losing_rows(self) -> None:
+        with sqlite3.connect(":memory:") as conn:
+            _create_v4_deferred_inbox(conn)
+            _ = conn.execute(
+                "INSERT INTO deferred_discord_inbox VALUES "
+                "(901, 'thread-1', 222, 7, 'first', 'gateway', 1, "
+                "'promoted', 'discord:901', 3, 1.0, 2.0), "
+                "(902, 'thread-1', 222, 7, 'second', 'gateway', 1, "
+                "'promoted', 'discord:902', 3, 3.0, 4.0)"
+            )
+            _ = conn.execute("PRAGMA user_version = 4")
+            conn.commit()
+
+            store_schema.init_store_schema(conn)
+            _ = conn.execute(
+                "UPDATE deferred_discord_inbox SET state = 'failed' WHERE message_id = 901"
+            )
+            _ = conn.execute(
+                "UPDATE deferred_discord_inbox SET state = 'cancelled' WHERE message_id = 902"
+            )
+            rows = list(
+                conn.execute(
+                    "SELECT message_id, prompt, state FROM deferred_discord_inbox "
+                    "ORDER BY message_id"
+                )
+            )
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+        self.assertEqual(version, store_schema.LATEST_STORE_SCHEMA_VERSION)
+        self.assertEqual(
+            rows,
+            [(901, "first", "failed"), (902, "second", "cancelled")],
+        )
+
+    def test_live_six_state_v4_compatibility_schema_promotes_to_v5_in_place(self) -> None:
+        expected_row = (
+            901,
+            "thread-1",
+            222,
+            7,
+            "preserve bytes: \x00\u2603",
+            "gateway",
+            1,
+            "failed",
+            "discord:901",
+            3,
+            1.25,
+            2.5,
+        )
+        with sqlite3.connect(":memory:") as conn:
+            _create_six_state_deferred_inbox(conn)
+            _ = conn.execute(
+                "INSERT INTO deferred_discord_inbox VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                expected_row,
+            )
+            _ = conn.execute("PRAGMA user_version = 4")
+            conn.commit()
+
+            store_schema.init_store_schema(conn)
+
+            actual_row = tuple(
+                conn.execute(
+                    "SELECT * FROM deferred_discord_inbox WHERE message_id = 901"
+                ).fetchone()
+            )
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            table_sql = str(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'deferred_discord_inbox'"
+                ).fetchone()[0]
+            )
+            index_sql = str(
+                conn.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'index' AND name = 'deferred_discord_inbox_target_order'"
+                ).fetchone()[0]
+            )
+            with self.assertRaises(sqlite3.IntegrityError):
+                _ = conn.execute(
+                    "INSERT INTO deferred_discord_inbox VALUES "
+                    "(902, 'thread-2', 223, 8, 'duplicate', 'gateway', 1, "
+                    "'received', 'discord:901', 4, 3.0, 4.0)"
+                )
+
+        self.assertEqual(version, store_schema.LATEST_STORE_SCHEMA_VERSION)
+        self.assertEqual(actual_row, expected_row)
+        self.assertIn("'failed'", table_sql)
+        self.assertIn("'cancelled'", table_sql)
+        self.assertIn(
+            "target_thread_id, channel_id, state, created_at, message_id",
+            index_sql,
+        )
 
     def test_failed_migration_rolls_back_and_leaves_backup(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:

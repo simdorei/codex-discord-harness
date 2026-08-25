@@ -22,7 +22,9 @@ class MirroredThreadMessageIntegrationTests(unittest.IsolatedAsyncioTestCase):
             prompt: str,
             *,
             target_thread_id: str | None = None,
+            replay_eligible: bool = False,
         ) -> None:
+            self.assertTrue(replay_eligible)
             calls.append((message, prompt, target_thread_id))
 
         client = FakeClient()
