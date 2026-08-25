@@ -9,13 +9,19 @@ import unittest
 from collections.abc import Mapping
 from contextlib import redirect_stderr
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypeAlias, cast
 from unittest import mock
 
 
 HOOK_PATH = Path(
     "plugins/codex-discord-remote/hooks/pro_connector_evidence_hook.py"
 ).resolve()
+JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+
+
+class HookLoadError(RuntimeError):
+    pass
 
 
 class HookModule(Protocol):
@@ -25,7 +31,7 @@ class HookModule(Protocol):
 
     def process_post_tool_use(
         self,
-        payload: Mapping[str, object],
+        payload: Mapping[str, JsonValue],
         plugin_data: Path | None = None,
         plugin_root: Path | None = None,
     ) -> bool: ...
@@ -34,7 +40,7 @@ class HookModule(Protocol):
 def _load_hook() -> HookModule:
     spec = importlib.util.spec_from_file_location("pro_connector_evidence_hook", HOOK_PATH)
     if spec is None or spec.loader is None:
-        raise RuntimeError("connector evidence hook could not be loaded")
+        raise HookLoadError("connector evidence hook could not be loaded")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return cast(HookModule, cast(object, module))

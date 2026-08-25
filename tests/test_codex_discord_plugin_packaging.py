@@ -79,8 +79,44 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertIn("[@Chrome](plugin://chrome@openai-bundled)", ask_skill)
         self.assertIn("browser_evidence_hook.py print-probe-code", ask_skill)
         self.assertIn("pro_connector_evidence_hook.py print-probe-code", ask_skill)
+        self.assertIn("pro_connector_evidence_hook.py print-retry-probe-code", ask_skill)
         self.assertIn("use `type()` instead of `fill()`", ask_skill)
         self.assertIn("both literal MCP block tags remain", ask_skill)
+        normalized_ask_skill = " ".join(ask_skill.split())
+        self.assertIn(
+            "Keep a turn-local `connector_retry_used` flag initialized to false. "
+            "Immediately before every retry helper invocation, including fresh-chat "
+            "recovery below, set it to true; if it is already true, stop without sending.",
+            normalized_ask_skill,
+        )
+        request_entry_start = normalized_ask_skill.index(
+            "For a contenteditable ChatGPT composer"
+        )
+        request_entry_end = normalized_ask_skill.index(
+            "After selection, prefer the dedicated file tools"
+        )
+        self.assertEqual(
+            normalized_ask_skill[request_entry_start:request_entry_end].strip(),
+            "For a contenteditable ChatGPT composer, use `type()` instead of `fill()` "
+            "when entering this request because `fill()` may parse the angle-bracket "
+            "block as markup and remove it. Before sending, verify that both literal "
+            "MCP block tags remain. Reacquire the composer locator after every click, "
+            "clear, or typing operation before reading it; ChatGPT may replace the "
+            "contenteditable node while preserving what is visibly typed. Validate "
+            "Windows paths before typing and construct backslashes with "
+            "`String.fromCharCode(92)` when the request passes through nested "
+            "JavaScript strings. If either tag is missing, do not send. Clear the "
+            "composer first, reacquire its locator, and verify that no non-pill request "
+            "text remains; clearing the contenteditable also removes the connector "
+            "pill. If `connector_retry_used` is already true, stop without sending. "
+            "Otherwise set it to true immediately before invoking the retry helper, "
+            "and continue only when it returns `status: verified`. Reacquire the "
+            "composer after the retry, enter the corrected request with `type()`, "
+            "reacquire it again, and verify the literal tags before sending. Never "
+            "invoke either connector helper while the composer contains request text. "
+            "`composer_not_empty` is a fail-closed guard against overwriting or sending "
+            "user draft text, not a retry signal.",
+        )
         self.assertTrue(conversation_map.is_file())
         self.assertTrue(browser_evidence.is_file())
         self.assertEqual(

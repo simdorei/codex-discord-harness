@@ -35,18 +35,24 @@ def require_verified_evidence(
 ) -> None:
     data_path = plugin_data or default_plugin_data_path()
     receipt_path = _receipt_path(session_id, turn_id, data_path)
+    transcript_result = connector_transcript.read_transcript_evidence(
+        session_id,
+        turn_id,
+        connector_transcript.default_evidence_source(),
+    )
     if receipt_path.exists():
-        evidence = _read_receipt(session_id, turn_id, receipt_path)
-        if evidence is None:
+        receipt_evidence = _read_receipt(session_id, turn_id, receipt_path)
+        if receipt_evidence is None:
             raise ProConnectorUnavailableError(
                 "Exact-turn connector receipt exists but is invalid or unreadable."
             )
-    else:
-        evidence = connector_transcript.read_transcript_evidence(
-            session_id,
-            turn_id,
-            connector_transcript.default_evidence_source(),
+        evidence = (
+            transcript_result.evidence
+            if transcript_result.trusted_attempt_seen
+            else receipt_evidence
         )
+    else:
+        evidence = transcript_result.evidence
     if evidence is None:
         raise ProConnectorUnavailableError(
             "Pro turn completed without exact-turn connector control evidence."
@@ -103,6 +109,7 @@ def _read_receipt(
         or evidence.get("turn_id") != turn_id
         or evidence.get("browser_type") != "chrome"
         or evidence.get("probe_sha256") != EXPECTED_PROBE_SHA256
+        or not connector_transcript.is_valid_evidence(evidence)
     ):
         return None
     return evidence

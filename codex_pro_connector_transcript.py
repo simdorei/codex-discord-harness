@@ -14,12 +14,15 @@ JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 RecordKind: TypeAlias = Literal["call", "output"]
+OuterResultIdentifier: TypeAlias = Literal[
+    "connectorControlResult", "connectorControlRetryResult"
+]
 
 PROTOCOL: Final = "ask-chatgpt-pro-connector-control-v1"
 CONNECTOR_NAME: Final = "Simdorei Local Project Oauth"
 CONNECTOR_PATH: Final = "/plugins/plugin_asdk_app_6a6ae90be0a08191b877eddba93b631c"
 EXPECTED_PROBE_SHA256: Final = (
-    "e5de2ef92ac6fca49442e60f237888bea47b5d6090c3347c180d103114ced8dc"
+    "9f885170039075799a2aa2ed636cb5587bc6ab188533638074d693664c38544f"
 )
 PLUGIN_RELATIVE_PATH: Final = Path("plugins/codex-discord-remote")
 PROBE_RELATIVE_PATH: Final = Path(
@@ -31,6 +34,12 @@ PROBE_RELATIVE_PATH: Final = Path(
 class TranscriptEvidenceSource:
     codex_home: Path
     plugin_root: Path
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptEvidenceResult:
+    trusted_attempt_seen: bool
+    evidence: JsonObject | None
 
 
 def default_evidence_source() -> TranscriptEvidenceSource:
@@ -49,7 +58,14 @@ def canonical_inner_probe_code(plugin_root: Path) -> str:
     )
 
 
-def canonical_probe_code(plugin_root: Path) -> str:
+def _canonical_outer_probe_code(
+    plugin_root: Path, result_identifier: OuterResultIdentifier
+) -> str:
+    match result_identifier:
+        case "connectorControlResult" | "connectorControlRetryResult":
+            pass
+        case unreachable:
+            assert_never(unreachable)
     tool_input = json.dumps(
         {
             "code": canonical_inner_probe_code(plugin_root),
@@ -59,23 +75,36 @@ def canonical_probe_code(plugin_root: Path) -> str:
         separators=(",", ":"),
     )
     return (
-        "const connectorControlResult = await "
+        f"const {result_identifier} = await "
         f"tools.mcp__node_repl__js({tool_input});\n"
-        "for (const item of connectorControlResult.content ?? []) {\n"
+        f"for (const item of {result_identifier}.content ?? []) {{\n"
         '  if (item.type === "text") text(item.text);\n'
         "}"
     )
+
+
+def canonical_probe_code(plugin_root: Path) -> str:
+    return _canonical_outer_probe_code(plugin_root, "connectorControlResult")
+
+
+def canonical_retry_probe_code(plugin_root: Path) -> str:
+    return _canonical_outer_probe_code(plugin_root, "connectorControlRetryResult")
+
+
+def canonical_probe_codes(plugin_root: Path) -> tuple[str, str]:
+    return canonical_probe_code(plugin_root), canonical_retry_probe_code(plugin_root)
 
 
 def read_transcript_evidence(
     session_id: str,
     turn_id: str,
     source: TranscriptEvidenceSource,
-) -> JsonObject | None:
+) -> TranscriptEvidenceResult:
     if not session_id or not turn_id or not _probe_integrity_ok(source.plugin_root):
-        return None
-    outer_code = canonical_probe_code(source.plugin_root)
+        return TranscriptEvidenceResult(trusted_attempt_seen=False, evidence=None)
+    outer_codes = canonical_probe_codes(source.plugin_root)
     inner_code = canonical_inner_probe_code(source.plugin_root)
+    trusted_attempt_seen = False
     latest_call_id: str | None = None
     latest_evidence: JsonObject | None = None
     output_count = 0
@@ -95,7 +124,8 @@ def read_transcript_evidence(
                 kind = _record_kind(payload)
                 match kind:
                     case "call":
-                        if _trusted_call(payload, outer_code, inner_code):
+                        if _trusted_call(payload, outer_codes, inner_code):
+                            trusted_attempt_seen = True
                             latest_call_id = call_id
                             latest_evidence = None
                             output_count = 0
@@ -112,24 +142,26 @@ def read_transcript_evidence(
                         continue
                     case unreachable:
                         assert_never(unreachable)
-    return latest_evidence if output_count == 1 else None
+    return TranscriptEvidenceResult(
+        trusted_attempt_seen=trusted_attempt_seen,
+        evidence=latest_evidence if output_count == 1 else None,
+    )
 
 
-def _trusted_call(payload: Mapping[str, JsonValue], outer: str, inner: str) -> bool:
+def _trusted_call(
+    payload: Mapping[str, JsonValue], outer: tuple[str, str], inner: str
+) -> bool:
     name = payload.get("name")
     code = payload.get("input")
     if not isinstance(name, str) or not isinstance(code, str):
         return False
-    expected = {
-        "exec": outer,
-        "functions.exec": outer,
-        "js": inner,
-        "mcp__node_repl__js": inner,
-        "node_repl.js": inner,
-    }.get(name)
-    if expected is None:
+    if name in {"exec", "functions.exec"}:
+        expected = outer
+    elif name in {"js", "mcp__node_repl__js", "node_repl.js"}:
+        expected = (inner,)
+    else:
         return False
-    return code in {expected, f"{expected}\n", f"{expected}\r\n"}
+    return any(code in {item, f"{item}\n", f"{item}\r\n"} for item in expected)
 
 
 def _record_kind(payload: Mapping[str, JsonValue]) -> RecordKind | None:
@@ -196,7 +228,7 @@ def _valid_evidence_objects(raw: JsonValue) -> Iterable[JsonObject]:
             except json.JSONDecodeError:
                 continue
             evidence = _object_map(value)
-            if evidence is not None and _valid_evidence(evidence):
+            if evidence is not None and is_valid_evidence(evidence):
                 yield evidence
 
 
@@ -218,7 +250,7 @@ def _object_map(raw: JsonValue) -> JsonObject | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _valid_evidence(evidence: Mapping[str, JsonValue]) -> bool:
+def is_valid_evidence(evidence: Mapping[str, JsonValue]) -> bool:
     if (
         evidence.get("protocol") != PROTOCOL
         or evidence.get("browser_type") != "chrome"

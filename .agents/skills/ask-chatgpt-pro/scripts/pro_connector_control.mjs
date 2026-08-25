@@ -48,35 +48,35 @@ export async function prepareProConnector(globals = globalThis) {
     if (initialPillCount > 1) return failed("connector_pill");
 
     let action = "already_attached";
-    let clickResult = "not_needed";
     if (initialPillCount === 0) {
       stage = "connector_search";
       await composer.click();
       await composer.type(`@${CONNECTOR_NAME}`);
       pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
-      if ((await pill.count()) === 1) {
-        clickResult = "verified_without_menu_click";
-      } else {
+      if ((await pill.count()) !== 1) {
         const menuItem = tab.playwright
           .locator(".popover .__menu-item")
           .filter({ hasText: CONNECTOR_NAME });
-        await menuItem.waitFor({ state: "visible", timeoutMs: 10000 });
-        if ((await menuItem.count()) !== 1) return failed("connector_match");
-
-        stage = "connector_attach";
-        clickResult = "completed";
         try {
-          await menuItem.click();
-        } catch {
-          clickResult = "error_pending_verification";
+          await menuItem.waitFor({ state: "visible", timeoutMs: 10000 });
+        } catch (error) {
+          pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
+          if ((await pill.count()) !== 1) throw error;
         }
-        pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
-        await pill.waitFor({ state: "visible", timeoutMs: 10000 });
+        if ((await pill.count()) !== 1) {
+          if ((await menuItem.count()) !== 1) return failed("connector_match");
+
+          stage = "connector_attach";
+          try {
+            await menuItem.click();
+          } catch {
+            // ChatGPT may remove the menu node after selecting it; verify the pill below.
+          }
+          pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
+          await pill.waitFor({ state: "visible", timeoutMs: 10000 });
+        }
       }
       if ((await pill.count()) !== 1) return failed(stage);
-      if (clickResult === "error_pending_verification") {
-        clickResult = "verified_after_error";
-      }
       action = "attached";
     }
 
@@ -113,7 +113,6 @@ export async function prepareProConnector(globals = globalThis) {
       chat_mode: "chat",
       pro_mode: true,
       action,
-      click_result: clickResult,
     };
   } catch {
     return failed(stage);

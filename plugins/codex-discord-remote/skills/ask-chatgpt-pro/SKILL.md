@@ -74,11 +74,18 @@ questions, or as a substitute for local tests.
    rather than model-written click steps, must attach exactly `Simdorei Local
    Project Oauth`, return the composer from Work to normal Chat mode, and verify
    that Pro remains selected. Continue only when it returns `status: verified`.
+   Keep a turn-local `connector_retry_used` flag initialized to false. Immediately
+   before every retry helper invocation, including fresh-chat recovery below, set
+   it to true; if it is already true, stop without sending.
+   If this same turn requires its one permitted recovery retry, run
+   `<source.path>/hooks/pro_connector_evidence_hook.py print-retry-probe-code`
+   and submit that emitted code unchanged. Never rename the result variable or
+   hand-edit either emitted wrapper.
    If a saved legacy conversation cannot present that connector, preserve the old
    ChatGPT conversation, delete only its local conversation-map record, acquire
-   one fresh chat, bind that tab, and run the same helper once more. Do not send
-   the consultation or use another connector when the second result is not
-   verified.
+   one fresh chat, bind that tab, and use the retry helper only through that shared
+   flag. Do not send the consultation or use another connector when the flag was
+   already set or the second result is not verified.
 4. Confirm that the user is signed in and that Pro is selected. If login, OAuth
    owner approval, OTP, CAPTCHA, account access, or manual model selection is
    required, leave the tab open for handoff and ask the user to complete only
@@ -106,7 +113,19 @@ questions, or as a substitute for local tests.
    For a contenteditable ChatGPT composer, use `type()` instead of `fill()` when
    entering this request because `fill()` may parse the angle-bracket block as
    markup and remove it. Before sending, verify that both literal MCP block tags remain.
-   If either tag is missing, do not send; clear and re-enter the request with `type()`.
+   Reacquire the composer locator after every click, clear, or typing operation before
+   reading it; ChatGPT may replace the contenteditable node while preserving what is
+   visibly typed. Validate Windows paths before typing and construct backslashes with
+   `String.fromCharCode(92)` when the request passes through nested JavaScript strings.
+   If either tag is missing, do not send. Clear the composer first, reacquire its
+   locator, and verify that no non-pill request text remains; clearing the
+   contenteditable also removes the connector pill. If `connector_retry_used` is
+   already true, stop without sending. Otherwise set it to true immediately before
+   invoking the retry helper, and continue only when it returns `status: verified`.
+   Reacquire the composer after the retry, enter the corrected request with `type()`,
+   reacquire it again, and verify the literal tags before sending. Never invoke either
+   connector helper while the composer contains request text. `composer_not_empty` is
+   a fail-closed guard against overwriting or sending user draft text, not a retry signal.
    After selection, prefer the dedicated file tools: search/read before
    editing, `file_apply_patch` for create/update/move/delete, `retrieve_image`
    for visual inspection, commands returned by `command_list` for verification,

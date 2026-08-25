@@ -23,6 +23,10 @@ PLUGIN_ROOT = HOOK_PATH.parent.parent
 class HookModule(Protocol):
     def canonical_probe_code(self, plugin_root: Path | None = None) -> str: ...
 
+    def canonical_retry_probe_code(
+        self, plugin_root: Path | None = None
+    ) -> str: ...
+
 
 class HookLoadError(RuntimeError):
     pass
@@ -64,6 +68,7 @@ def _write_transcript(
     codex_home: Path,
     *,
     calls: tuple[tuple[str, connector_transcript.JsonObject | None], ...],
+    retry_call_ids: frozenset[str] = frozenset(),
 ) -> None:
     transcript = (
         codex_home
@@ -71,9 +76,14 @@ def _write_transcript(
         / "rollout-2026-08-24T00-00-00-session-a.jsonl"
     )
     transcript.parent.mkdir(parents=True)
-    code = _load_hook().canonical_probe_code(PLUGIN_ROOT)
+    hook = _load_hook()
     records: list[str] = []
     for call_id, evidence in calls:
+        code = (
+            hook.canonical_retry_probe_code(PLUGIN_ROOT)
+            if call_id in retry_call_ids
+            else hook.canonical_probe_code(PLUGIN_ROOT)
+        )
         metadata = {"turn_id": "turn-a"}
         records.append(
             _turn_record(
@@ -192,6 +202,7 @@ class ProConnectorEvidenceTests(unittest.TestCase):
                     ("call-a", _evidence()),
                     ("call-b", _evidence("failed")),
                 ),
+                retry_call_ids=frozenset({"call-b"}),
             )
 
             # When/Then: the earlier success cannot override the later failure.
@@ -212,6 +223,7 @@ class ProConnectorEvidenceTests(unittest.TestCase):
             _write_transcript(
                 Path(raw_home),
                 calls=(("call-a", _evidence()), ("call-b", None)),
+                retry_call_ids=frozenset({"call-b"}),
             )
 
             # When/Then: the incomplete last attempt prevents authorization.
@@ -221,6 +233,29 @@ class ProConnectorEvidenceTests(unittest.TestCase):
                     "turn-a",
                     plugin_data=Path(raw_data),
                 )
+
+    def test_verified_retry_alias_supersedes_failed_primary_transcript(self) -> None:
+        # Given: a failed primary attempt is followed by the exact retry wrapper.
+        with (
+            tempfile.TemporaryDirectory() as raw_home,
+            tempfile.TemporaryDirectory() as raw_data,
+            mock.patch.dict(os.environ, {"CODEX_HOME": raw_home}),
+        ):
+            _write_transcript(
+                Path(raw_home),
+                calls=(
+                    ("call-a", _evidence("failed")),
+                    ("call-b", _evidence()),
+                ),
+                retry_call_ids=frozenset({"call-b"}),
+            )
+
+            # When/Then: the verified retry is the exact-turn authorization result.
+            connector_evidence.require_verified_evidence(
+                "session-a",
+                "turn-a",
+                plugin_data=Path(raw_data),
+            )
 
     def test_transcript_evidence_is_scoped_to_exact_turn(self) -> None:
         # Given: a valid connector transcript belongs to another turn.

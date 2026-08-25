@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import Literal, TypeAlias, assert_never, cast
 from uuid import uuid4
 
 
@@ -15,7 +15,7 @@ PROTOCOL = "ask-chatgpt-pro-connector-control-v1"
 CONNECTOR_NAME = "Simdorei Local Project Oauth"
 CONNECTOR_PATH = "/plugins/plugin_asdk_app_6a6ae90be0a08191b877eddba93b631c"
 EXPECTED_PROBE_SHA256 = (
-    "e5de2ef92ac6fca49442e60f237888bea47b5d6090c3347c180d103114ced8dc"
+    "9f885170039075799a2aa2ed636cb5587bc6ab188533638074d693664c38544f"
 )
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 PROBE_RELATIVE_PATH = Path(
@@ -29,6 +29,12 @@ FailureStage: TypeAlias = Literal[
     "turn_id_missing",
     "write_failed",
 ]
+JsonScalar: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
+JsonObject: TypeAlias = dict[str, JsonValue]
+OuterResultIdentifier: TypeAlias = Literal[
+    "connectorControlResult", "connectorControlRetryResult"
+]
 
 
 def canonical_inner_probe_code(plugin_root: Path | None = None) -> str:
@@ -41,7 +47,14 @@ def canonical_inner_probe_code(plugin_root: Path | None = None) -> str:
     )
 
 
-def canonical_probe_code(plugin_root: Path | None = None) -> str:
+def _canonical_outer_probe_code(
+    plugin_root: Path | None, result_identifier: OuterResultIdentifier
+) -> str:
+    match result_identifier:
+        case "connectorControlResult" | "connectorControlRetryResult":
+            pass
+        case unreachable:
+            assert_never(unreachable)
     tool_input = json.dumps(
         {
             "code": canonical_inner_probe_code(plugin_root),
@@ -51,16 +64,28 @@ def canonical_probe_code(plugin_root: Path | None = None) -> str:
         separators=(",", ":"),
     )
     return (
-        "const connectorControlResult = await "
+        f"const {result_identifier} = await "
         f"tools.mcp__node_repl__js({tool_input});\n"
-        "for (const item of connectorControlResult.content ?? []) {\n"
+        f"for (const item of {result_identifier}.content ?? []) {{\n"
         '  if (item.type === "text") text(item.text);\n'
         "}"
     )
 
 
+def canonical_probe_code(plugin_root: Path | None = None) -> str:
+    return _canonical_outer_probe_code(plugin_root, "connectorControlResult")
+
+
+def canonical_retry_probe_code(plugin_root: Path | None = None) -> str:
+    return _canonical_outer_probe_code(plugin_root, "connectorControlRetryResult")
+
+
+def canonical_probe_codes(plugin_root: Path | None = None) -> tuple[str, str]:
+    return canonical_probe_code(plugin_root), canonical_retry_probe_code(plugin_root)
+
+
 def process_post_tool_use(
-    payload: Mapping[str, object],
+    payload: Mapping[str, JsonValue],
     plugin_data: Path | None = None,
     plugin_root: Path | None = None,
 ) -> bool:
@@ -70,14 +95,15 @@ def process_post_tool_use(
     if not isinstance(tool_name, str):
         return False
     root = plugin_root or PLUGIN_ROOT
-    expected = _expected_code(tool_name, root)
-    accepted = {expected, f"{expected}\n", f"{expected}\r\n"} if expected else set()
+    expected = _expected_codes(tool_name, root)
+    accepted = {
+        variant
+        for code in expected
+        for variant in (code, f"{code}\n", f"{code}\r\n")
+    }
     if _tool_code(payload.get("tool_input")) not in accepted:
         return False
     if not _probe_integrity_ok(root):
-        return False
-    evidence = _find_valid_evidence(payload.get("tool_response"))
-    if evidence is None:
         return False
     session_id = payload.get("session_id")
     turn_id = payload.get("turn_id")
@@ -87,6 +113,19 @@ def process_post_tool_use(
     if not isinstance(turn_id, str) or not turn_id:
         _report_failure("turn_id_missing")
         return False
+    evidence = _single_valid_evidence(payload.get("tool_response"))
+    if evidence is None:
+        evidence = {
+            "protocol": PROTOCOL,
+            "browser_type": "chrome",
+            "status": "failed",
+            "connector_name": CONNECTOR_NAME,
+            "connector_path": CONNECTOR_PATH,
+            "chat_mode": "unverified",
+            "pro_mode": False,
+            "action": "none",
+            "failed_stage": "evidence_invalid",
+        }
     receipt = {
         **evidence,
         "session_id": session_id,
@@ -96,15 +135,15 @@ def process_post_tool_use(
     return _write_receipt(receipt, plugin_data)
 
 
-def _expected_code(tool_name: str, plugin_root: Path) -> str | None:
+def _expected_codes(tool_name: str, plugin_root: Path) -> tuple[str, ...]:
     if tool_name in EXEC_TOOL_NAMES:
-        return canonical_probe_code(plugin_root)
+        return canonical_probe_codes(plugin_root)
     if tool_name in NODE_TOOL_NAMES:
-        return canonical_inner_probe_code(plugin_root)
-    return None
+        return (canonical_inner_probe_code(plugin_root),)
+    return ()
 
 
-def _tool_code(raw: object) -> str | None:
+def _tool_code(raw: JsonValue) -> str | None:
     if isinstance(raw, str):
         return raw
     values = _object_map(raw)
@@ -126,36 +165,52 @@ def _probe_integrity_ok(plugin_root: Path) -> bool:
     return hashlib.sha256(canonical).hexdigest() == EXPECTED_PROBE_SHA256
 
 
-def _find_valid_evidence(raw: object) -> dict[str, object] | None:
+def _single_valid_evidence(raw: JsonValue) -> JsonObject | None:
     decoder = json.JSONDecoder()
+    candidates: list[JsonObject] = []
     for text in _string_values(raw):
         for match in re.finditer(r"\{", text):
             try:
                 value, _ = cast(
-                    tuple[object, int], decoder.raw_decode(text[match.start() :])
+                    tuple[JsonValue, int], decoder.raw_decode(text[match.start() :])
                 )
             except json.JSONDecodeError:
                 continue
             evidence = _object_map(value)
             if evidence is not None and _valid_evidence(evidence):
-                return evidence
-    return None
+                candidates.append(evidence)
+    return candidates[0] if len(candidates) == 1 else None
 
 
-def _valid_evidence(evidence: Mapping[str, object]) -> bool:
-    return (
+def _valid_evidence(evidence: Mapping[str, JsonValue]) -> bool:
+    if not (
         evidence.get("protocol") == PROTOCOL
         and evidence.get("browser_type") == "chrome"
-        and evidence.get("status") in {"verified", "failed"}
         and evidence.get("connector_name") == CONNECTOR_NAME
         and evidence.get("connector_path") == CONNECTOR_PATH
-        and isinstance(evidence.get("chat_mode"), str)
-        and isinstance(evidence.get("pro_mode"), bool)
-        and isinstance(evidence.get("action"), str)
+    ):
+        return False
+    status = evidence.get("status")
+    failed_stage = evidence.get("failed_stage")
+    verified = (
+        status == "verified"
+        and evidence.get("chat_mode") == "chat"
+        and evidence.get("pro_mode") is True
+        and evidence.get("action") in {"attached", "already_attached"}
+        and "failed_stage" not in evidence
     )
+    failed = (
+        status == "failed"
+        and evidence.get("chat_mode") == "unverified"
+        and evidence.get("pro_mode") is False
+        and evidence.get("action") == "none"
+        and isinstance(failed_stage, str)
+        and bool(failed_stage)
+    )
+    return verified or failed
 
 
-def _string_values(raw: object) -> Iterable[str]:
+def _string_values(raw: JsonValue) -> Iterable[str]:
     if isinstance(raw, str):
         yield raw
         return
@@ -165,20 +220,15 @@ def _string_values(raw: object) -> Iterable[str]:
             yield from _string_values(value)
         return
     if isinstance(raw, list):
-        for value in cast(list[object], raw):
+        for value in raw:
             yield from _string_values(value)
 
 
-def _object_map(raw: object) -> dict[str, object] | None:
-    if not isinstance(raw, dict):
-        return None
-    values = cast(Mapping[object, object], raw)
-    if not all(isinstance(key, str) for key in values):
-        return None
-    return {cast(str, key): value for key, value in values.items()}
+def _object_map(raw: JsonValue) -> JsonObject | None:
+    return raw if isinstance(raw, dict) else None
 
 
-def _write_receipt(receipt: Mapping[str, object], plugin_data: Path | None) -> bool:
+def _write_receipt(receipt: Mapping[str, JsonValue], plugin_data: Path | None) -> bool:
     data_path = plugin_data or _environment_data_path()
     if data_path is None:
         _report_failure("plugin_data_missing")
@@ -213,8 +263,11 @@ def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "print-probe-code":
         _ = sys.stdout.write(canonical_probe_code())
         return 0
+    if len(sys.argv) == 2 and sys.argv[1] == "print-retry-probe-code":
+        _ = sys.stdout.write(canonical_retry_probe_code())
+        return 0
     try:
-        payload = cast(object, json.loads(sys.stdin.read()))
+        payload = cast(JsonValue, json.loads(sys.stdin.read()))
     except json.JSONDecodeError:
         return 0
     values = _object_map(payload)

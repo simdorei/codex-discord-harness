@@ -57,17 +57,22 @@ const locator = (kind) => ({{
   }},
   type: async (value) => {{
     calls.push(`type:${{value}}`);
-    if (typeAutoAttaches) state.attached = true;
   }},
-  waitFor: async () => undefined,
+  waitFor: async () => {{
+    if (kind === "menu" && typeAutoAttaches) {{
+      state.attached = true;
+      throw new Error("menu disappeared after automatic attachment");
+    }}
+  }},
   getAttribute: async (name) => name === "aria-checked" && state.chat ? "true" : null,
-  filter: () => locator("menu"),
+  filter: () => locator(kind === "menu" ? "menu" : "unknown"),
   locator: () => locator("pill"),
 }});
 globalThis.proConversationTab = {{ playwright: {{
   locator: (selector) => locator(selector === '[id="prompt-textarea"]' ? "composer" :
     selector === '[data-composer-surface="true"]' ? "surface" :
-    selector.startsWith("a[href") ? "global-pill" : "menu"),
+    selector.startsWith("a[href") ? "global-pill" :
+    selector === ".popover .__menu-item" ? "menu" : "unknown"),
   getByRole: (role, options) => locator(role === "radio" ? "chat" : "pro"),
 }} }};
 const control = await import({json.dumps(CONTROL_PATH.as_uri())});
@@ -171,7 +176,11 @@ class ProConnectorControlTests(unittest.TestCase):
 
         self.assertEqual(evidence["status"], "verified")
         self.assertEqual(evidence["action"], "attached")
-        self.assertEqual(evidence["click_result"], "verified_without_menu_click")
+        self.assertNotIn("click_result", evidence)
+        self.assertEqual(
+            result["calls"],
+            ["click:composer", "type:@Simdorei Local Project Oauth"],
+        )
 
     def test_duplicate_connector_match_fails_closed(self) -> None:
         result = _run_control(attached=False, chat=True, menu_count=2)
@@ -190,7 +199,16 @@ class ProConnectorControlTests(unittest.TestCase):
 
         self.assertEqual(evidence["status"], "verified")
         self.assertEqual(evidence["action"], "attached")
-        self.assertEqual(evidence["click_result"], "verified_after_error")
+        self.assertNotIn("click_result", evidence)
+        self.assertEqual(
+            result["calls"],
+            [
+                "click:composer",
+                "type:@Simdorei Local Project Oauth",
+                "click:menu",
+                "click:chat",
+            ],
+        )
 
 
 if __name__ == "__main__":
