@@ -68,6 +68,9 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         source_metadata = Path(
             ".agents/skills/ask-chatgpt-pro/agents/openai.yaml"
         )
+        intent_qa_skill = plugin_root / "skills/intent-driven-qa/SKILL.md"
+        intent_qa_metadata = plugin_root / "skills/intent-driven-qa/agents/openai.yaml"
+        skills_doc = Path("docs/plugin-skills.md")
 
         self.assertEqual(manifest.skills, "./skills/")
         self.assertRegex(manifest.version, r"^0\.1\.0\+codex\.\d{14}$")
@@ -139,6 +142,20 @@ class DiscordPluginPackagingTests(unittest.TestCase):
         self.assertEqual(
             ask_metadata.read_text(encoding="utf-8"),
             source_metadata.read_text(encoding="utf-8"),
+        )
+        self.assertTrue(intent_qa_skill.is_file())
+        self.assertTrue(intent_qa_metadata.is_file())
+        self.assertIn(
+            "name: intent-driven-qa",
+            intent_qa_skill.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "$intent-driven-qa",
+            intent_qa_metadata.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "$codex-discord-remote:intent-driven-qa",
+            skills_doc.read_text(encoding="utf-8"),
         )
         self.assertIn("name: deep-interview", skill_text)
         self.assertTrue(auto_research.is_file())

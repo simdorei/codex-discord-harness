@@ -327,6 +327,8 @@ Common prefix commands:
 
 Bundled Codex skill `deep-interview` powers `/interview` and `!interview` for unclear or risky requests.
 
+For intent-first automated test design or test-first implementation, send a normal prompt in a mapped Discord thread beginning with `$codex-discord-remote:intent-driven-qa`. The skill turns desired behavior into a requirement-to-test contract and records honest RED-to-GREEN evidence. The existing `!qa buttons` command remains reserved for Discord bridge button QA. See [bundled skills and request examples](docs/plugin-skills.md#requesting-intent-driven-qa).
+
 When the optional local-project MCP is connected, `!pro` can also let the
 matching ChatGPT Pro conversation inspect screenshots, operate safe Windows app
 windows, execute unrestricted shell text, and directly interact with terminal
