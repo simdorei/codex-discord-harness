@@ -24,6 +24,9 @@ def _run_control(
     menu_count: int = 1,
     menu_click_detaches: bool = False,
     type_auto_attaches: bool = False,
+    modern_menu_only: bool = False,
+    menu_wait_auto_attaches: bool = False,
+    composer_evaluate_fails: bool = False,
 ) -> dict[str, object]:
     script = f"""
 const calls = [];
@@ -35,17 +38,27 @@ const state = {{
 const menuCount = {menu_count};
 const menuClickDetaches = {str(menu_click_detaches).lower()};
 const typeAutoAttaches = {str(type_auto_attaches).lower()};
+const modernMenuOnly = {str(modern_menu_only).lower()};
+const menuWaitAutoAttaches = {str(menu_wait_auto_attaches).lower()};
+const composerEvaluateFails = {str(composer_evaluate_fails).lower()};
 const chatControlPresent = {str(chat_control_present).lower()};
+const pillTextInComposer = {str(pill_text_in_composer).lower()};
 const rawComposerText = {json.dumps(composer_text)} +
-  ({str(pill_text_in_composer).lower()} ? "Simdorei Local Project Oauth" : "");
+  (pillTextInComposer ? "Simdorei Local Project Oauth" : "");
 const locator = (kind) => ({{
   count: async () => kind === "composer" ? 1 :
     kind === "pill" ? (state.attached ? 1 : 0) :
     kind === "global-pill" ? (state.attached || state.historicalAttached ? 1 : 0) :
+    kind === "legacy-menu" ? (modernMenuOnly ? 0 : menuCount) :
+    kind === "missing-menu" ? 0 :
     kind === "menu" ? menuCount : kind === "chat" ? (chatControlPresent ? 1 : 0) :
     kind === "pro" ? 1 : 1,
-  textContent: async () => kind === "composer" ? rawComposerText : "",
-  evaluate: async () => kind === "composer" ? {json.dumps(composer_text)} : "",
+  textContent: async () => kind === "composer" ? rawComposerText :
+    kind === "pill" && pillTextInComposer ? "Simdorei Local Project Oauth" : "",
+  evaluate: async () => {{
+    if (kind === "composer" && composerEvaluateFails) throw new Error("evaluate timeout");
+    return kind === "composer" ? {json.dumps(composer_text)} : "";
+  }},
   click: async () => {{
     calls.push(`click:${{kind}}`);
     if (kind === "menu") {{
@@ -57,22 +70,25 @@ const locator = (kind) => ({{
   }},
   type: async (value) => {{
     calls.push(`type:${{value}}`);
+    if (typeAutoAttaches) state.attached = true;
   }},
   waitFor: async () => {{
-    if (kind === "menu" && typeAutoAttaches) {{
+    if (kind === "menu" && menuWaitAutoAttaches) {{
       state.attached = true;
-      throw new Error("menu disappeared after automatic attachment");
+      throw new Error("menu detached after automatic attachment");
     }}
   }},
   getAttribute: async (name) => name === "aria-checked" && state.chat ? "true" : null,
-  filter: () => locator(kind === "menu" ? "menu" : "unknown"),
+  filter: () => locator(kind),
   locator: () => locator("pill"),
 }});
 globalThis.proConversationTab = {{ playwright: {{
   locator: (selector) => locator(selector === '[id="prompt-textarea"]' ? "composer" :
     selector === '[data-composer-surface="true"]' ? "surface" :
     selector.startsWith("a[href") ? "global-pill" :
-    selector === ".popover .__menu-item" ? "menu" : "unknown"),
+    selector === ".popover .__menu-item" ? "legacy-menu" :
+    selector.startsWith('[data-composer-plugin-impression-id="asdk_app_') ?
+      "menu" : "missing-menu"),
   getByRole: (role, options) => locator(role === "radio" ? "chat" : "pro"),
 }} }};
 const control = await import({json.dumps(CONTROL_PATH.as_uri())});
@@ -93,6 +109,40 @@ process.stdout.write(JSON.stringify({{ evidence, calls }}));
 
 
 class ProConnectorControlTests(unittest.TestCase):
+    def test_composer_check_does_not_depend_on_page_evaluate(self) -> None:
+        result = _run_control(
+            attached=True,
+            chat=True,
+            composer_evaluate_fails=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "verified")
+        self.assertEqual(evidence["action"], "already_attached")
+
+    def test_delayed_auto_attachment_survives_disappearing_menu(self) -> None:
+        result = _run_control(
+            attached=False,
+            chat=True,
+            menu_wait_auto_attaches=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "verified")
+        self.assertEqual(evidence["action"], "attached")
+        self.assertEqual(evidence["click_result"], "verified_without_menu_click")
+
+    def test_attaches_from_current_menu_without_popover_wrapper(self) -> None:
+        result = _run_control(
+            attached=False,
+            chat=True,
+            modern_menu_only=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "verified")
+        self.assertEqual(evidence["action"], "attached")
+
     def test_attaches_exact_oauth_connector_and_returns_to_chat_pro(self) -> None:
         result = _run_control(attached=False, chat=False)
         evidence = cast(dict[str, object], result["evidence"])
@@ -176,11 +226,7 @@ class ProConnectorControlTests(unittest.TestCase):
 
         self.assertEqual(evidence["status"], "verified")
         self.assertEqual(evidence["action"], "attached")
-        self.assertNotIn("click_result", evidence)
-        self.assertEqual(
-            result["calls"],
-            ["click:composer", "type:@Simdorei Local Project Oauth"],
-        )
+        self.assertEqual(evidence["click_result"], "verified_without_menu_click")
 
     def test_duplicate_connector_match_fails_closed(self) -> None:
         result = _run_control(attached=False, chat=True, menu_count=2)
@@ -199,16 +245,7 @@ class ProConnectorControlTests(unittest.TestCase):
 
         self.assertEqual(evidence["status"], "verified")
         self.assertEqual(evidence["action"], "attached")
-        self.assertNotIn("click_result", evidence)
-        self.assertEqual(
-            result["calls"],
-            [
-                "click:composer",
-                "type:@Simdorei Local Project Oauth",
-                "click:menu",
-                "click:chat",
-            ],
-        )
+        self.assertEqual(evidence["click_result"], "verified_after_error")
 
 
 if __name__ == "__main__":

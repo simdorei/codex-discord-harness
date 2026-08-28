@@ -15,7 +15,7 @@ PROTOCOL = "ask-chatgpt-pro-connector-control-v1"
 CONNECTOR_NAME = "Simdorei Local Project Oauth"
 CONNECTOR_PATH = "/plugins/plugin_asdk_app_6a6ae90be0a08191b877eddba93b631c"
 EXPECTED_PROBE_SHA256 = (
-    "9f885170039075799a2aa2ed636cb5587bc6ab188533638074d693664c38544f"
+    "1dbd9922e69511445939d4fa7bd7fe70f6ec67433628e5d9ce46ff4bfd9206e9"
 )
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 PROBE_RELATIVE_PATH = Path(
