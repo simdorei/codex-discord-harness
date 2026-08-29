@@ -36,6 +36,7 @@ REMOTE_PLUGIN_ID = "codex-discord-remote@codex-discord-remote"
 
 
 ResidentProbe = Callable[[], EvidenceStatus]
+ExecutableLocator = Callable[[str], str | None]
 
 
 _COMMON_SOURCE_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -94,6 +95,7 @@ def collect_current_release_evidence(
     command_runner: CommandRunner = run_command,
     resident_probe: ResidentProbe | None = None,
     python_executable: str = sys.executable,
+    codex_locator: ExecutableLocator = shutil.which,
 ) -> ProReleaseEvidence:
     root = repo_root.resolve()
     revision_before = git_revision(root, command_runner)
@@ -115,7 +117,7 @@ def collect_current_release_evidence(
         EvidenceCheck(
             "installed_plugin_inventory",
             "installed",
-            _installed_inventory_check(root, command_runner),
+            _installed_inventory_check(root, command_runner, codex_locator),
         )
     )
     probe = resident_probe or probe_fresh_resident
@@ -170,8 +172,9 @@ def _manifest_check(repo_root: Path) -> tuple[EvidenceStatus, str]:
 def _installed_inventory_check(
     repo_root: Path,
     command_runner: CommandRunner,
+    codex_locator: ExecutableLocator,
 ) -> EvidenceStatus:
-    codex_executable = shutil.which("codex")
+    codex_executable = codex_locator("codex")
     if codex_executable is None:
         return EvidenceStatus.SKIPPED
     marketplace = command_runner(
