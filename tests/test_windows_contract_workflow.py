@@ -25,7 +25,7 @@ class WindowsContractWorkflowTests(unittest.TestCase):
         windows = (workflow_root / "windows-contract.yml").read_text(encoding="utf-8")
         macos = (workflow_root / "macos-smoke.yml").read_text(encoding="utf-8")
 
-        command = "python -m unittest tests.pro_plugin_contract_suite"
+        command = "python -m tests.pro_plugin_contract_suite"
         for workflow in (windows, macos):
             self.assertIn(command, workflow)
             self.assertIn("fetch-depth: 0", workflow)
@@ -48,6 +48,7 @@ class WindowsContractWorkflowTests(unittest.TestCase):
             "tests.test_codex_pro_release_evidence",
             "tests.test_codex_discord_plugin_packaging",
             "tests.test_verify_plugin_cachebuster",
+            "tests.test_windows_contract_workflow",
         )
         for module in required_modules:
             self.assertIn(module, suite)

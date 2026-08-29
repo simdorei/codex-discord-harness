@@ -24,7 +24,7 @@ jobs:
           PLUGIN_VERSION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python scripts/verify_plugin_cachebuster.py
       - name: Verify Pro connector plugin contracts
-        run: python -m unittest tests.pro_plugin_contract_suite
+        run: python -m tests.pro_plugin_contract_suite
       - name: Compile CI-relevant modules
         run: |
           python -m py_compile \
