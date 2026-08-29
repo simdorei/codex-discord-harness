@@ -176,6 +176,7 @@ class ProReleaseCheckCollectionTests(unittest.TestCase):
             command_runner=runner,
             resident_probe=lambda: EvidenceStatus.PASSED,
             python_executable="python-for-test",
+            codex_locator=lambda _: "codex-for-test",
         )
 
         self.assertTrue(evidence.pre_restart_ready)
@@ -211,6 +212,7 @@ class ProReleaseCheckCollectionTests(unittest.TestCase):
             repo_root,
             command_runner=runner,
             resident_probe=lambda: EvidenceStatus.PASSED,
+            codex_locator=lambda _: "codex-for-test",
         )
         by_id = {check.check_id: check.status for check in evidence.checks}
 
