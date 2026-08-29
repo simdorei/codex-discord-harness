@@ -20,6 +20,38 @@ class WindowsContractWorkflowTests(unittest.TestCase):
         self.assertIn("tests.test_codex_discord_store_schema", text)
         self.assertIn("install.ps1 -DryRun", text)
 
+    def test_connector_contracts_are_required_on_windows_and_macos(self) -> None:
+        workflow_root = ROOT / ".github" / "workflows"
+        windows = (workflow_root / "windows-contract.yml").read_text(encoding="utf-8")
+        macos = (workflow_root / "macos-smoke.yml").read_text(encoding="utf-8")
+
+        command = "python -m unittest tests.pro_plugin_contract_suite"
+        for workflow in (windows, macos):
+            self.assertIn(command, workflow)
+            self.assertIn("fetch-depth: 0", workflow)
+            self.assertIn("PLUGIN_VERSION_BASE_REF", workflow)
+            self.assertIn("github.event.pull_request.base.sha", workflow)
+            self.assertIn("github.event.before", workflow)
+            self.assertIn("python scripts/verify_plugin_cachebuster.py", workflow)
+
+    def test_connector_contract_suite_covers_release_critical_modules(self) -> None:
+        suite = (ROOT / "tests" / "pro_plugin_contract_suite.py").read_text(
+            encoding="utf-8"
+        )
+
+        required_modules = (
+            "tests.test_pro_connector_control",
+            "tests.test_pro_connector_evidence_hook",
+            "tests.test_pro_connector_evidence_retry",
+            "tests.test_pro_connector_receipt_ordering",
+            "tests.test_codex_pro_connector_evidence",
+            "tests.test_codex_pro_release_evidence",
+            "tests.test_codex_discord_plugin_packaging",
+            "tests.test_verify_plugin_cachebuster",
+        )
+        for module in required_modules:
+            self.assertIn(module, suite)
+
 
 if __name__ == "__main__":
     _ = unittest.main()

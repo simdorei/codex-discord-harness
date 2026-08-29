@@ -27,6 +27,10 @@ def _run_control(
     modern_menu_only: bool = False,
     menu_wait_auto_attaches: bool = False,
     composer_evaluate_fails: bool = False,
+    pill_appears_after_first_composer_text_read: bool = False,
+    draft_after_surface_count: bool = False,
+    draft_after_composer_click: bool = False,
+    draft_on_pro_count: bool = False,
 ) -> dict[str, object]:
     script = f"""
 const calls = [];
@@ -41,26 +45,61 @@ const typeAutoAttaches = {str(type_auto_attaches).lower()};
 const modernMenuOnly = {str(modern_menu_only).lower()};
 const menuWaitAutoAttaches = {str(menu_wait_auto_attaches).lower()};
 const composerEvaluateFails = {str(composer_evaluate_fails).lower()};
+const pillAppearsAfterFirstComposerTextRead =
+  {str(pill_appears_after_first_composer_text_read).lower()};
+const draftAfterSurfaceCount = {str(draft_after_surface_count).lower()};
+const draftAfterComposerClick = {str(draft_after_composer_click).lower()};
+const draftOnProCount = {str(draft_on_pro_count).lower()};
 const chatControlPresent = {str(chat_control_present).lower()};
 const pillTextInComposer = {str(pill_text_in_composer).lower()};
-const rawComposerText = {json.dumps(composer_text)} +
-  (pillTextInComposer ? "Simdorei Local Project Oauth" : "");
+const plainComposerText = {json.dumps(composer_text)};
+let currentPlainComposerText = plainComposerText;
+const connectorName = "Simdorei Local Project Oauth";
+const exactMenuSelector =
+  '[data-composer-plugin-impression-id="asdk_app_6a6ae90be0a08191b877eddba93b631c"] > .__menu-item';
+let composerTextReads = 0;
 const locator = (kind) => ({{
-  count: async () => kind === "composer" ? 1 :
-    kind === "pill" ? (state.attached ? 1 : 0) :
-    kind === "global-pill" ? (state.attached || state.historicalAttached ? 1 : 0) :
-    kind === "legacy-menu" ? (modernMenuOnly ? 0 : menuCount) :
-    kind === "missing-menu" ? 0 :
-    kind === "menu" ? menuCount : kind === "chat" ? (chatControlPresent ? 1 : 0) :
-    kind === "pro" ? 1 : 1,
-  textContent: async () => kind === "composer" ? rawComposerText :
-    kind === "pill" && pillTextInComposer ? "Simdorei Local Project Oauth" : "",
+  count: async () => {{
+    if (kind === "surface") {{
+      if (draftAfterSurfaceCount) currentPlainComposerText = "user draft";
+      return 1;
+    }}
+    if (kind === "pro") {{
+      if (draftOnProCount) currentPlainComposerText = "user draft";
+      return 1;
+    }}
+    return kind === "composer" ? 1 :
+      kind === "pill" ? (state.attached ? 1 : 0) :
+      kind === "global-pill" ? (state.attached || state.historicalAttached ? 1 : 0) :
+      kind === "legacy-menu" ? (modernMenuOnly ? 0 : menuCount) :
+      kind === "missing-menu" ? 0 :
+      kind === "menu" ? menuCount : kind === "chat" ? (chatControlPresent ? 1 : 0) : 1;
+  }},
+  textContent: async () => {{
+    if (kind === "composer") {{
+      composerTextReads += 1;
+      const visiblePlainText =
+        pillAppearsAfterFirstComposerTextRead && state.attached
+          ? ""
+          : currentPlainComposerText;
+      const text = visiblePlainText +
+        (pillTextInComposer && state.attached ? connectorName : "");
+      if (pillAppearsAfterFirstComposerTextRead && composerTextReads === 1) {{
+        state.attached = true;
+      }}
+      return text;
+    }}
+    return kind === "pill" && state.attached ? connectorName : "";
+  }},
   evaluate: async () => {{
     if (kind === "composer" && composerEvaluateFails) throw new Error("evaluate timeout");
     return kind === "composer" ? {json.dumps(composer_text)} : "";
   }},
   click: async () => {{
     calls.push(`click:${{kind}}`);
+    if (kind === "composer" && draftAfterComposerClick) {{
+      currentPlainComposerText = "user draft";
+    }}
     if (kind === "menu") {{
       state.attached = true;
       state.chat = false;
@@ -87,7 +126,7 @@ globalThis.proConversationTab = {{ playwright: {{
     selector === '[data-composer-surface="true"]' ? "surface" :
     selector.startsWith("a[href") ? "global-pill" :
     selector === ".popover .__menu-item" ? "legacy-menu" :
-    selector.startsWith('[data-composer-plugin-impression-id="asdk_app_') ?
+    selector === exactMenuSelector ?
       "menu" : "missing-menu"),
   getByRole: (role, options) => locator(role === "radio" ? "chat" : "pro"),
 }} }};
@@ -109,6 +148,56 @@ process.stdout.write(JSON.stringify({{ evidence, calls }}));
 
 
 class ProConnectorControlTests(unittest.TestCase):
+    def test_draft_appearing_after_surface_check_stops_before_click(self) -> None:
+        result = _run_control(
+            attached=False,
+            chat=True,
+            draft_after_surface_count=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["failed_stage"], "composer_not_empty")
+        self.assertEqual(result["calls"], [])
+
+    def test_draft_appearing_after_focus_stops_before_typing(self) -> None:
+        result = _run_control(
+            attached=False,
+            chat=True,
+            draft_after_composer_click=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["failed_stage"], "composer_not_empty")
+        self.assertEqual(result["calls"], ["click:composer"])
+
+    def test_draft_appearing_before_success_is_not_verified(self) -> None:
+        result = _run_control(
+            attached=True,
+            chat=True,
+            draft_on_pro_count=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["failed_stage"], "composer_not_empty")
+        self.assertEqual(result["calls"], [])
+
+    def test_connector_appearing_during_composer_check_fails_closed(self) -> None:
+        result = _run_control(
+            attached=False,
+            chat=True,
+            composer_text="Simdorei Local Project Oauth",
+            pill_text_in_composer=True,
+            pill_appears_after_first_composer_text_read=True,
+        )
+        evidence = cast(dict[str, object], result["evidence"])
+
+        self.assertEqual(evidence["status"], "failed")
+        self.assertEqual(evidence["failed_stage"], "composer_changed")
+        self.assertEqual(result["calls"], [])
+
     def test_composer_check_does_not_depend_on_page_evaluate(self) -> None:
         result = _run_control(
             attached=True,

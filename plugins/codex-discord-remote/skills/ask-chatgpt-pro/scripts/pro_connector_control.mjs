@@ -18,23 +18,90 @@ function failed(stage) {
   };
 }
 
+async function observeComposer(composer) {
+  const pill = composer.locator(`a[href^="${CONNECTOR_PATH}"]`);
+  const pillCountBefore = await pill.count();
+  if (pillCountBefore > 1) return { status: "duplicate" };
+  const textBefore = (await composer.textContent()) ?? "";
+  const pillTextBefore =
+    pillCountBefore === 1 ? ((await pill.textContent()) ?? "") : "";
+
+  const textAfter = (await composer.textContent()) ?? "";
+  const pillCountAfter = await pill.count();
+  if (pillCountAfter > 1) return { status: "duplicate" };
+  const pillTextAfter =
+    pillCountAfter === 1 ? ((await pill.textContent()) ?? "") : "";
+
+  if (
+    textBefore !== textAfter ||
+    pillCountBefore !== pillCountAfter ||
+    pillTextBefore !== pillTextAfter
+  ) {
+    return { status: "changed" };
+  }
+  return {
+    status: "stable",
+    text: textAfter,
+    pillCount: pillCountAfter,
+    pillText: pillTextAfter,
+  };
+}
+
+async function observeStableComposer(composer) {
+  const first = await observeComposer(composer);
+  if (first.status !== "stable") return first;
+  const second = await observeComposer(composer);
+  if (second.status !== "stable") return second;
+  if (
+    first.text !== second.text ||
+    first.pillCount !== second.pillCount ||
+    first.pillText !== second.pillText
+  ) {
+    return { status: "changed" };
+  }
+  return second;
+}
+
+async function observeReadyComposer(composer, composerSurface = null) {
+  const state = await observeStableComposer(composer);
+  if (state.status !== "stable") return state;
+
+  let textWithoutPill = state.text;
+  if (state.pillText) {
+    textWithoutPill = textWithoutPill.replace(state.pillText, "");
+  }
+  if (textWithoutPill.trim()) return { status: "not_empty" };
+
+  if (composerSurface === null) {
+    return { status: "ready", pillCount: state.pillCount };
+  }
+  const surfacePill = composerSurface.locator(
+    `a[href^="${CONNECTOR_PATH}"]`,
+  );
+  const surfacePillCount = await surfacePill.count();
+  if (surfacePillCount > 1) return { status: "duplicate" };
+  if (surfacePillCount !== state.pillCount) return { status: "changed" };
+  return { status: "ready", pillCount: surfacePillCount };
+}
+
+function composerFailureStage(state) {
+  if (state.status === "duplicate") return "connector_pill";
+  if (state.status === "not_empty") return "composer_not_empty";
+  if (state.status !== "ready") return "composer_changed";
+  return null;
+}
+
 export async function prepareProConnector(globals = globalThis) {
   const tab = globals.proConversationTab;
   if (!tab?.playwright) return failed("conversation_tab");
 
   let stage = "composer";
   try {
-    const composer = tab.playwright.locator('[id="prompt-textarea"]');
+    let composer = tab.playwright.locator('[id="prompt-textarea"]');
     if ((await composer.count()) !== 1) return failed(stage);
-    let composerText = (await composer.textContent()) ?? "";
-    const composerPill = composer.locator(`a[href^="${CONNECTOR_PATH}"]`);
-    const composerPillCount = await composerPill.count();
-    if (composerPillCount > 1) return failed("connector_pill");
-    if (composerPillCount === 1) {
-      const connectorText = (await composerPill.textContent()) ?? "";
-      if (connectorText) composerText = composerText.replace(connectorText, "");
-    }
-    if (composerText.trim()) return failed("composer_not_empty");
+    const initialComposerState = await observeReadyComposer(composer);
+    const initialComposerFailure = composerFailureStage(initialComposerState);
+    if (initialComposerFailure !== null) return failed(initialComposerFailure);
 
     stage = "composer_surface";
     const composerSurface = tab.playwright.locator(
@@ -42,17 +109,37 @@ export async function prepareProConnector(globals = globalThis) {
     );
     if ((await composerSurface.count()) !== 1) return failed(stage);
 
+    const readyComposerState = await observeReadyComposer(
+      composer,
+      composerSurface,
+    );
+    const readyComposerFailure = composerFailureStage(readyComposerState);
+    if (readyComposerFailure !== null) return failed(readyComposerFailure);
+
     let pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
-    const initialPillCount = await pill.count();
-    if (initialPillCount > 1) return failed("connector_pill");
+    const initialPillCount = readyComposerState.pillCount;
 
     let action = "already_attached";
     let clickResult = "not_needed";
     if (initialPillCount === 0) {
       stage = "connector_search";
       await composer.click();
-      await composer.type(`@${CONNECTOR_NAME}`);
+      composer = tab.playwright.locator('[id="prompt-textarea"]');
+      if ((await composer.count()) !== 1) return failed("composer_changed");
+      const focusedComposerState = await observeReadyComposer(
+        composer,
+        composerSurface,
+      );
+      const focusedComposerFailure = composerFailureStage(focusedComposerState);
+      if (focusedComposerFailure !== null) return failed(focusedComposerFailure);
+
       pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
+      if (focusedComposerState.pillCount === 1) {
+        clickResult = "verified_without_menu_click";
+      } else {
+        await composer.type(`@${CONNECTOR_NAME}`);
+        pill = composerSurface.locator(`a[href^="${CONNECTOR_PATH}"]`);
+      }
       if ((await pill.count()) === 1) {
         clickResult = "verified_without_menu_click";
       } else {
@@ -111,6 +198,18 @@ export async function prepareProConnector(globals = globalThis) {
       exact: true,
     });
     if ((await pro.count()) !== 1) return failed(stage);
+
+    composer = tab.playwright.locator('[id="prompt-textarea"]');
+    if ((await composer.count()) !== 1) return failed("composer_changed");
+    const finalComposerState = await observeReadyComposer(
+      composer,
+      composerSurface,
+    );
+    const finalComposerFailure = composerFailureStage(finalComposerState);
+    if (finalComposerFailure !== null) return failed(finalComposerFailure);
+    if (finalComposerState.pillCount !== 1) {
+      return failed("connector_after_chat");
+    }
 
     return {
       protocol: PROTOCOL,
