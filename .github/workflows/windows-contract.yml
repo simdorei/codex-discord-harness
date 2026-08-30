@@ -36,13 +36,21 @@ jobs:
           codex_discord_store_connection.py
           codex_discord_store_schema.py
       - name: Verify installer contracts
-        run: >-
-          python -m unittest
-          tests.test_desktop_requirements_lock
-          tests.test_install_codex_exe_persistence
-          tests.test_install_plugin_contract
-          tests.test_install_scripts
-          tests.test_windows_contract_workflow
+        run: |
+          $contractOutput = & python -m unittest `
+            tests.test_desktop_requirements_lock `
+            tests.test_install_codex_exe_persistence `
+            tests.test_install_plugin_contract `
+            tests.test_install_scripts `
+            tests.test_windows_contract_workflow 2>&1
+          $contractExitCode = $LASTEXITCODE
+          $contractOutput | ForEach-Object { Write-Output $_ }
+          if ($contractExitCode -ne 0) {
+            $annotation = (($contractOutput | Select-Object -Last 80) -join "`n")
+            $annotation = $annotation.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Installer contract failure::$annotation"
+            exit $contractExitCode
+          }
       - name: Verify desktop bridge contracts
         run: >-
           python -m unittest
