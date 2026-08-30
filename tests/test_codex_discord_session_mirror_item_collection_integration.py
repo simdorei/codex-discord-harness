@@ -426,8 +426,8 @@ class SessionMirrorItemCollectionIntegrationTests(unittest.TestCase):
         with (
             mock.patch.object(
                 bot.app_server_transport.DEFAULT_CLIENT,
-                "get_cached_turn_completion",
-                return_value=interrupted,
+                "get_cached_thread_turn_completions",
+                return_value={"turn-1": interrupted},
             ),
             mock.patch.object(bot.app_server_transport.DEFAULT_CLIENT, "get_thread_goal_status", return_value=None),
         ):
@@ -447,8 +447,8 @@ class SessionMirrorItemCollectionIntegrationTests(unittest.TestCase):
         with (
             mock.patch.object(
                 bot.app_server_transport.DEFAULT_CLIENT,
-                "get_cached_turn_completion",
-                return_value=failed,
+                "get_cached_thread_turn_completions",
+                return_value={"turn-1": failed},
             ),
             mock.patch.object(bot.app_server_transport.DEFAULT_CLIENT, "get_thread_goal_status", return_value=None),
         ):

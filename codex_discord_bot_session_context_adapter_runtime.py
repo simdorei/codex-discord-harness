@@ -70,14 +70,21 @@ class BotSessionContextAdapterRuntime:
         turn_ids: list[str],
     ) -> dict[str, app_server_transport.TurnCompletion]:
         client = app_server_transport.DEFAULT_CLIENT
-        cached = {
-            turn_id: completion
-            for turn_id in turn_ids
-            if (completion := client.get_cached_turn_completion(thread_id, turn_id)) is not None
-        }
+        requested_turn_ids = frozenset(turn_ids)
+        cached = client.get_cached_thread_turn_completions(thread_id)
+        if requested_turn_ids.issubset(cached):
+            return cached
         if not client.is_running():
             return cached
-        return client.get_thread_turn_completions(thread_id, timeout_sec=3.0)
+        try:
+            completions = client.get_thread_turn_completions(thread_id, timeout_sec=3.0)
+        except TimeoutError:
+            cached = client.get_cached_thread_turn_completions(thread_id)
+            if requested_turn_ids.issubset(cached):
+                return cached
+            raise
+        completions.update(client.get_cached_thread_turn_completions(thread_id))
+        return completions
 
     def get_runtime_state(self) -> discord_runtime.DiscordRuntimeState:
         return cast(Callable[[], discord_runtime.DiscordRuntimeState], self._module_func("get_runtime_state"))()

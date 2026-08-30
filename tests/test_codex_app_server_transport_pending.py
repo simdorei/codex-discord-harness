@@ -144,6 +144,34 @@ class PendingRequestStateTests(unittest.TestCase):
         self.assertEqual(completion.status.value, "interrupted")
         self.assertIsNone(state.active_turn_id("thread-1"))
 
+    def test_turn_completions_for_thread_excludes_other_threads_and_keeps_latest_status(self) -> None:
+        state = PendingRequestState()
+        for thread_id, status in (
+            ("thread-1", "completed"),
+            ("thread-2", "failed"),
+            ("thread-1", "interrupted"),
+        ):
+            state.record_notification(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": thread_id,
+                        "turn": {
+                            "id": "turn-1",
+                            "status": status,
+                            "items": [],
+                            **({"error": {"message": "other thread"}} if status == "failed" else {}),
+                        },
+                    },
+                },
+                self.logs.append,
+            )
+
+        completions = state.turn_completions_for_thread("thread-1")
+
+        self.assertEqual(list(completions), ["turn-1"])
+        self.assertEqual(completions["turn-1"].status.value, "interrupted")
+
     def test_only_registered_exact_interrupt_is_attributed_to_remote_user_intent(self) -> None:
         state = PendingRequestState()
         state.record_notification(

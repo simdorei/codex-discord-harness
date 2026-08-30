@@ -192,6 +192,13 @@ class PendingRequestState:
                 return completion
         return None
 
+    def turn_completions_for_thread(self, thread_id: str) -> dict[str, TurnCompletion]:
+        return {
+            completion.turn_id: completion
+            for completion in self.turn_completions
+            if completion.thread_id == thread_id
+        }
+
     def register_remote_interrupt_intent(
         self,
         thread_id: str,

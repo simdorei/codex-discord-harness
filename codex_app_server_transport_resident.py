@@ -1070,3 +1070,7 @@ class ResidentCodexAppServerTransport:
     def get_cached_turn_completion(self, thread_id: str, turn_id: str) -> TurnCompletion | None:
         with self._lock:
             return self._pending.turn_completion(thread_id, turn_id)
+
+    def get_cached_thread_turn_completions(self, thread_id: str) -> dict[str, TurnCompletion]:
+        with self._lock:
+            return self._pending.turn_completions_for_thread(thread_id)
