@@ -97,7 +97,10 @@ def parse_discord_application(payload: bytes) -> DiscordApplication:
 def fetch_discord_application(bot_token: str, *, urlopen: UrlOpen = urllib.request.urlopen) -> DiscordApplication:
     request = urllib.request.Request(
         DISCORD_APPLICATION_ME_URL,
-        headers={"Authorization": f"Bot {bot_token}"},
+        headers={
+            "Authorization": f"Bot {bot_token}",
+            "User-Agent": "DiscordBot (https://github.com/simdorei/codex-discord-remote, 1.0)",
+        },
         method="GET",
     )
     try:

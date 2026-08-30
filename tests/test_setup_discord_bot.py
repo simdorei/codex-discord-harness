@@ -81,6 +81,10 @@ class SetupDiscordBotTests(unittest.TestCase):
 
         self.assertEqual(application, setup.DiscordApplication(application_id="42", name="Codex Remote"))
         self.assertEqual(requests[0].headers["Authorization"], "Bot secret-token")
+        self.assertEqual(
+            requests[0].headers["User-agent"],
+            "DiscordBot (https://github.com/simdorei/codex-discord-remote, 1.0)",
+        )
 
     def test_dry_run_does_not_write_env_or_print_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

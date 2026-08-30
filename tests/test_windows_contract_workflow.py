@@ -16,6 +16,7 @@ class WindowsContractWorkflowTests(unittest.TestCase):
         self.assertIn("runs-on: windows-latest", text)
         self.assertIn("--require-hashes", text)
         self.assertIn("tests.test_install_scripts", text)
+        self.assertIn("tests.test_install_plugin_contract", text)
         self.assertIn("tests.test_codex_desktop_bridge_type_exports", text)
         self.assertIn("tests.test_codex_discord_store_schema", text)
         self.assertIn("install.ps1 -DryRun", text)
