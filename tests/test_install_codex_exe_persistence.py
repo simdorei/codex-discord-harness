@@ -142,6 +142,7 @@ class WindowsCodexExePersistenceTests(unittest.TestCase):
         self.assertIn("Inherited CODEX_EXE was not saved", output)
 
 
+@unittest.skipIf(os.name == "nt", "shell installer requires POSIX path semantics")
 @unittest.skipIf(shutil.which("sh") is None, "sh is required")
 class ShellCodexExePersistenceTests(unittest.TestCase):
     def _run_installer(

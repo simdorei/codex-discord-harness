@@ -44,11 +44,11 @@ def compile_fake_codex_exe(
         textwrap.dedent(
             f"""\
             using System;
+            using System.IO;
             using System.Text;
 
             internal static class FakeCodex
             {{
-                private static readonly string ExpectedRoot = {json.dumps(str(repo_root))};
                 private static readonly string MarketplaceJson = {json.dumps(raw_marketplace_json)};
                 private static readonly string PluginJson = {json.dumps(raw_plugin_json)};
 
@@ -69,7 +69,7 @@ def compile_fake_codex_exe(
                     {large_failure_source}
                     if (StartsWith(arguments, "plugin", "marketplace", "add"))
                     {{
-                        if (arguments.Length < 4 || arguments[3] != ExpectedRoot)
+                        if (arguments.Length < 4 || !File.Exists(Path.Combine(arguments[3], "runtime-release.json")))
                         {{
                             Console.Error.WriteLine("space-path argument mismatch");
                             return 9;

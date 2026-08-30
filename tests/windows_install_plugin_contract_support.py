@@ -43,6 +43,10 @@ def run_windows_installer(
     dry_run: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     installer = prepare_installer_repo(repo_root, "install.ps1")
+    _ = (repo_root / "codex_desktop_bridge.py").write_text(
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
     fake_python = repo_root / "fake-python.cmd"
     _ = fake_python.write_text(
         textwrap.dedent(
@@ -155,6 +159,7 @@ def run_windows_installer(
         arguments.append("-DryRun")
     completed = subprocess.run(
         arguments,
+        cwd=repo_root,
         capture_output=True,
         encoding="utf-8",
         errors="replace",
