@@ -378,10 +378,12 @@ function Invoke-Codex {
         return
     }
 
-    & $exe @Arguments
+    $commandOutput = @(& $exe @Arguments 2>&1)
     if ($LASTEXITCODE -ne 0) {
-        throw "Codex CLI failed with exit code ${LASTEXITCODE}: $exe $($Arguments -join ' ')"
+        $output = $commandOutput -join [Environment]::NewLine
+        throw "Codex CLI failed with exit code ${LASTEXITCODE}: $exe $($Arguments -join ' ')`n$output"
     }
+    Write-Output $commandOutput
 }
 
 function Test-CodexPluginInventory {
@@ -416,6 +418,10 @@ function Test-CodexPluginInventory {
             '--plugin-id', $PluginRef
         )
     } catch {
+        if ($_.Exception.Message -like "*subcommand *list*") {
+            Write-Output "Skipping plugin inventory verification: this Codex CLI version does not expose plugin listing commands."
+            return
+        }
         throw "INSTALL_INCOMPLETE: Codex plugin inventory verification failed. $($_.Exception.Message)"
     } finally {
         Remove-Item -LiteralPath $marketplaceInventoryPath -Force -ErrorAction SilentlyContinue
@@ -495,9 +501,9 @@ if ($SkipSteeringConfig) {
     Write-Output 'Skipping steering config: installer no longer changes Codex Desktop follow-up mode.'
 }
 
-if ($SkipCodexPlugin) {
-    Write-Output 'Skipping Codex plugin install.'
-} else {
+    if ($SkipCodexPlugin) {
+        Write-Output 'Skipping Codex plugin install.'
+    } else {
     if (-not (Test-Path -LiteralPath $PluginMarketplacePath)) {
         throw "Codex plugin marketplace was not found: $PluginMarketplacePath"
     }
@@ -511,7 +517,15 @@ if ($SkipCodexPlugin) {
         Write-Output 'Installing Codex plugin marketplace from this repository.'
         Invoke-Codex -Arguments @('plugin', 'marketplace', 'add', $ScriptDir)
         Write-Output "Installing Codex plugin: $PluginRef"
-        Invoke-Codex -Arguments @('plugin', 'add', $PluginRef)
+        try {
+            Invoke-Codex -Arguments @('plugin', 'add', $PluginRef)
+        } catch {
+            if ($_.Exception.Message -like "*subcommand *add*") {
+                Write-Output 'Skipping explicit plugin add: this Codex CLI version does not support plugin add.'
+            } else {
+                throw
+            }
+        }
     } catch {
         throw "INSTALL_INCOMPLETE: Codex plugin installation failed; !pro is not ready. $($_.Exception.Message)"
     }
