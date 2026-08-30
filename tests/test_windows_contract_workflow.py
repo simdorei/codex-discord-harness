@@ -34,6 +34,13 @@ class WindowsContractWorkflowTests(unittest.TestCase):
             self.assertIn("github.event.before", workflow)
             self.assertIn("python scripts/verify_plugin_cachebuster.py", workflow)
 
+    def test_codex_exe_persistence_regression_runs_on_both_platforms(self) -> None:
+        workflow_root = ROOT / ".github" / "workflows"
+        test_module = "tests.test_install_codex_exe_persistence"
+        for workflow_name in ("windows-contract.yml", "macos-smoke.yml"):
+            workflow = (workflow_root / workflow_name).read_text(encoding="utf-8")
+            self.assertIn(test_module, workflow)
+
     def test_connector_contract_suite_covers_release_critical_modules(self) -> None:
         suite = (ROOT / "tests" / "pro_plugin_contract_suite.py").read_text(
             encoding="utf-8"

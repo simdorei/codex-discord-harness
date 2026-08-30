@@ -4,6 +4,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 python_exe=${PYTHON_EXE:-}
 codex_exe=${CODEX_EXE:-}
+codex_exe_was_explicit=0
 codex_home=${CODEX_HOME:-}
 skip_dependencies=0
 skip_env_file=0
@@ -31,6 +32,7 @@ while [ "$#" -gt 0 ]; do
     --codex-exe)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       codex_exe=$2
+      codex_exe_was_explicit=1
       shift 2
       ;;
     --codex-home)
@@ -297,7 +299,16 @@ if [ "$skip_env_file" -eq 0 ]; then
   if [ "$dry_run" -eq 1 ]; then
     echo "Would set PYTHON_EXE to the resolved Python 3.12 executable in .env"
     echo "Would set CODEX_HOME to the resolved Codex home path in .env"
-    echo "Would set CODEX_EXE in .env when the codex command is available"
+    existing_codex_command=$(get_env_value CODEX_EXE || true)
+    if [ "$codex_exe_was_explicit" -eq 1 ]; then
+      echo "Would set explicitly configured CODEX_EXE in .env"
+    elif [ -n "$existing_codex_command" ]; then
+      echo "Would preserve existing CODEX_EXE in .env"
+    elif [ -n "$codex_exe" ]; then
+      echo "Inherited CODEX_EXE would not be saved to .env"
+    else
+      echo "Would leave CODEX_EXE unchanged; PATH-discovered Codex commands are not saved to .env"
+    fi
   else
     py=$(resolve_python)
     py_path=$(python_executable_path "$py")
@@ -306,10 +317,20 @@ if [ "$skip_env_file" -eq 0 ]; then
     codex_home_path=$(resolve_codex_home)
     set_env_value CODEX_HOME "$codex_home_path"
     echo "Configured CODEX_HOME=$codex_home_path"
-    codex_command=$(find_codex)
-    if [ -n "$codex_command" ]; then
-      set_env_value CODEX_EXE "$codex_command"
-      echo "Configured CODEX_EXE=$codex_command"
+    if [ "$codex_exe_was_explicit" -eq 1 ]; then
+      set_env_value CODEX_EXE "$codex_exe"
+      echo "Configured explicit CODEX_EXE=$codex_exe"
+    else
+      existing_codex_command=$(get_env_value CODEX_EXE || true)
+      if [ -n "$existing_codex_command" ]; then
+        echo "Preserved existing CODEX_EXE in .env."
+      elif [ -n "$codex_exe" ]; then
+        echo "Inherited CODEX_EXE was not saved to .env."
+      elif command -v codex >/dev/null 2>&1; then
+        echo "PATH-discovered Codex command was not saved to .env."
+      else
+        echo "CODEX_EXE remains unset; no Codex command was found on PATH."
+      fi
     fi
   fi
 fi

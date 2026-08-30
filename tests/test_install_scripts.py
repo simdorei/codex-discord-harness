@@ -37,6 +37,11 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("Set-EnvFileValue -Name 'PYTHON_EXE'", text)
         self.assertIn("Set-EnvFileValue -Name 'CODEX_HOME'", text)
         self.assertIn("Set-EnvFileValue -Name 'CODEX_EXE'", text)
+        self.assertIn("$CodexExeWasExplicit", text)
+        self.assertNotIn(
+            "Set-EnvFileValue -Name 'CODEX_EXE' -Value $codexCommand", text
+        )
+        self.assertIn("PATH-discovered Codex command was not saved", text)
         self.assertIn("Would set CODEX_HOME=$codexHomePath in .env", text)
         self.assertIn("function Test-CodexRuntimeBinPath", text)
         self.assertIn("\\.sandbox-bin", text)
@@ -80,6 +85,9 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("set_env_value PYTHON_EXE", text)
         self.assertIn("set_env_value CODEX_HOME", text)
         self.assertIn("set_env_value CODEX_EXE", text)
+        self.assertIn("codex_exe_was_explicit=1", text)
+        self.assertNotIn('set_env_value CODEX_EXE "$codex_command"', text)
+        self.assertIn("PATH-discovered Codex command was not saved", text)
         self.assertIn("default_codex_home=\"$HOME/.codex\"", text)
         self.assertIn("/.sandbox-bin", text)
         self.assertIn("/plugins/.plugin-appserver", text)

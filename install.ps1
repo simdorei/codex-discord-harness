@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$CodexExeWasExplicit = $PSBoundParameters.ContainsKey('CodexExe')
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RequirementsPath = Join-Path $ScriptDir 'requirements.txt'
@@ -448,7 +449,16 @@ if (-not $SkipEnvFile) {
         Write-Output "Would set PYTHON_EXE to the resolved Python 3.12 executable in .env"
         $codexHomePath = Resolve-CodexHomePath
         Write-Output "Would set CODEX_HOME=$codexHomePath in .env"
-        Write-Output "Would set CODEX_EXE in .env when the codex command is available"
+        $existingCodexCommand = Get-EnvFileValue -Name 'CODEX_EXE'
+        if ($CodexExeWasExplicit) {
+            Write-Output "Would set explicitly configured CODEX_EXE in .env"
+        } elseif (-not [string]::IsNullOrWhiteSpace($existingCodexCommand)) {
+            Write-Output "Would preserve existing CODEX_EXE in .env"
+        } elseif (-not [string]::IsNullOrWhiteSpace($CodexExe)) {
+            Write-Output "Inherited CODEX_EXE would not be saved to .env"
+        } else {
+            Write-Output "Would leave CODEX_EXE unchanged; PATH-discovered Codex commands are not saved to .env"
+        }
     } else {
         $pythonCommand = @(Resolve-PythonCommand)
         $pythonExePath = Get-PythonExecutablePath -Command $pythonCommand
@@ -459,10 +469,21 @@ if (-not $SkipEnvFile) {
         Set-EnvFileValue -Name 'CODEX_HOME' -Value $codexHomePath
         Write-Output "Configured CODEX_HOME=$codexHomePath"
 
-        $codexCommand = Find-CodexCommand
-        if (-not [string]::IsNullOrWhiteSpace($codexCommand)) {
-            Set-EnvFileValue -Name 'CODEX_EXE' -Value $codexCommand
-            Write-Output "Configured CODEX_EXE=$codexCommand"
+        if ($CodexExeWasExplicit) {
+            $explicitCodexCommand = $CodexExe.Trim().Trim('"').Trim("'")
+            Set-EnvFileValue -Name 'CODEX_EXE' -Value $explicitCodexCommand
+            Write-Output "Configured explicit CODEX_EXE=$explicitCodexCommand"
+        } else {
+            $existingCodexCommand = Get-EnvFileValue -Name 'CODEX_EXE'
+            if (-not [string]::IsNullOrWhiteSpace($existingCodexCommand)) {
+                Write-Output 'Preserved existing CODEX_EXE in .env.'
+            } elseif (-not [string]::IsNullOrWhiteSpace($CodexExe)) {
+                Write-Output 'Inherited CODEX_EXE was not saved to .env.'
+            } elseif ($null -ne (Get-Command codex -ErrorAction SilentlyContinue)) {
+                Write-Output 'PATH-discovered Codex command was not saved to .env.'
+            } else {
+                Write-Output 'CODEX_EXE remains unset; no Codex command was found on PATH.'
+            }
         }
     }
 }

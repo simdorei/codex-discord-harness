@@ -115,7 +115,7 @@ Installer behavior:
 - Pins the portable Python executable into `.env` as `PYTHON_EXE`.
 - Pins the resolved Codex data directory into `.env` as `CODEX_HOME`.
 - Ignores runtime-only Codex `bin`, `.sandbox-bin`, `.plugin-appserver`, and `app/resources` paths when resolving `CODEX_HOME`, and falls back to the real user `.codex` directory.
-- Pins `CODEX_EXE` into `.env` when the `codex` command is available or explicitly passed.
+- Uses a `codex` command inherited from the process environment or found on `PATH` for installation without pinning that discovered path into `.env`. It writes `CODEX_EXE` only when explicitly passed with `-CodexExe` or `--codex-exe`.
 - Installs exact, hash-verified Python dependencies from `requirements.txt`; direct dependency ranges remain in `requirements.in`.
 - Creates `.env` from `.env.example` if `.env` does not exist.
 - Discovers Codex Desktop and writes `CODEX_DESKTOP_EXE` to `.env`, skipping CLI resource executables such as `app/resources/codex.exe`.
@@ -207,7 +207,7 @@ Important fields:
 | `DISCORD_PLAIN_ASK_MENTION_USER_IDS` | Bot user IDs that must be mentioned for plain ask routing outside mapped threads. |
 | `DISCORD_SESSION_MIRROR` | Mirrors mapped Codex session output back into Discord. |
 | `DISCORD_ENABLE_ATTACHMENTS` | Saves Discord attachments and includes local paths in Codex prompts. |
-| `CODEX_EXE` | Optional path to Codex CLI/app-server executable. |
+| `CODEX_EXE` | Optional explicit path to a Codex CLI/app-server executable. Leave it blank to resolve `codex` from `PATH` at runtime. |
 | `CODEX_DESKTOP_EXE` | Optional path to Codex Desktop executable. Installer tries to fill it. |
 | `PYTHON_EXE` | Python 3.12 executable path. Windows installer pins the repo-local portable Python automatically. |
 
@@ -414,6 +414,7 @@ The macOS smoke workflow checks Python compilation, selected unit tests, `instal
 
 - Install or enable the `codex` command, or set `CODEX_EXE` in `.env`.
 - Bot setup can still continue without plugin registration.
+- Installers no longer save a `codex` path discovered from `PATH`. If an older install already wrote a stale path, clear only its value to `CODEX_EXE=`; existing non-empty values are preserved because they may be intentional overrides.
 
 `Discord messages are ignored`
 
