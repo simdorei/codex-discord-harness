@@ -172,17 +172,17 @@ def resolve_codex_app_server_executable(*, log_func: LogFunc | None = None) -> s
                 + "reason=not_found_or_not_executable"
             )
 
-    bundled_name = "codex.exe" if os.name == "nt" else "codex"
-    bundled_path = CODEX_HOME / ".sandbox-bin" / bundled_name
-    if bundled_path.exists():
-        return selected_executable(bundled_path, source="sandbox-bin", log_func=log_func)
-
     running_path, _running_source = detect_running_codex_app_server_executable()
     if running_path is not None:
         return selected_executable(running_path, source="running-process", log_func=log_func)
 
     for _source, candidate in iter_codex_app_server_bin_candidates():
         return selected_executable(candidate, source="local-app-bin", log_func=log_func)
+
+    bundled_name = "codex.exe" if os.name == "nt" else "codex"
+    bundled_path = CODEX_HOME / ".sandbox-bin" / bundled_name
+    if bundled_path.exists():
+        return selected_executable(bundled_path, source="sandbox-bin", log_func=log_func)
 
     windowsapps_candidate = ""
     for candidate in ("codex", "codex.exe"):

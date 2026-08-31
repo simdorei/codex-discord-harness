@@ -41,7 +41,7 @@ class CodexAppServerExecutableResolverTests(unittest.TestCase):
                 [f"codex_executable_selected source=env executable={configured}"],
             )
 
-    def test_missing_codex_exe_does_not_block_existing_fallback_priority(self) -> None:
+    def test_missing_codex_exe_prefers_running_process_over_other_fallbacks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             stale = root / "deleted-hash" / self._executable_name()
@@ -74,16 +74,73 @@ class CodexAppServerExecutableResolverTests(unittest.TestCase):
             ):
                 selected = resolver.resolve_codex_app_server_executable(log_func=logs.append)
 
-            self.assertEqual(selected, str(sandbox))
-            detect_running.assert_not_called()
+            self.assertEqual(selected, str(running))
+            detect_running.assert_called_once_with()
             iter_local.assert_not_called()
             self.assertEqual(
                 logs,
                 [
                     "codex_executable_config_skipped "
                     + f"source=env configured={str(stale)!r} reason=not_found_or_not_executable",
-                    f"codex_executable_selected source=sandbox-bin executable={sandbox}",
+                    f"codex_executable_selected source=running-process executable={running}",
                 ],
+            )
+
+    def test_local_app_bin_is_preferred_over_sandbox_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sandbox = self._touch(root / ".sandbox-bin" / self._executable_name())
+            local = self._touch(root / "local" / self._executable_name())
+            logs: list[str] = []
+
+            with (
+                mock.patch.object(resolver, "CODEX_APP_SERVER_EXE", ""),
+                mock.patch.object(resolver, "CODEX_HOME", root),
+                mock.patch.object(
+                    resolver,
+                    "detect_running_codex_app_server_executable",
+                    return_value=(None, ""),
+                ),
+                mock.patch.object(
+                    resolver,
+                    "iter_codex_app_server_bin_candidates",
+                    return_value=iter((("local-app-bin:test", local),)),
+                ),
+            ):
+                selected = resolver.resolve_codex_app_server_executable(log_func=logs.append)
+
+            self.assertEqual(selected, str(local))
+            self.assertEqual(
+                logs,
+                [f"codex_executable_selected source=local-app-bin executable={local}"],
+            )
+
+    def test_sandbox_bin_remains_fallback_when_current_install_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sandbox = self._touch(root / ".sandbox-bin" / self._executable_name())
+            logs: list[str] = []
+
+            with (
+                mock.patch.object(resolver, "CODEX_APP_SERVER_EXE", ""),
+                mock.patch.object(resolver, "CODEX_HOME", root),
+                mock.patch.object(
+                    resolver,
+                    "detect_running_codex_app_server_executable",
+                    return_value=(None, ""),
+                ),
+                mock.patch.object(
+                    resolver,
+                    "iter_codex_app_server_bin_candidates",
+                    return_value=iter(()),
+                ),
+            ):
+                selected = resolver.resolve_codex_app_server_executable(log_func=logs.append)
+
+            self.assertEqual(selected, str(sandbox))
+            self.assertEqual(
+                logs,
+                [f"codex_executable_selected source=sandbox-bin executable={sandbox}"],
             )
 
     def test_codex_exe_command_name_resolves_through_path(self) -> None:
