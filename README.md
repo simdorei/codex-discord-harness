@@ -237,7 +237,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\codex-discord-watchdog.ps1
 
 The scheduled task runs in the signed-in user's interactive desktop at the highest available privilege. This lets PC mode control ordinary and administrator app windows, while Windows secure-desktop surfaces such as the sign-in screen and Ctrl+Alt+Delete remain unavailable. Overlapping runs are ignored, so a healthy bot remains a single process. The command above is still useful for a manual one-off check.
 
-The watchdog restarts the headless bot if the bot is missing. It also restarts the bot after repeated unhealthy host samples: CPU at or above `95%`, free memory at or below `768MB`, for `2` consecutive checks. Tune those checks with `-HealthCpuPercent`, `-HealthFreeMemoryMb`, and `-HealthBadSampleLimit`. Put `.codex_discord_bot.disabled` in the repo root to pause watchdog restarts.
+The watchdog restarts the headless bot if the bot is missing. It also restarts the bot after repeated unhealthy host samples: CPU at or above `95%` for `2` consecutive checks. Free-memory restarting is disabled by default; opt in by passing a positive `-HealthFreeMemoryMb` value. Tune the checks with `-HealthCpuPercent`, `-HealthFreeMemoryMb`, and `-HealthBadSampleLimit`. Put `.codex_discord_bot.disabled` in the repo root to pause watchdog restarts.
 
 macOS launcher:
 

@@ -182,12 +182,27 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
         prompt: str,
         *,
         target_thread_id: str | None = None,
+        replay_eligible: bool = False,
     ) -> None:
         await discord_plain_ask_runtime.handle_plain_ask(
             message,
             prompt,
             target_thread_id=target_thread_id,
+            replay_eligible=replay_eligible,
             deps=self._make_plain_ask_runtime_deps(),
+        )
+
+    async def defer_plain_ask(
+        self,
+        message: MessageT,
+        prompt: str,
+        target_thread_id: str,
+    ) -> bool:
+        return await self.deps.defer_plain_ask(
+            self.deps.require_messageable_channel(message.channel),
+            prompt,
+            target_thread_id,
+            source_message=message,
         )
 
     def _prompt_admission_for_plain_ask(
@@ -228,4 +243,5 @@ class BotPlainAskRuntime(Generic[MessageableT, MessageT, ViewT, SendResultT]):
             send_chunks=self.send_plain_ask_chunks,
             format_log_text_len=self.deps.format_log_text_len,
             log=self.deps.log,
+            defer_plain_ask=self.defer_plain_ask,
         )

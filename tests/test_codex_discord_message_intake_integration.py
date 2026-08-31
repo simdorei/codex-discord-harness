@@ -199,8 +199,10 @@ class DiscordMessageIntakeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             prompt: str,
             *,
             target_thread_id: str | None = None,
+            replay_eligible: bool = False,
         ) -> None:
             _ = prompt
+            self.assertTrue(replay_eligible)
             handled.append((target_thread_id, int(getattr(message.channel, "id", 0))))
 
         message = FakeMessage(content="please run", channel_id=333)

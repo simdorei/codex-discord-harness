@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 
@@ -46,6 +46,7 @@ class PlainAskRuntimeDeps(Generic[MessageT, SendResultT]):
     send_chunks: discord_busy_prompt.SendChunks[discord_plain_ask.PlainAskChannel, SendResultT]
     format_log_text_len: Callable[[str | None], int | str]
     log: Callable[[str], None]
+    defer_plain_ask: Callable[[MessageT, str, str], Awaitable[bool]]
 
 
 async def handle_busy_plain_ask(
@@ -77,6 +78,7 @@ async def handle_plain_ask(
     prompt: str,
     *,
     target_thread_id: str | None = None,
+    replay_eligible: bool = False,
     deps: PlainAskRuntimeDeps[MessageT, SendResultT],
 ) -> None:
     async def send_plain_chunks(
@@ -87,14 +89,12 @@ async def handle_plain_ask(
     ) -> SendResultT:
         return await deps.send_chunks(channel, text, context=context)
 
-    async with deps.prompt_admission(message.channel, message, None) as accepted:
-        if not accepted:
-            return
-        await discord_plain_ask_handler.handle_plain_ask_message(
-            message,
-            prompt,
-            target_thread_id=target_thread_id,
-            deps=discord_plain_ask_handler.PlainAskHandlerDeps(
+    await discord_plain_ask_handler.handle_plain_ask_message(
+        message,
+        prompt,
+        target_thread_id=target_thread_id,
+        replay_eligible=replay_eligible,
+        deps=discord_plain_ask_handler.PlainAskHandlerDeps(
                 get_interactive_state_for_thread=deps.get_interactive_state_for_thread,
                 normalize_interactive_text_reply=lambda state, text: discord_interactive.normalize_interactive_text_reply(
                     state,
@@ -115,6 +115,8 @@ async def handle_plain_ask(
                 run_prompt_flow=deps.run_prompt_flow,
                 send_chunks=send_plain_chunks,
                 format_log_text_len=deps.format_log_text_len,
-                log=deps.log,
-            ),
-        )
+            log=deps.log,
+            prompt_admission=deps.prompt_admission,
+            defer_plain_ask=deps.defer_plain_ask,
+        ),
+    )

@@ -6,9 +6,14 @@ from typing import TypeAlias
 
 import codex_discord_message_dispatch as message_dispatch
 import codex_discord_message_intake_gate as message_intake_gate
+import codex_discord_message_processing as message_processing
 import codex_discord_message_target as message_target
 
 ExceptionTypes: TypeAlias = tuple[type[BaseException], ...]
+
+
+class ReplayableMessageIntakeError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,16 +49,55 @@ async def process_inbound_discord_message_safely(
     enable_prefix_commands: bool,
     deps: InboundMessageRuntimeDeps,
 ) -> None:
+    content = str(getattr(message, "content", "") or "")
+    replayable = (
+        source in {"gateway", "history_poll"}
+        and not content.strip().startswith("!")
+        and not bool(getattr(message, "attachments", None))
+    )
+    state = message_processing.InboundProcessingState(
+        message_processing.InboundProcessingDisposition.RETRYABLE
+        if replayable
+        else message_processing.InboundProcessingDisposition.NO_REPLAY
+    )
     try:
-        await message_dispatch.process_inbound_discord_message(
-            message,
-            source=source,
-            enable_prefix_commands=enable_prefix_commands,
-            deps=_make_process_deps(deps),
-        )
-    except deps.delivery_rejected_type:
-        deps.log("on_message_delivery_rejected\n" + deps.format_exception())
-    except deps.delivery_exceptions:
+        with message_processing.bind_inbound_processing_state(state):
+            await message_dispatch.process_inbound_discord_message(
+                message,
+                source=source,
+                enable_prefix_commands=enable_prefix_commands,
+                deps=_make_process_deps(deps),
+            )
+    except ReplayableMessageIntakeError:
+        deps.log("on_message_retryable_intake_error\n" + deps.format_exception())
+        try:
+            _ = await deps.send_chunks(
+                deps.require_messageable_channel(message.channel),
+                "Discord bot error. Your saved-message intake will be retried.",
+            )
+        except Exception:
+            deps.log("on_message_error_report_failed\n" + deps.format_exception())
+        raise
+    except Exception as exc:
+        if state.retryable:
+            deps.log("on_message_retryable_pre_intake_error\n" + deps.format_exception())
+            try:
+                _ = await deps.send_chunks(
+                    deps.require_messageable_channel(message.channel),
+                    "Discord bot error. Your message will be retried.",
+                )
+            except Exception:
+                deps.log("on_message_error_report_failed\n" + deps.format_exception())
+            raise ReplayableMessageIntakeError(
+                "Replayable Discord message failed before durable inbox ownership."
+            ) from exc
+        if isinstance(exc, deps.delivery_rejected_type):
+            deps.log("on_message_delivery_rejected\n" + deps.format_exception())
+            return
+        if not isinstance(exc, deps.delivery_exceptions):
+            deps.log("on_message_unexpected_error\n" + deps.format_exception())
+            message_processing.mark_failure_no_replay(exc)
+            raise
         deps.log("on_message_error\n" + deps.format_exception())
         try:
             _ = await deps.send_chunks(
@@ -62,6 +106,13 @@ async def process_inbound_discord_message_safely(
             )
         except deps.delivery_exceptions:
             deps.log("on_message_error_report_failed\n" + deps.format_exception())
+        except BaseException as report_exc:
+            message_processing.mark_failure_no_replay(report_exc)
+            raise
+    except BaseException as exc:
+        if not state.retryable:
+            message_processing.mark_failure_no_replay(exc)
+        raise
 
 
 def _make_process_deps(deps: InboundMessageRuntimeDeps) -> message_dispatch.InboundDiscordMessageProcessDeps:

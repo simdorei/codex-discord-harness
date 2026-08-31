@@ -6,6 +6,7 @@ from typing import Protocol
 
 import codex_discord_message_content as message_content
 import codex_discord_message_intake_gate as message_intake_gate
+import codex_discord_message_processing as message_processing
 import codex_discord_message_target as message_target
 
 
@@ -59,6 +60,7 @@ class PlainAskHandler(Protocol):
         content: str,
         *,
         target_thread_id: str | None = None,
+        replay_eligible: bool = False,
     ) -> Awaitable[None]: ...
 
 
@@ -126,6 +128,7 @@ async def dispatch_prepared_message(
     content: str,
     target: message_target.DiscordMessageTarget,
     *,
+    replay_eligible: bool = False,
     deps: PreparedMessageDispatchDeps,
 ) -> None:
     target_thread_id = target.target_thread_id
@@ -145,6 +148,7 @@ async def dispatch_prepared_message(
         deps.persist_inbound_mirror_thread_channel(target_thread_id, int(channel_id))
         deps.log(f"inbound_mirror_channel_persisted target={target_thread_id} channel={channel_id}")
     if content.startswith("!"):
+        message_processing.mark_current_message_no_replay()
         await deps.handle_prefix_command(message, content[1:].strip())
         return
     if target_thread_id is None:
@@ -152,7 +156,12 @@ async def dispatch_prepared_message(
         if project_message:
             _ = await deps.send_chunks(message.channel, project_message)
             return
-    await deps.handle_plain_ask(message, content, target_thread_id=target_thread_id)
+    await deps.handle_plain_ask(
+        message,
+        content,
+        target_thread_id=target_thread_id,
+        replay_eligible=replay_eligible,
+    )
 
 
 async def process_inbound_discord_message(
@@ -187,6 +196,8 @@ async def process_inbound_discord_message(
         return
     content = message.content or ""
     has_attachments = bool(getattr(message, "attachments", None))
+    if content.strip().startswith("!") or has_attachments or intake_gate.bot_bridge_mention:
+        message_processing.mark_current_message_no_replay()
     dispatch_deps = PreparedMessageDispatchDeps(
         format_log_text_len=deps.format_log_text_len,
         persist_inbound_mirror_thread_channel=deps.persist_inbound_mirror_thread_channel,
@@ -213,10 +224,12 @@ async def process_inbound_discord_message(
                 await deps.maybe_send_empty_content_notice(message)
             return
         if prepared_prefix_content.content.startswith("!"):
+            message_processing.mark_current_message_no_replay()
             await dispatch_prepared_message(
                 message,
                 prepared_prefix_content.content,
                 prepared_prefix_content.target,
+                replay_eligible=False,
                 deps=dispatch_deps,
             )
             return
@@ -256,5 +269,10 @@ async def process_inbound_discord_message(
         message,
         content,
         resolved_target,
+        replay_eligible=(
+            source in {"gateway", "history_poll"}
+            and not has_attachments
+            and not intake_gate.bot_bridge_mention
+        ),
         deps=dispatch_deps,
     )

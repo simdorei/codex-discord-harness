@@ -12,6 +12,7 @@ from unittest import mock
 
 import codex_app_server_transport_process as process_mod
 import codex_app_server_transport_resident as resident_mod
+from codex_app_server_transport_retry import restart_retry_wait_seconds
 import codex_app_server_transport as transport_mod
 from codex_app_server_transport_replies import (
     CodexAppServerTransportError,
@@ -24,6 +25,16 @@ from codex_plugin_runtime_fingerprint import PluginRuntimeFingerprintError
 
 
 class ResidentAppServerProcessHelperTests(unittest.TestCase):
+    def test_restart_retry_backoff_is_clamped_to_absolute_quarantine_deadline(self) -> None:
+        self.assertEqual(
+            restart_retry_wait_seconds(5.0, deadline=60.0, now=59.75),
+            0.25,
+        )
+        self.assertEqual(
+            restart_retry_wait_seconds(5.0, deadline=60.0, now=60.0),
+            0.0,
+        )
+
     def test_process_helper_preserves_popen_arguments(self) -> None:
         process = _process()
         popen_calls: list[tuple[list[str], dict[str, object]]] = []
@@ -327,6 +338,83 @@ class ResidentTransportStartTests(unittest.TestCase):
 
 
 class ResidentTransportTimeoutBoundaryTests(unittest.TestCase):
+    def test_absolute_quarantine_cap_restarts_despite_active_turn_and_external_work(self) -> None:
+        logs: list[str] = []
+        transport = _RequestBoundaryProbe(log_func=logs.append)
+        process = _process()
+        transport.install_lifecycle(process, generation=1)
+        transport.seed_active_turn()
+        transport.set_external_work_guard(lambda: True)
+        transport._quarantine_after_response_timeout(
+            "turn/start",
+            {"threadId": "thread-1"},
+            "request-1",
+        )
+        transport.stop_restart_retry()
+        assert transport._quarantine_fence is not None
+        transport._quarantine_fence = transport._quarantine_fence.with_deadline(
+            transport.monotonic_func() - 1.0
+        )
+        restarted = threading.Event()
+
+        with mock.patch.object(
+            transport,
+            "_start_with_request_slot_acquired",
+            side_effect=restarted.set,
+        ):
+            settled = transport._retry_restart_pending_once(1)
+
+        self.assertTrue(settled)
+        self.assertTrue(restarted.is_set())
+        self.assertIsNone(transport.process)
+        self.assertTrue(
+            any("app_server_quarantine_hard_cap_reached" in line for line in logs)
+        )
+
+    def test_absolute_cap_kill_failure_fences_old_process_and_fails_closed(self) -> None:
+        logs: list[str] = []
+        transport = _RequestBoundaryProbe(log_func=logs.append)
+        process = _process()
+        transport.install_lifecycle(process, generation=1)
+        transport.seed_active_turn()
+        transport._quarantine_after_response_timeout(
+            "turn/start",
+            {"threadId": "thread-1"},
+            "request-1",
+        )
+        transport.stop_restart_retry()
+        assert transport._quarantine_fence is not None
+        transport._quarantine_fence = transport._quarantine_fence.with_deadline(
+            transport.monotonic_func() - 1.0
+        )
+        restarted = threading.Event()
+
+        with (
+            mock.patch.object(
+                resident_mod,
+                "close_resident_app_server_process",
+                side_effect=OSError("kill failed"),
+            ),
+            mock.patch.object(
+                transport,
+                "_start_with_request_slot_acquired",
+                side_effect=restarted.set,
+            ),
+        ):
+            settled = transport._retry_restart_pending_once(1)
+            transport._handle_raw_line(
+                '{"method":"turn/completed","params":{"threadId":"thread-1","turnId":"turn-1"}}',
+                source_process=process,
+            )
+
+        self.assertFalse(settled)
+        self.assertFalse(restarted.is_set())
+        self.assertIs(transport.process, process)
+        self.assertTrue(transport.lifecycle_snapshot().restart_pending)
+        self.assertTrue(
+            any("app_server_fenced_reader_line_discarded" in line for line in logs)
+        )
+
     def test_request_slot_wait_uses_the_request_timeout_budget(self) -> None:
         transport = _RequestBoundaryProbe()
         transport.hold_request_slot()
@@ -1074,7 +1162,7 @@ class _RequestBoundaryProbe(ResidentCodexAppServerTransport):
         self._restart_retry.stop()
 
     def handle_raw_line(self, raw_line: str) -> None:
-        self._handle_raw_line(raw_line)
+        self._handle_raw_line(raw_line, source_process=self.process)
 
     def responses_snapshot(self) -> dict[str, JsonObject]:
         return dict(self._responses)

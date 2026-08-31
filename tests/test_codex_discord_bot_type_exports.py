@@ -50,6 +50,14 @@ class DiscordBotTypeExportsTests(unittest.TestCase):
             bot.PROCESSED_MESSAGE_RUNTIME.claim_discord_message,
         )
         self.assertEqual(
+            bot.claim_gateway_discord_message,
+            bot.PROCESSED_MESSAGE_RUNTIME.claim_gateway_discord_message,
+        )
+        self.assertEqual(
+            bot.release_gateway_discord_message,
+            bot.PROCESSED_MESSAGE_RUNTIME.release_gateway_discord_message,
+        )
+        self.assertEqual(
             bot.mark_discord_message_processed,
             bot.PROCESSED_MESSAGE_RUNTIME.mark_discord_message_processed,
         )

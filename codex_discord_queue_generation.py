@@ -55,11 +55,11 @@ async def translate_transport_generation_expiry(
 ) -> NoReturn:
     _ = job_id
     snapshot = deps.get_app_server_lifecycle()
-    deleted = await discard_stale_queue_jobs(deps, snapshot)
+    fenced = await discard_stale_queue_jobs(deps, snapshot)
     deps.log(
         "queue_transport_generation_expired "
         + f"stage={stage} expected={generation} actual={exc.actual_generation} "
-        + f"healthy={exc.healthy} deleted={len(deleted)}"
+        + f"healthy={exc.healthy} fenced={len(fenced)}"
     )
     raise QueueGenerationExpiredError(
         stage=stage,
@@ -76,12 +76,12 @@ async def raise_queue_generation_expired(
     snapshot: AppServerLifecycleSnapshot,
 ) -> NoReturn:
     current_generation = int(snapshot.generation)
-    deleted = await discard_stale_queue_jobs(deps, snapshot)
+    fenced = await discard_stale_queue_jobs(deps, snapshot)
     deps.log(
         "queue_generation_expired "
         + f"stage={stage} expected={generation} "
         + f"current={current_generation if snapshot.healthy else 'unhealthy'} "
-        + f"deleted={len(deleted)}"
+        + f"fenced={len(fenced)}"
     )
     raise QueueGenerationExpiredError(
         stage=stage,
@@ -109,14 +109,15 @@ async def discard_stale_queue_jobs(
         for record in records
         if not snapshot.healthy or record.app_server_generation != snapshot.generation
     ]
-    discarded = await asyncio.to_thread(
-        store.discard_observed_queue_jobs,
-        deps.get_db_path(),
-        stale_records,
-    )
-    if discarded:
+    if snapshot.healthy:
+        _ = await asyncio.to_thread(
+            store.reconcile_queue_jobs_for_generation,
+            deps.get_db_path(),
+            snapshot.generation,
+        )
+    if stale_records:
         deps.notify_app_server_work_changed()
-    return discarded
+    return stale_records
 
 
 def reject_source_before_accepting_since(

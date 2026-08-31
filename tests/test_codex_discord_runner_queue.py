@@ -1,18 +1,30 @@
 from __future__ import annotations
 
 import asyncio  # noqa: ANYIO_OK
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import override
+from typing import cast, override
 import unittest
 
 import codex_discord_runner as discord_runner
 import codex_discord_runner_queue as runner_queue
+from codex_app_server_transport_turn_outcomes import TurnCompletion, TurnStatus
+from codex_discord_queue_processor import (
+    QueueAttempt,
+    QueueGenerationExpiredError,
+    QueueGenerationRecovery,
+    QueueJobSummary,
+    QueueTurnCoordinatorDeps,
+)
 from codex_discord_runtime import normalize_runner_key
 
 
 @dataclass(frozen=True, slots=True)
 class FakeChannel:
     id: int
+
+    async def send(self, _text: str) -> None:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +118,7 @@ class RunnerQueueTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_generation_expiry_drain_retains_only_current_generation_jobs(self) -> None:
+    async def test_generation_recovery_drain_rebuilds_all_durable_jobs_from_db(self) -> None:
         queue: asyncio.Queue[runner_queue.QueueItem] = asyncio.Queue()
         for job_id, generation in (("old", 2), ("current", 3), ("legacy", 0)):
             await queue.put(
@@ -124,14 +136,131 @@ class RunnerQueueTests(unittest.IsolatedAsyncioTestCase):
             "queued_job_ids": {"old", "current", "legacy"},
         }
 
-        discarded = discord_runner._drain_generation_expired_queue(
-            queue,
-            runner,
-            current_generation=3,
-        )
-        retained = queue.get_nowait()
-        queue.task_done()
+        drained = discord_runner._drain_durable_queue_for_generation_recovery(queue, runner)
+        self.assertTrue(queue.empty())
+        retained_ids = [str(job.get("job_id")) for job in drained]
 
-        self.assertEqual(discarded, 2)
-        self.assertEqual(retained.get("job_id"), "current")
-        self.assertEqual(runner["queued_job_ids"], {"current"})
+        self.assertEqual(retained_ids, ["old", "current", "legacy"])
+        self.assertEqual(runner["queued_job_ids"], set())
+
+    async def test_generation_expiry_requeues_reconciled_job_without_bot_restart(self) -> None:
+        completed = asyncio.Event()
+        acquire_generations: list[int] = []
+
+        async def acquire_turn(
+            job: runner_queue.QueueJob,
+            _prompt: str,
+            _target: str | None,
+            *,
+            recovery: bool,
+        ) -> QueueAttempt:
+            _ = recovery
+            generation = int(job.get("app_server_generation") or 0)
+            acquire_generations.append(generation)
+            if generation == 2:
+                raise QueueGenerationExpiredError(
+                    stage="test",
+                    expected_generation=2,
+                    current_generation=3,
+                    healthy=True,
+                )
+            return QueueAttempt(1, "thread-1", "turn-1", generation)
+
+        async def wait_for_completion(
+            _thread_id: str,
+            _turn_id: str,
+            _generation: int,
+        ) -> TurnCompletion:
+            return TurnCompletion("thread-1", "turn-1", TurnStatus.COMPLETED)
+
+        async def complete_job(_job: runner_queue.QueueJob) -> None:
+            completed.set()
+
+        async def recover(
+            jobs: tuple[runner_queue.QueueJob, ...],
+        ) -> QueueGenerationRecovery:
+            recovered = cast(runner_queue.QueueJob, cast(object, dict(jobs[0])))
+            recovered["app_server_generation"] = 3
+            return QueueGenerationRecovery((recovered,), ())
+
+        async def no_summaries(
+            _job: runner_queue.QueueJob,
+            _target: str | None,
+        ) -> list[QueueJobSummary]:
+            return []
+
+        async def report_retry(_job: runner_queue.QueueJob, _reason: str) -> None:
+            return None
+
+        async def report_batch_failure(
+            _job: runner_queue.QueueJob,
+            _reason: str,
+            _summaries: list[QueueJobSummary],
+        ) -> None:
+            return None
+
+        async def report_job_failed(
+            _job: runner_queue.QueueJob,
+            _target: str | None,
+        ) -> None:
+            return None
+
+        async def send_text(*_args: object, **_kwargs: object) -> int:
+            return 1
+
+        async def wait_idle(_target: str | None) -> tuple[str, str | None, str]:
+            return "idle", "thread-1", "thread-1"
+
+        local_runners: runner_queue.RunnerMap = {}
+        local_lock = asyncio.Lock()
+
+        async def get_runner(target: str | None) -> runner_queue.ThreadRunner:
+            return await runner_queue.get_thread_runner(
+                target,
+                runners=local_runners,
+                runners_lock=local_lock,
+            )
+
+        runner = await get_runner("thread-1")
+        await runner["queue"].put(
+            {
+                "job_id": "job-1",
+                "channel": FakeChannel(222),
+                "target_thread_id": "thread-1",
+                "prompt": "recover",
+                "app_server_generation": 2,
+            }
+        )
+        runner["queued_job_ids"] = {"job-1"}
+        deps = QueueTurnCoordinatorDeps(
+            acquire_turn=acquire_turn,
+            wait_for_turn_completion=wait_for_completion,
+            complete_job=complete_job,
+            flush_jobs=no_summaries,
+            report_retry=report_retry,
+            report_batch_failure=report_batch_failure,
+            log=lambda _message: None,
+        )
+        task = asyncio.create_task(
+            discord_runner.thread_runner_loop(
+                "thread-1",
+                get_busy_state_func=lambda _target: ("idle", "thread-1", "thread-1"),
+                wait_for_idle_func=wait_idle,
+                queue_coordinator_deps=deps,
+                recover_generation_expired_func=recover,
+                report_job_failed_func=report_job_failed,
+                send_text_func=send_text,
+                log_func=lambda _message: None,
+                runners=local_runners,
+                runners_lock=local_lock,
+                get_thread_runner_func=get_runner,
+            )
+        )
+        try:
+            await asyncio.wait_for(completed.wait(), timeout=1.0)
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        self.assertEqual(acquire_generations, [2, 3])

@@ -174,6 +174,8 @@ class BotStateWiringRuntime:
         self._set("get_discord_message_id", runtime.get_discord_message_id)
         self._set("claim_persistent_discord_message_id", runtime.claim_persistent_discord_message_id)
         self._set("claim_discord_message", runtime.claim_discord_message)
+        self._set("claim_gateway_discord_message", runtime.claim_gateway_discord_message)
+        self._set("release_gateway_discord_message", runtime.release_gateway_discord_message)
         self._set("mark_discord_message_processed", runtime.mark_discord_message_processed)
 
     def _get_db_path(self) -> Path:

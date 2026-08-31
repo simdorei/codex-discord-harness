@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from codex_app_server_transport_lifecycle import (
     AppServerGenerationMismatch,
     AppServerLifecycleSnapshot,
 )
+from codex_app_server_transport_attempt_context import get_turn_start_attempt_callbacks
 from codex_app_server_transport_turn_outcomes import (
     TurnCompletion,
     TurnCompletionPending,
@@ -28,7 +30,9 @@ import codex_discord_prompt_mapped_delivery as prompt_mapped_delivery
 from codex_discord_queue_job_memory import to_memory_queue_job
 from codex_discord_runner_queue import QueueJobValue
 from codex_discord_queue_processor import QueueGenerationExpiredError
+from codex_discord_queue_processor import QueueAttemptNeedsReviewError
 import codex_discord_store as store
+from codex_discord_store_attempts import QueueAttemptState
 from codex_discord_store_queue import QueueEnqueueResult
 
 
@@ -66,6 +70,315 @@ class FakeRestoreBot:
 
 
 class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_late_success_wins_before_timeout_resolution(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            record = self._enqueue(db_path, "job-late")
+            late_reconciliations: list[store.LateQueueAttemptReconciliation] = []
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                late_success_before_error=True,
+                late_reconciliations=late_reconciliations,
+            )
+            job = to_memory_queue_job(
+                record,
+                cast(QueueJobValue, FakeQueueChannel(id=222)),
+                None,
+            )
+
+            attempt = await runtime.acquire_turn(
+                job,
+                record.prompt,
+                record.target_thread_id,
+                recovery=False,
+            )
+
+            persisted = store.get_latest_queue_execution_attempt(db_path, record.job_id)
+
+        self.assertEqual(attempt.turn_id, "turn-late")
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted.state.value, "running")
+        self.assertEqual(persisted.turn_id, "turn-late")
+        self.assertEqual(
+            [(item.job_id, item.target_thread_id, item.channel_id) for item in late_reconciliations],
+            [(record.job_id, "thread-1", 222)],
+        )
+
+    async def test_exact_late_success_after_review_publishes_runner_wakeup(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            record = self._enqueue(db_path, "job-late-after-review")
+            late_reconciliations: list[store.LateQueueAttemptReconciliation] = []
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                late_success_after_error=True,
+                late_reconciliations=late_reconciliations,
+            )
+            job = to_memory_queue_job(
+                record,
+                cast(QueueJobValue, FakeQueueChannel(id=222)),
+                None,
+            )
+
+            with self.assertRaises(QueueAttemptNeedsReviewError):
+                _ = await runtime.acquire_turn(
+                    job,
+                    record.prompt,
+                    record.target_thread_id,
+                    recovery=False,
+                )
+            held = store.get_latest_queue_execution_attempt(db_path, record.job_id)
+            self.assertIsNotNone(held)
+            assert held is not None
+            self.assertIs(held.state, QueueAttemptState.NEEDS_REVIEW)
+
+            await asyncio.sleep(0.2)
+            repaired = store.get_latest_queue_execution_attempt(db_path, record.job_id)
+
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertIs(repaired.state, QueueAttemptState.RUNNING)
+        self.assertEqual(repaired.turn_id, "turn-late")
+        self.assertEqual(
+            [(item.job_id, item.target_thread_id, item.channel_id) for item in late_reconciliations],
+            [(record.job_id, "thread-1", 222)],
+        )
+
+    async def test_intake_claim_is_owned_before_generation_dependent_promotion(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            snapshots = iter(
+                (
+                    AppServerLifecycleSnapshot(3, True, 1.0),
+                    AppServerLifecycleSnapshot(4, True, 2.0),
+                )
+            )
+            latest = [AppServerLifecycleSnapshot(4, True, 2.0)]
+
+            def lifecycle() -> AppServerLifecycleSnapshot:
+                try:
+                    value = next(snapshots)
+                except StopIteration:
+                    return latest[0]
+                latest[0] = value
+                return value
+
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                lifecycle=lifecycle,
+            )
+
+            intake = await runtime.intake_deferred(
+                cast(QueueJobValue, FakeQueueChannel(id=222)),
+                "survive post-commit generation change",
+                "thread-1",
+                source_message=cast(
+                    QueueJobValue,
+                    FakeSourceMessage(id=999, created_at=2.0),
+                ),
+            )
+
+        self.assertIsNotNone(intake)
+        assert intake is not None
+        self.assertEqual(intake.jobs, ())
+        self.assertEqual(intake.inbox.state.value, "received")
+        self.assertTrue(intake.pending)
+
+    async def test_generation_recovery_requeues_only_jobs_safe_to_replay(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            safe = self._enqueue(db_path, "job-safe")
+            ambiguous = self._enqueue(
+                db_path,
+                "job-ambiguous",
+                discord_message_id=1000,
+            )
+            attempt = store.begin_queue_execution_attempt(
+                db_path,
+                ambiguous.job_id,
+                baseline_turn_ids=(),
+                app_server_generation=3,
+            )
+            _ = store.mark_queue_attempt_prewrite(
+                db_path,
+                attempt.attempt_id,
+                client_request_id="request-1",
+                app_server_process_id=4242,
+            )
+            _ = store.mark_queue_attempt_write_crossed(db_path, attempt.attempt_id)
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                lifecycle=lambda: AppServerLifecycleSnapshot(4, True, 2.0),
+            )
+            channel = cast(QueueJobValue, FakeQueueChannel(id=222))
+
+            recovery = await runtime.recover_generation_expired_jobs(
+                (
+                    to_memory_queue_job(safe, channel, None),
+                    to_memory_queue_job(ambiguous, channel, None),
+                )
+            )
+            records = store.list_queue_jobs(db_path)
+
+        self.assertEqual([job.get("job_id") for job in recovery.jobs], ["job-safe"])
+        self.assertEqual(recovery.jobs[0].get("app_server_generation"), 4)
+        self.assertEqual(recovery.needs_review_job_ids, ("job-ambiguous",))
+        self.assertEqual(
+            {record.job_id: record.app_server_generation for record in records},
+            {"job-safe": 4, "job-ambiguous": 3},
+        )
+
+    async def test_bot_restart_promotes_received_inbox_before_runner_restore(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            _ = store.claim_deferred_discord_message(
+                db_path,
+                message_id=999,
+                target_thread_id="thread-1",
+                channel_id=222,
+                owner_user_id=7,
+                prompt="survive restart",
+                source="gateway",
+                normalization_version=1,
+            )
+            runtime = self._runtime(db_path, states={}, sent_prompts=[])
+
+            restoration = await runtime.restore_deferred_inbox(FakeRestoreBot())
+
+            inbox = store.list_deferred_discord_messages(db_path)
+
+        self.assertEqual([job.get("discord_message_id") for job in restoration.jobs], [999])
+        self.assertEqual(len(restoration.seeds), 1)
+        self.assertEqual(inbox[0].state.value, "promoted")
+
+    async def test_restore_continues_after_an_inaccessible_first_group(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            for message_id, target, channel_id in (
+                (900, "thread-missing", 111),
+                (901, "thread-valid", 222),
+            ):
+                _ = store.claim_deferred_discord_message(
+                    db_path,
+                    message_id=message_id,
+                    target_thread_id=target,
+                    channel_id=channel_id,
+                    owner_user_id=7,
+                    prompt=target,
+                    source="gateway",
+                    normalization_version=1,
+                )
+            runtime = self._runtime(db_path, states={}, sent_prompts=[])
+
+            class GroupedRestoreBot(FakeRestoreBot):
+                def get_cached_channel_or_thread(self, channel_id: int) -> tuple[QueueJobValue, str]:
+                    if channel_id == 111:
+                        return None, "miss"
+                    return super().get_cached_channel_or_thread(channel_id)
+
+                async def fetch_channel(self, channel_id: int) -> QueueJobValue:
+                    if channel_id == 111:
+                        raise OSError("channel unavailable")
+                    return await super().fetch_channel(channel_id)
+
+            restoration = await runtime.restore_deferred_inbox(GroupedRestoreBot())
+            inbox = {row.message_id: row for row in store.list_deferred_discord_messages(db_path)}
+
+        self.assertEqual(
+            [job.get("discord_message_id") for job in restoration.jobs],
+            [901],
+        )
+        self.assertEqual([seed.target_thread_id for seed in restoration.seeds], ["thread-valid"])
+        self.assertEqual(inbox[900].state.value, "received")
+        self.assertEqual(inbox[901].state.value, "promoted")
+
+    async def test_unhealthy_restore_returns_a_coordinator_seed_for_later_promotion(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            _ = store.claim_deferred_discord_message(
+                db_path,
+                message_id=999,
+                target_thread_id="thread-1",
+                channel_id=222,
+                owner_user_id=7,
+                prompt="survive unhealthy startup",
+                source="gateway",
+                normalization_version=1,
+            )
+            healthy = [False]
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                lifecycle=lambda: AppServerLifecycleSnapshot(
+                    3,
+                    healthy[0],
+                    1.0 if healthy[0] else None,
+                ),
+            )
+
+            restoration = await runtime.restore_deferred_inbox(FakeRestoreBot())
+            healthy[0] = True
+            promoted = await runtime.promote_deferred_target("thread-1", channel_id=222)
+
+        self.assertEqual(restoration.jobs, ())
+        self.assertEqual(len(restoration.seeds), 1)
+        self.assertEqual([job.discord_message_id for job in promoted], [999])
+
+    async def test_unhealthy_gateway_intake_survives_and_promotes_after_recovery(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+            db_path = Path(temp_dir) / "mirror.sqlite"
+            healthy = [False]
+            runtime = self._runtime(
+                db_path,
+                states={},
+                sent_prompts=[],
+                lifecycle=lambda: AppServerLifecycleSnapshot(
+                    3,
+                    healthy[0],
+                    1.0 if healthy[0] else None,
+                ),
+            )
+            channel = cast(QueueJobValue, FakeQueueChannel(id=222))
+            source = cast(
+                QueueJobValue,
+                FakeSourceMessage(id=999, created_at=2.0),
+            )
+
+            intake = await runtime.intake_deferred(
+                channel,
+                "keep this",
+                "thread-1",
+                source_message=source,
+            )
+
+            self.assertIsNotNone(intake)
+            assert intake is not None
+            self.assertTrue(intake.pending)
+            self.assertEqual(intake.jobs, ())
+            self.assertEqual(store.list_queue_jobs(db_path), [])
+            self.assertTrue(store.is_processed_discord_message_id(db_path, 999))
+
+            healthy[0] = True
+            promoted = await runtime.promote_deferred_target(
+                "thread-1",
+                channel_id=222,
+            )
+
+            inbox = store.list_deferred_discord_messages(db_path)
+
+        self.assertEqual([job.discord_message_id for job in promoted], [999])
+        self.assertEqual(inbox[0].state.value, "promoted")
+
     async def test_retracting_last_queue_job_notifies_app_server_cleanup(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
@@ -144,7 +457,7 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(admission_events, ["enter", "store", "exit"])
 
-    async def test_starting_job_adopts_only_new_turn_after_restart_without_resending(self) -> None:
+    async def test_legacy_starting_job_is_not_blindly_matched_to_a_new_turn(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             record = self._enqueue(db_path, "job-1")
@@ -166,29 +479,29 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
             channel = FakeQueueChannel(id=222)
             job = to_memory_queue_job(record, cast(QueueJobValue, channel), None)
 
-            attempt = await runtime.acquire_turn(
-                job,
-                record.prompt,
-                record.target_thread_id,
-                recovery=False,
-            )
+            with self.assertRaises(QueueAttemptNeedsReviewError):
+                _ = await runtime.acquire_turn(
+                    job,
+                    record.prompt,
+                    record.target_thread_id,
+                    recovery=False,
+                )
 
             persisted = store.list_queue_jobs(db_path)[0]
-            self.assertEqual(attempt.attempt_number, 1)
-            self.assertEqual(attempt.turn_id, "turn-new")
             self.assertEqual(sent_prompts, [])
-            self.assertEqual(persisted.turn_id, "turn-new")
+            self.assertIsNone(persisted.turn_id)
 
-    async def test_starting_job_with_no_new_turn_sends_same_prepared_attempt_once(self) -> None:
+    async def test_exec_pending_job_can_retry_because_write_boundary_was_not_crossed(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             record = self._enqueue(db_path, "job-1")
-            record = store.begin_queue_job_attempt(
+            pending = store.begin_queue_execution_attempt(
                 db_path,
                 record.job_id,
                 baseline_turn_ids=("turn-old",),
                 app_server_generation=3,
             )
+            record = store.list_queue_jobs(db_path)[0]
             sent_prompts: list[str] = []
             runtime = self._runtime(
                 db_path,
@@ -206,9 +519,10 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
             )
 
             persisted = store.list_queue_jobs(db_path)[0]
-            self.assertEqual(attempt.attempt_number, 1)
+            self.assertEqual(pending.state.value, "exec_pending")
+            self.assertEqual(attempt.attempt_number, 2)
             self.assertEqual(sent_prompts, ["request"])
-            self.assertEqual(persisted.attempt_count, 1)
+            self.assertEqual(persisted.attempt_count, 2)
             self.assertEqual(persisted.turn_id, "turn-sent")
 
     async def test_immediate_job_preserves_non_queued_start_ack(self) -> None:
@@ -334,7 +648,7 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(store.list_queue_jobs(db_path), [])
 
-    async def test_stale_cleanup_never_deletes_job_inserted_by_new_generation(self) -> None:
+    async def test_stale_cleanup_preserves_both_observed_and_new_generation_jobs(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             _ = store.enqueue_queue_job(
@@ -391,10 +705,10 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
             records = store.list_queue_jobs(db_path)
 
-        self.assertEqual([record.job_id for record in records], ["job-new"])
-        self.assertEqual(records[0].app_server_generation, 4)
+        self.assertEqual([record.job_id for record in records], ["job-old", "job-new"])
+        self.assertEqual([record.app_server_generation for record in records], [4, 4])
 
-    async def test_unhealthy_enqueue_discards_existing_jobs_without_storing_new_job(self) -> None:
+    async def test_unhealthy_enqueue_preserves_existing_job_without_storing_new_job(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             _ = self._enqueue(db_path, "job-old")
@@ -416,9 +730,11 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     source_message=None,
                 )
 
-            self.assertEqual(store.list_queue_jobs(db_path), [])
+            records = store.list_queue_jobs(db_path)
 
-    async def test_stale_job_is_deleted_before_turn_delivery(self) -> None:
+        self.assertEqual([record.job_id for record in records], ["job-old"])
+
+    async def test_stale_unwritten_job_is_rebound_without_turn_delivery(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             record = self._enqueue(db_path, "job-1")
@@ -444,9 +760,12 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(sent_prompts, [])
-            self.assertEqual(store.list_queue_jobs(db_path), [])
+            records = store.list_queue_jobs(db_path)
 
-    async def test_generation_change_while_waiting_discards_job_without_retry(self) -> None:
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].app_server_generation, 4)
+
+    async def test_generation_change_while_waiting_fences_memory_but_preserves_job(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             db_path = Path(temp_dir) / "mirror.sqlite"
             _ = self._enqueue(db_path, "job-1")
@@ -469,7 +788,9 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(QueueGenerationExpiredError):
                 _ = await runtime.wait_for_turn_completion("thread-1", "turn-1", 3)
 
-            self.assertEqual(store.list_queue_jobs(db_path), [])
+            records = store.list_queue_jobs(db_path)
+
+        self.assertEqual([record.job_id for record in records], ["job-1"])
 
     async def test_restore_adopts_all_persisted_jobs_into_current_generation(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
@@ -535,9 +856,12 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
         lifecycle: Callable[[], AppServerLifecycleSnapshot] | None = None,
         expected_generation: int | None = None,
         prompt_error: AppServerGenerationMismatch | None = None,
+        late_success_before_error: bool = False,
+        late_success_after_error: bool = False,
         prompt_kwargs: list[dict[str, object]] | None = None,
         admission_events: list[str] | None = None,
         work_change_events: list[str] | None = None,
+        late_reconciliations: list[store.LateQueueAttemptReconciliation] | None = None,
     ) -> DurableQueueRuntime:
         async def run_prompt(
             channel: QueueJobValue,
@@ -550,6 +874,33 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
             sent_prompts.append(prompt)
             if prompt_kwargs is not None:
                 prompt_kwargs.append(dict(kwargs))
+            callbacks = get_turn_start_attempt_callbacks()
+            self.assertIsNotNone(callbacks)
+            assert callbacks is not None
+            generation = cast(int, cast(object, kwargs["expected_app_server_generation"]))
+            request_id = f"test-request-{len(sent_prompts)}"
+            callbacks.before_write(request_id, 4242, generation)
+            callbacks.after_write(request_id, 4242, generation)
+            if late_success_before_error:
+                callbacks.late_success(
+                    request_id,
+                    4242,
+                    generation,
+                    "thread-1",
+                    "turn-late",
+                )
+                raise TimeoutError("turn/start response timed out")
+            if late_success_after_error:
+                _ = asyncio.get_running_loop().call_later(
+                    0.1,
+                    callbacks.late_success,
+                    request_id,
+                    4242,
+                    generation,
+                    "thread-1",
+                    "turn-late",
+                )
+                raise TimeoutError("turn/start response timed out before late success")
             return prompt_delivery_prepare.PromptDeliveryPreparationResult(
                 handled=True,
                 target_thread_id="thread-1",
@@ -594,6 +945,13 @@ class DurableQueueRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     (lambda: work_change_events.append("changed"))
                     if work_change_events is not None
                     else (lambda: None)
+                ),
+                notify_late_queue_attempt_reconciled=(
+                    lambda reconciliation, _job, _loop: (
+                        late_reconciliations.append(reconciliation)
+                        if late_reconciliations is not None
+                        else None
+                    )
                 ),
                 get_turn_states=(
                     (lambda thread_id, _generation: get_states(thread_id))

@@ -4,9 +4,16 @@ import sqlite3
 from typing import cast
 
 from codex_discord_store_connection import backup_store_before_migration
+from codex_discord_store_schema_deferred import (
+    DEFERRED_SCHEMA_STATEMENTS,
+    DEFERRED_SCHEMA_TABLES,
+    migrate_deferred_delivery_schema,
+    migrate_deferred_inbox_lease_scope,
+    migrate_deferred_inbox_state_constraint,
+)
 
 
-LATEST_STORE_SCHEMA_VERSION = 2
+LATEST_STORE_SCHEMA_VERSION = 5
 
 
 class StoreSchemaError(RuntimeError):
@@ -30,7 +37,7 @@ STORE_SCHEMA_TABLES: tuple[str, ...] = (
     "codex_session_mirror_offsets",
     "codex_session_mirror_events",
     "codex_turn_queue",
-)
+) + DEFERRED_SCHEMA_TABLES
 
 STORE_SCHEMA_STATEMENTS: tuple[str, ...] = (
     (
@@ -118,7 +125,7 @@ STORE_SCHEMA_STATEMENTS: tuple[str, ...] = (
         "CREATE INDEX IF NOT EXISTS codex_turn_queue_target_order "
         "ON codex_turn_queue(target_thread_id, created_at, job_id)"
     ),
-)
+) + DEFERRED_SCHEMA_STATEMENTS
 
 
 def init_store_schema(conn: sqlite3.Connection) -> None:
@@ -145,7 +152,7 @@ def init_store_schema(conn: sqlite3.Connection) -> None:
         _ = conn.execute(f"PRAGMA user_version = {LATEST_STORE_SCHEMA_VERSION}")
         assert_store_integrity(conn)
         conn.commit()
-    except BaseException:
+    except (sqlite3.Error, StoreSchemaError):
         conn.rollback()
         raise
 
@@ -156,6 +163,15 @@ def _run_migration(conn: sqlite3.Connection, version: int) -> None:
         return
     if version == 2:
         _migrate_codex_turn_queue(conn)
+        return
+    if version == 3:
+        migrate_deferred_delivery_schema(conn)
+        return
+    if version == 4:
+        migrate_deferred_inbox_lease_scope(conn)
+        return
+    if version == 5:
+        migrate_deferred_inbox_state_constraint(conn)
         return
     raise StoreSchemaVersionError(f"No store migration is registered for version {version}.")
 

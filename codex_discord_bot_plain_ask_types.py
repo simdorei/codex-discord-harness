@@ -90,6 +90,17 @@ class PromptSender(Protocol[MessageableContraT, MessageContraT]):
     ) -> Awaitable[None]: ...
 
 
+class DeferredPlainAskEnqueuer(Protocol[MessageableContraT, MessageContraT]):
+    def __call__(
+        self,
+        channel: MessageableContraT,
+        prompt: str,
+        target_thread_id: str,
+        *,
+        source_message: MessageContraT,
+    ) -> Awaitable[bool]: ...
+
+
 class BusyChoiceViewFactory(Protocol[MessageContraT, ViewCoT]):
     def __call__(
         self,
@@ -129,3 +140,4 @@ class BotPlainAskRuntimeDeps(Generic[MessageableT, MessageT, ViewT, SendResultT]
     format_log_text_len: Callable[[str | None], int | str]
     format_log_text_len_as_text: discord_busy.FormatLogTextLen
     log: Callable[[str], None]
+    defer_plain_ask: DeferredPlainAskEnqueuer[MessageableT, MessageT]

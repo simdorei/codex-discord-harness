@@ -56,6 +56,16 @@ from codex_app_server_transport_turn_outcomes import (
     TurnCompletionPending,
     TurnCompletionTransportError,
 )
+from codex_app_server_transport_attempt_context import (
+    AttemptLateSuccessCallback,
+    get_turn_start_attempt_callbacks,
+)
+from codex_app_server_transport_quarantine import (
+    IsolatedTurnProbe,
+    QuarantineFence,
+    begin_quarantine,
+    make_isolated_turn_probe,
+)
 
 
 LogFunc = Callable[[str], None]
@@ -69,6 +79,8 @@ _MAX_FRESH_READ_RETRY_SECONDS = 25.0
 _AMBIGUOUS_TURN_START_GRACE_SECONDS = 25.0
 _READ_TIMEOUT_DEGRADED_THRESHOLD = 2
 _MAX_TIMED_OUT_THREAD_READS = 64
+_QUARANTINE_HARD_CAP_SECONDS = 60.0
+_HARD_CAP_REQUEST_LOCK_SECONDS = 5.0
 
 
 def _new_generation_seed() -> int:
@@ -126,11 +138,16 @@ class ResidentCodexAppServerTransport:
         self._draining: bool = False
         self._closing: bool = False
         self._quarantined_generation: int | None = None
+        self._quarantine_fence: QuarantineFence | None = None
         self._restart_pending: bool = False
         self._ambiguous_turn_start_thread_id: str | None = None
         self._ambiguous_turn_start_request_id: str | None = None
         self._ambiguous_turn_start_deadline: float | None = None
-        self._timed_out_thread_reads: dict[str, tuple[str, str]] = {}
+        self._timed_out_thread_reads: dict[str, IsolatedTurnProbe] = {}
+        self._late_turn_start_observers: dict[
+            str,
+            tuple[object | None, int, int, str, AttemptLateSuccessCallback],
+        ] = {}
         self._consecutive_read_timeouts: int = 0
         self._closed_error: str | None = None
         self._initialized: bool = False
@@ -146,7 +163,9 @@ class ResidentCodexAppServerTransport:
         )
         self._restart_retry: RestartPendingRetryCoordinator = RestartPendingRetryCoordinator(
             retry=self._retry_restart_pending_once,
+            deadline=self._restart_pending_deadline,
             log=self._log,
+            monotonic_func=self.monotonic_func,
         )
 
     def _log(self, text: str) -> None:
@@ -219,6 +238,7 @@ class ResidentCodexAppServerTransport:
             self._children.reset(self._generation)
             self._draining = False
             self._quarantined_generation = None
+            self._quarantine_fence = None
             self._restart_pending = False
             self._ambiguous_turn_start_thread_id = None
             self._ambiguous_turn_start_request_id = None
@@ -317,6 +337,18 @@ class ResidentCodexAppServerTransport:
             return
         message_id = classified.message_id
         with self._condition:
+            fence = self._quarantine_fence
+            if (
+                source_process is not None
+                and fence is not None
+                and fence.fenced
+                and fence.matches(source_process, self._generation)
+            ):
+                self._log(
+                    "app_server_fenced_reader_line_discarded "
+                    + f"generation={fence.generation} source_pid={source_process.pid}"
+                )
+                return
             if source_process is not None and self.process is not source_process:
                 self._log(
                     "app_server_transport_stale_reader_line_discarded "
@@ -328,6 +360,11 @@ class ResidentCodexAppServerTransport:
                 self._condition.notify_all()
             elif classified.kind == "response" and message_id is not None:
                 if message_id != self._active_request_id:
+                    self._notify_late_turn_start_observer(
+                        message_id,
+                        message,
+                        source_process=source_process,
+                    )
                     self._resolve_ambiguous_turn_start_from_late_response(
                         message_id,
                         message,
@@ -335,6 +372,7 @@ class ResidentCodexAppServerTransport:
                     self._reconcile_timed_out_thread_read_from_late_response(
                         message_id,
                         message,
+                        source_process=source_process,
                     )
                     self._log(f"app_server_transport_late_response_discarded id={message_id}")
                 else:
@@ -405,6 +443,65 @@ class ResidentCodexAppServerTransport:
             + f"thread={thread_id or '-'} outcome={outcome}"
         )
 
+    def _notify_late_turn_start_observer(
+        self,
+        request_id: str,
+        message: JsonObject,
+        *,
+        source_process: ResidentProcess | None,
+    ) -> None:
+        observer = self._late_turn_start_observers.pop(request_id, None)
+        if observer is None:
+            return
+        (
+            expected_process,
+            expected_pid,
+            expected_generation,
+            target_thread_id,
+            callback,
+        ) = observer
+        actual_pid = int(getattr(source_process, "pid", 0) or 0)
+        if (
+            source_process is not expected_process
+            or actual_pid != expected_pid
+            or self._generation != expected_generation
+        ):
+            self._log(
+                "app_server_turn_start_late_response_mismatch "
+                + f"request={request_id} expected_pid={expected_pid or '-'} "
+                + f"actual_pid={actual_pid or '-'} expected_generation={expected_generation} "
+                + f"actual_generation={self._generation}"
+            )
+            return
+        result = message.get("result")
+        if not isinstance(result, dict):
+            return
+        turn = result.get("turn")
+        if not isinstance(turn, dict):
+            return
+        turn_id = str(turn.get("id") or "").strip()
+        if not turn_id:
+            return
+        try:
+            callback(
+                request_id,
+                expected_pid,
+                expected_generation,
+                target_thread_id,
+                turn_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - observer failure is logged and remains fail-closed.
+            self._log(
+                "app_server_turn_start_late_response_observer_failed "
+                + f"request={request_id} error_type={type(exc).__name__} "
+                + f"error={str(exc)[:300]}"
+            )
+            return
+        self._log(
+            "app_server_turn_start_late_response_reconciled "
+            + f"request={request_id} generation={expected_generation} turn={turn_id}"
+        )
+
     def _clear_ambiguous_turn_start(self) -> None:
         self._ambiguous_turn_start_thread_id = None
         self._ambiguous_turn_start_request_id = None
@@ -414,11 +511,30 @@ class ResidentCodexAppServerTransport:
         self,
         request_id: str,
         message: JsonObject,
+        *,
+        source_process: ResidentProcess | None,
     ) -> None:
-        timed_out_read = self._timed_out_thread_reads.pop(request_id, None)
-        if timed_out_read is None:
+        probe = self._timed_out_thread_reads.pop(request_id, None)
+        if probe is None:
             return
-        thread_id, turn_id = timed_out_read
+        active_turn_id = self._pending.active_turn_id(probe.thread_id)
+        if not probe.matches(
+            process=source_process,
+            generation=self._generation,
+            thread_id=probe.thread_id,
+            turn_id=active_turn_id,
+        ):
+            self._log(
+                "app_server_thread_read_probe_mismatch "
+                + f"expected_generation={probe.generation} actual_generation={self._generation} "
+                + f"expected_pid={probe.process_id or '-'} "
+                + f"actual_pid={getattr(source_process, 'pid', '-')} "
+                + f"thread={probe.thread_id} expected_turn={probe.turn_id} "
+                + f"actual_turn={active_turn_id or '-'}"
+            )
+            return
+        thread_id = probe.thread_id
+        turn_id = probe.turn_id
         self._record_thread_read_response()
         result = message.get("result")
         if not isinstance(result, dict):
@@ -439,6 +555,7 @@ class ResidentCodexAppServerTransport:
 
     def close_locked(self) -> None:
         process = self.process
+        self._late_turn_start_observers.clear()
         self._initialized = False
         self._accepting_since = None
         if process is None:
@@ -692,6 +809,17 @@ class ResidentCodexAppServerTransport:
     def _retry_restart_pending_once(self, generation: int) -> bool:
         return self._try_restart_pending_generation(generation)
 
+    def _restart_pending_deadline(self, generation: int) -> float | None:
+        with self._lock:
+            fence = self._quarantine_fence
+            if (
+                fence is None
+                or fence.generation != generation
+                or fence.fenced
+            ):
+                return None
+            return fence.deadline
+
     def _try_restart_pending_generation(
         self,
         generation: int,
@@ -708,6 +836,13 @@ class ResidentCodexAppServerTransport:
                 return True
             if self._closing:
                 return True
+            fence = self._quarantine_fence
+            if (
+                fence is not None
+                and fence.generation == generation
+                and fence.expired(self.monotonic_func())
+            ):
+                return self._force_restart_quarantined_generation(fence)
             if self._external_work_blocks_restart():
                 return False
             if not self._request_lock.acquire(blocking=False):
@@ -740,6 +875,69 @@ class ResidentCodexAppServerTransport:
             return True
         finally:
             self._recycle_lock.release()
+
+    def _force_restart_quarantined_generation(
+        self,
+        fence: QuarantineFence,
+    ) -> bool:
+        with self._condition:
+            if self._generation != fence.generation or not self._restart_pending:
+                return True
+            if self.process is not fence.process and self.process is not None:
+                self._log(
+                    "app_server_quarantine_hard_cap_process_mismatch "
+                    + f"generation={fence.generation} expected_pid={fence.process_id or '-'} "
+                    + f"actual_pid={self.process.pid}"
+                )
+                return False
+            self._quarantine_fence = fence.activate()
+            self._draining = True
+            self._initialized = False
+            self._log(
+                "app_server_quarantine_hard_cap_reached "
+                + f"generation={fence.generation} process={fence.process_id or '-'}"
+            )
+            try:
+                self.close_locked()
+            except (OSError, RuntimeError, TimeoutError) as exc:
+                self._closed_error = f"quarantine process termination failed: {exc}"
+                self._condition.notify_all()
+                self._log(
+                    "app_server_quarantine_hard_cap_kill_failed "
+                    + f"generation={fence.generation} error_type={type(exc).__name__} "
+                    + f"error={str(exc)[:300]}"
+                )
+                return False
+            self._responses.clear()
+            self._active_request_id = None
+            self._pending.clear()
+            self._clear_ambiguous_turn_start()
+            self._clear_timed_out_thread_reads()
+            self._closed_error = "quarantined app-server generation fenced"
+            self._condition.notify_all()
+
+        if not self._request_lock.acquire(timeout=_HARD_CAP_REQUEST_LOCK_SECONDS):
+            self._log(
+                "app_server_quarantine_hard_cap_request_lock_failed "
+                + f"generation={fence.generation}"
+            )
+            return False
+        try:
+            self._start_with_request_slot_acquired()
+        except (CodexAppServerTransportError, OSError, RuntimeError, TimeoutError) as exc:
+            self._log(
+                "app_server_quarantine_hard_cap_restart_failed "
+                + f"generation={fence.generation} error_type={type(exc).__name__} "
+                + f"error={str(exc)[:300]}"
+            )
+            return False
+        finally:
+            self._request_lock.release()
+        self._log(
+            "app_server_quarantine_hard_cap_restarted "
+            + f"old_generation={fence.generation} new_generation={self._generation}"
+        )
+        return True
 
     def _pending_restart_blocker_locked(
         self,
@@ -900,7 +1098,12 @@ class ResidentCodexAppServerTransport:
                     if len(self._timed_out_thread_reads) >= _MAX_TIMED_OUT_THREAD_READS:
                         oldest_request_id = next(iter(self._timed_out_thread_reads))
                         del self._timed_out_thread_reads[oldest_request_id]
-                    self._timed_out_thread_reads[request_id] = (thread_id, turn_id)
+                    self._timed_out_thread_reads[request_id] = make_isolated_turn_probe(
+                        generation=generation,
+                        process=self.process,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                    )
                 self._condition.notify_all()
                 self._log(
                     "app_server_thread_read_timeout_isolated "
@@ -908,6 +1111,13 @@ class ResidentCodexAppServerTransport:
                 )
                 return
             self._quarantined_generation = generation
+            self._quarantine_fence = begin_quarantine(
+                generation=generation,
+                process=self.process,
+                now=self.monotonic_func(),
+                hard_cap_seconds=_QUARANTINE_HARD_CAP_SECONDS,
+                existing=self._quarantine_fence,
+            )
             self._restart_pending = True
             if method == "turn/start":
                 thread_id = str(params.get("threadId") or "").strip()
@@ -938,6 +1148,7 @@ class ResidentCodexAppServerTransport:
             if not self._request_lock.acquire(timeout=lock_timeout):
                 raise TimeoutError(f"Timed out waiting for resident app-server request slot for {method}.")
         request_id: str | None = None
+        retain_late_turn_start_observer = False
         try:
             if expected_generation is not None:
                 self._raise_for_generation_mismatch(expected_generation)
@@ -953,11 +1164,47 @@ class ResidentCodexAppServerTransport:
             }
             with self._condition:
                 self._active_request_id = request_id
+            attempt_callbacks = (
+                get_turn_start_attempt_callbacks()
+                if method == "turn/start"
+                else None
+            )
+            process = self.process
+            process_id = process.pid if process is not None else 0
+            if attempt_callbacks is not None:
+                attempt_callbacks.before_write(
+                    request_id,
+                    process_id,
+                    self._generation,
+                )
+                self._late_turn_start_observers[request_id] = (
+                    process,
+                    process_id,
+                    self._generation,
+                    str(params.get("threadId") or "").strip(),
+                    attempt_callbacks.late_success,
+                )
             self._write_message(payload)
+            if attempt_callbacks is not None:
+                try:
+                    attempt_callbacks.after_write(
+                        request_id,
+                        process_id,
+                        self._generation,
+                    )
+                except Exception:
+                    retain_late_turn_start_observer = True
+                    self._quarantine_after_response_timeout(
+                        method,
+                        params,
+                        request_id,
+                    )
+                    raise
             with self._condition:
                 while True:
                     response = self._responses.pop(request_id, None)
                     if response is not None:
+                        _ = self._late_turn_start_observers.pop(request_id, None)
                         if method == "thread/read":
                             self._record_thread_read_response()
                         return extract_response_result(method, response)
@@ -967,6 +1214,7 @@ class ResidentCodexAppServerTransport:
                         )
                     remaining = deadline - self.monotonic_func()
                     if remaining <= 0:
+                        retain_late_turn_start_observer = attempt_callbacks is not None
                         self._quarantine_after_response_timeout(
                             method,
                             params,
@@ -980,6 +1228,8 @@ class ResidentCodexAppServerTransport:
                     if self._active_request_id == request_id:
                         self._active_request_id = None
                     _ = self._responses.pop(request_id, None)
+                    if not retain_late_turn_start_observer:
+                        _ = self._late_turn_start_observers.pop(request_id, None)
             if not _request_slot_acquired:
                 self._request_lock.release()
             self._cleanup_retry.wake()

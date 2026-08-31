@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio  # noqa: ANYIO_OK
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 from typing import cast, TypeAlias
@@ -16,7 +17,7 @@ import codex_discord_runner as discord_runner
 import codex_discord_runner_runtime as discord_runner_runtime
 import codex_discord_runtime as discord_runtime
 import codex_discord_store as store
-from codex_discord_runner_queue import RunnerMap
+from codex_discord_runner_queue import QueueJob, RunnerMap
 ModuleValue: TypeAlias = object
 
 
@@ -71,7 +72,7 @@ class BotRunnerAdapterRuntime:
             return cast(Path, getattr(self.module, "MIRROR_DB_PATH"))
 
         client.set_external_work_guard(
-            lambda: bool(store.list_queue_jobs(get_db_path()))
+            lambda: store.has_executable_queue_work(get_db_path())
         )
         return durable_queue_runtime.DurableQueueRuntime(
             durable_queue_runtime.DurableQueueRuntimeDeps(
@@ -81,6 +82,7 @@ class BotRunnerAdapterRuntime:
                 get_expected_app_server_generation=app_server_admission.current_expected_app_server_generation,
                 admit_app_server_generation=client.delivery_admission,
                 notify_app_server_work_changed=client.notify_child_cleanup_blocker_changed,
+                notify_late_queue_attempt_reconciled=self.notify_late_queue_attempt_reconciled,
                 get_turn_states=lambda thread_id, generation: client.get_thread_turn_states(
                     thread_id,
                     timeout_sec=8.0,
@@ -96,6 +98,20 @@ class BotRunnerAdapterRuntime:
                 send_chunks=self.send_chunks,
                 log=lambda message: cast(Callable[[str], None], self._module_func("log_line"))(message),
             )
+        )
+
+    def notify_late_queue_attempt_reconciled(
+        self,
+        reconciliation: store.LateQueueAttemptReconciliation,
+        job: QueueJob,
+        owning_loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        runner = cast(
+            discord_runner_runtime.RunnerRuntime,
+            getattr(self.module, "RUNNER_RUNTIME"),
+        )
+        _ = owning_loop.call_soon_threadsafe(
+            partial(runner.wake_reconciled_queue_job, reconciliation, job)
         )
 
     async def run_prompt_and_send(

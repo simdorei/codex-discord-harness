@@ -43,6 +43,7 @@ class QueueJob(TypedDict, total=False):
     attempt_count: int
     turn_id: str | None
     baseline_turn_ids: tuple[str, ...]
+    terminal: bool
 
 
 QueueItem: TypeAlias = QueueJob
